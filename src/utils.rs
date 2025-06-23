@@ -263,7 +263,7 @@ pub async fn lookup_server(data: &mut Root, server_name: &str) -> color_eyre::ey
                                 data.dnsresult.hosts.insert(target.clone(), HostData {
                                     cname: cname_target,
                                     error: Some(format!(
-                                        "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782"
+                                        "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
                                     )),
                                     addrs: vec![],
                                 });
@@ -280,16 +280,32 @@ pub async fn lookup_server(data: &mut Root, server_name: &str) -> color_eyre::ey
                             );
                         }
                         Err(e) => {
-                            data.dnsresult.hosts.insert(
-                                target.clone(),
-                                HostData {
-                                    cname: Some(target),
-                                    error: Some(format!(
-                                        "Failed to resolve CNAME for SRV record target: {e}"
-                                    )),
-                                    addrs: vec![],
-                                },
-                            );
+                            // This emulates LookupCNAME in Go, which returns the target as a CNAME record if no CNAME is found.
+                            if let ResolveErrorKind::Proto(proto_error) = e.kind()
+                                && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
+                            {
+                                let cname_target = target.clone();
+                                srv_responses.insert(
+                                    target,
+                                    vec![SrvRecord {
+                                        priority: Some(srv.priority()),
+                                        weight: Some(srv.weight()),
+                                        port: srv.port(),
+                                        target: cname_target,
+                                    }],
+                                );
+                            } else {
+                                data.dnsresult.hosts.insert(
+                                    target.clone(),
+                                    HostData {
+                                        cname: Some(target),
+                                        error: Some(format!(
+                                            "Failed to resolve CNAME for SRV record target: {e}"
+                                        )),
+                                        addrs: vec![],
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -338,9 +354,7 @@ pub async fn lookup_server(data: &mut Root, server_name: &str) -> color_eyre::ey
     // Look up the A/AAAA records for each target
     for (host, records) in srv_responses {
         // Lookup CNAME but ignore any errors.
-        let cname_resp = resolver
-            .lookup(&format!("{host}."), RecordType::CNAME)
-            .await;
+        let cname_resp = resolver.lookup(&host, RecordType::CNAME).await;
         if let Err(e) = &cname_resp {
             if let ResolveErrorKind::Proto(proto_error) = e.kind()
                 && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
@@ -364,8 +378,8 @@ pub async fn lookup_server(data: &mut Root, server_name: &str) -> color_eyre::ey
         };
 
         // Lookup A AND AAAA records
-        let ipv4_records = resolver.lookup(&format!("{host}."), RecordType::A).await;
-        let ipv6_records = resolver.lookup(&format!("{host}."), RecordType::AAAA).await;
+        let ipv4_records = resolver.lookup(&host, RecordType::A).await;
+        let ipv6_records = resolver.lookup(&host, RecordType::AAAA).await;
 
         // For each SRV record, for each IP address, convert it to `<ip>:<port>` before inserting
         for record in records.iter() {
@@ -619,7 +633,7 @@ fn verify_keys(
         keys.valid_until_ts > time::OffsetDateTime::now_utc().unix_timestamp();
 
     let (ed25519checks, has_ed25519key, all_ed25519checks_ok, ed25519_verify_keys) =
-        check_verify_keys(server_name, &keys, keys_string);
+        check_verify_keys(server_name, keys, keys_string);
 
     (
         future_valid_until_ts,
