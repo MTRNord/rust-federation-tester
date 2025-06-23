@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 use tracing::{error, info};
 
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
@@ -100,18 +101,22 @@ pub async fn lookup_server_well_known(data: &mut Root, server_name: &str) -> Opt
     }
 
     for addr in addrs {
-        let response = fetch_url_custom_sni_host(
-            "/.well-known/matrix/server",
-            &addr,
-            server_name,
-            server_name,
+        let timeout_duration = Duration::from_secs(10);
+        let response = timeout(
+            timeout_duration,
+            fetch_url_custom_sni_host(
+                "/.well-known/matrix/server",
+                &addr,
+                server_name,
+                server_name,
+            ),
         )
         .await;
 
         let mut result = WellKnownResult::default();
 
         match response {
-            Ok(resp) => {
+            Ok(Ok(resp)) => {
                 if let Some(resp) = resp.response {
                     if resp.status().is_success() {
                         if let Some(expires_header) = resp.headers().get("Expires") {
@@ -155,6 +160,9 @@ pub async fn lookup_server_well_known(data: &mut Root, server_name: &str) -> Opt
                 } else {
                     result.error = Some("Error fetching well-known URL".to_string());
                 }
+            }
+            Ok(Err(e)) => {
+                result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
             }
             Err(e) => {
                 result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
@@ -517,8 +525,12 @@ async fn fetch_keys(
     server_name: &str,
     sni: &str,
 ) -> color_eyre::eyre::Result<FullKeysResponse> {
-    let response =
-        fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni).await?;
+    let timeout_duration = Duration::from_secs(10);
+    let response = timeout(
+        timeout_duration,
+        fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni),
+    )
+    .await??;
 
     let http_response = response.response.unwrap();
 
