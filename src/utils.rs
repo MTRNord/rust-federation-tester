@@ -185,51 +185,62 @@ pub async fn query_server_version(
     sni: &str,
     federation_address: &str,
 ) -> color_eyre::eyre::Result<Root> {
-    let response = fetch_url_custom_sni_host(
+    match fetch_url_custom_sni_host(
         "/_matrix/federation/v1/version",
         addr,
         sni,
         federation_address,
     )
-    .await?;
-    let response = response.response.unwrap();
-    if response.status().is_success() {
-        if let Some(response_type) = response.headers().get("Content-Type") {
-            if !response_type
-                .to_str()
-                .unwrap_or("")
-                .contains("application/json")
-            {
-                error!(
-                    "Unexpected Content-Type: {}. Expected application/json",
-                    response_type.to_str().unwrap_or("")
-                );
-                data.error = Some("Unexpected Content-Type in server version response".to_string());
-                data.federation_ok = false;
-                return Ok(data);
-            }
-        } else {
-            error!("No Content-Type header in server version response");
-            data.error = Some("No Content-Type header in server version response".to_string());
-            data.federation_ok = false;
-            return Ok(data);
-        }
+    .await
+    {
+        Ok(response) => {
+            let response = response.response.unwrap();
+            if response.status().is_success() {
+                if let Some(response_type) = response.headers().get("Content-Type") {
+                    if !response_type
+                        .to_str()
+                        .unwrap_or("")
+                        .contains("application/json")
+                    {
+                        error!(
+                            "Unexpected Content-Type: {}. Expected application/json",
+                            response_type.to_str().unwrap_or("")
+                        );
+                        data.error =
+                            Some("Unexpected Content-Type in server version response".to_string());
+                        data.federation_ok = false;
+                        return Ok(data);
+                    }
+                } else {
+                    error!("No Content-Type header in server version response");
+                    data.error =
+                        Some("No Content-Type header in server version response".to_string());
+                    data.federation_ok = false;
+                    return Ok(data);
+                }
 
-        let body = response.into_body().collect().await?.to_bytes();
-        match serde_json::from_slice::<VersionResp>(&body) {
-            Ok(json) => {
-                data.version = json.server;
-            }
-            Err(e) => {
-                error!("Error parsing server version response: {e:?}");
-                data.error = Some("Failed to parse server version response".to_string());
+                let body = response.into_body().collect().await?.to_bytes();
+                match serde_json::from_slice::<VersionResp>(&body) {
+                    Ok(json) => {
+                        data.version = json.server;
+                    }
+                    Err(e) => {
+                        error!("Error parsing server version response: {e:?}");
+                        data.error = Some("Failed to parse server version response".to_string());
+                        data.federation_ok = false;
+                    }
+                }
+            } else {
+                error!("Error querying server version: {}", response.status());
+                data.error = Some("Failed to query server version".to_string());
                 data.federation_ok = false;
             }
         }
-    } else {
-        error!("Error querying server version: {}", response.status());
-        data.error = Some("Failed to query server version".to_string());
-        data.federation_ok = false;
+        Err(e) => {
+            error!("Error fetching server version: {e:?}");
+            data.error = Some(format!("Failed to fetch server version: {e}"));
+            data.federation_ok = false;
+        }
     }
 
     Ok(data)
