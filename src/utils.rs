@@ -180,18 +180,19 @@ pub struct VersionResp {
 }
 
 pub async fn query_server_version(
-    data: &mut Root,
+    mut data: Root,
+    addr: &str,
+    sni: &str,
     federation_address: &str,
-) -> color_eyre::eyre::Result<()> {
-    // We ask the server via /_matrix/federation/v1/version
-    let url = format!("https://{federation_address}/_matrix/federation/v1/version");
-    info!("Fetching version for {url}");
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("User-Agent", "Matrix Federation Report")
-        .send()
-        .await?;
+) -> color_eyre::eyre::Result<Root> {
+    let response = fetch_url_custom_sni_host(
+        "/_matrix/federation/v1/version",
+        addr,
+        sni,
+        federation_address,
+    )
+    .await?;
+    let response = response.response.unwrap();
     if response.status().is_success() {
         if let Some(response_type) = response.headers().get("Content-Type") {
             if !response_type
@@ -205,16 +206,17 @@ pub async fn query_server_version(
                 );
                 data.error = Some("Unexpected Content-Type in server version response".to_string());
                 data.federation_ok = false;
-                return Ok(());
+                return Ok(data);
             }
         } else {
             error!("No Content-Type header in server version response");
             data.error = Some("No Content-Type header in server version response".to_string());
             data.federation_ok = false;
-            return Ok(());
+            return Ok(data);
         }
 
-        match response.json::<VersionResp>().await {
+        let body = response.into_body().collect().await?.to_bytes();
+        match serde_json::from_slice::<VersionResp>(&body) {
             Ok(json) => {
                 data.version = json.server;
             }
@@ -230,7 +232,7 @@ pub async fn query_server_version(
         data.federation_ok = false;
     }
 
-    Ok(())
+    Ok(data)
 }
 
 pub async fn lookup_server(data: &mut Root, server_name: &str) -> color_eyre::eyre::Result<()> {

@@ -195,13 +195,16 @@ pub async fn generate_json_report(server_name: &str) -> color_eyre::eyre::Result
     }
 
     let resolved_server = server_host;
-    query_server_version(&mut resp_data, resolved_server).await?;
 
     let lookup_error = lookup_server(&mut resp_data, resolved_server).await;
 
     // Mark federation as not ok if there are errors or if no addresses were found
     if lookup_error.is_err() || resp_data.dnsresult.addrs.is_empty() {
         resp_data.federation_ok = false;
+    }
+
+    for addr in resp_data.clone().dnsresult.addrs {
+        resp_data = query_server_version(resp_data, &addr, server_host, server_host).await?;
     }
 
     // Iterate through the addresses and perform connection checks in parallel
