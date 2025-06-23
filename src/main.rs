@@ -77,6 +77,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let app = Router::new()
         .route("/api/report", get(get_report))
         .route("/api/federation-ok", get(get_fed_ok))
+        .route("/healthz", get(|| async { "OK" }))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
