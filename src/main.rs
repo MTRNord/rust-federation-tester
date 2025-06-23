@@ -5,6 +5,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
 mod response;
@@ -16,6 +18,13 @@ struct ApiParams {
 }
 
 async fn get_report(Query(params): Query<ApiParams>) -> impl IntoResponse {
+    if params.server_name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "server_name parameter is required" })),
+        );
+    }
+
     match response::generate_json_report(&params.server_name).await {
         Ok(report) => {
             // Convert the report to a Value for JSON serialization
@@ -35,6 +44,13 @@ async fn get_report(Query(params): Query<ApiParams>) -> impl IntoResponse {
     }
 }
 async fn get_fed_ok(Query(params): Query<ApiParams>) -> impl IntoResponse {
+    if params.server_name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "server_name parameter is required".to_string(),
+        );
+    }
+
     match response::generate_json_report(&params.server_name).await {
         Ok(report) => (
             StatusCode::OK,
@@ -60,7 +76,9 @@ async fn main() -> color_eyre::eyre::Result<()> {
 
     let app = Router::new()
         .route("/api/report", get(get_report))
-        .route("/api/federation-ok", get(get_fed_ok));
+        .route("/api/federation-ok", get(get_fed_ok))
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     info!("Server running on http://0.0.0:8080");
