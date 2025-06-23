@@ -553,7 +553,9 @@ pub async fn connection_check(
     let key_resp = fetch_keys(addr, server_host, sni).await;
     if let Err(e) = key_resp {
         error!("Error fetching keys from {addr}: {e:?}");
-        return Err(ConnectionError {});
+        return Err(ConnectionError {
+            error: Some(format!("Error fetching keys from {addr}: {e}",)),
+        });
     }
     let key_resp = key_resp.unwrap();
     report.keys = key_resp.keys;
