@@ -534,6 +534,7 @@ async fn fetch_url_custom_sni_host(
 
     let req = Request::builder()
         .uri(path)
+        .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
         .header(hyper::header::HOST, host_host)
         .body(Empty::<Bytes>::new())?;
 
