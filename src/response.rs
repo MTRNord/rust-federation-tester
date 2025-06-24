@@ -2,6 +2,8 @@ use crate::utils::{
     connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
     query_server_version,
 };
+use hickory_resolver::name_server::ConnectionProvider;
+use hickory_resolver::Resolver;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -178,7 +180,10 @@ pub struct Version {
     pub version: String,
 }
 
-pub async fn generate_json_report(server_name: &str) -> color_eyre::eyre::Result<Root> {
+pub async fn generate_json_report<P: ConnectionProvider>(
+    server_name: &str,
+    resolver: &Resolver<P>,
+) -> color_eyre::eyre::Result<Root> {
     let mut resp_data = Root {
         federation_ok: true,
         ..Default::default()
@@ -196,7 +201,7 @@ pub async fn generate_json_report(server_name: &str) -> color_eyre::eyre::Result
 
     let resolved_server = server_host;
 
-    let lookup_error = lookup_server(&mut resp_data, resolved_server).await;
+    let lookup_error = lookup_server(&mut resp_data, resolved_server, resolver).await;
 
     // Mark federation as not ok if there are errors or if no addresses were found
     if lookup_error.is_err() || resp_data.dnsresult.addrs.is_empty() {
