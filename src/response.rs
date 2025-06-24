@@ -2,6 +2,8 @@ use crate::utils::{
     connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
     query_server_version,
 };
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use hickory_resolver::name_server::ConnectionProvider;
 use hickory_resolver::Resolver;
 use serde::Deserialize;
@@ -214,12 +216,12 @@ pub async fn generate_json_report<P: ConnectionProvider>(
 
     // Iterate through the addresses and perform connection checks in parallel
     let server_name_clone = server_name.to_string();
-    let mut tasks = vec![];
+    let mut tasks = FuturesUnordered::new();
     for addr in &resp_data.dnsresult.addrs {
         let addr_clone = addr.clone();
         let server_name_clone = server_name_clone.clone();
         let server_host_clone = server_host.to_string();
-        let task = tokio::spawn(async move {
+        tasks.push(tokio::spawn(async move {
             match connection_check(
                 &addr_clone,
                 &server_name_clone,
@@ -239,11 +241,9 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                     Err(map)
                 }
             }
-        });
-        tasks.push(task);
+        }));
     }
-    let results = futures::future::join_all(tasks).await;
-    for result in results {
+    while let Some(result) = tasks.next().await {
         match result {
             Ok(Ok(report)) => {
                 for (addr, report_data) in report {
