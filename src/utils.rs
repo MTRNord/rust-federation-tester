@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
-use tracing::{error, info};
+use tracing::{debug, error};
 
 const NETWORK_TIMEOUT_SECS: u64 = 5;
 
@@ -425,7 +425,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 for record in records.iter() {
                     let target = record.target.clone();
                     let port = record.port;
-                    info!(
+                    debug!(
                         "Found SRV record for {host} -> {target}:{port} (priority: {:?}, weight: {:?})",
                         record.priority, record.weight
                     );
@@ -494,7 +494,7 @@ async fn fetch_url_custom_sni_host(
 ) -> color_eyre::eyre::Result<FullResponse> {
     let sni_host = sni.split(':').next().unwrap();
     let host_host = host.split(':').next().unwrap();
-    info!(
+    debug!(
         "[fetch_url_custom_sni_host] Fetching {path} from {addr} with SNI {sni_host} and host {host_host}"
     );
     let stream = timeout(
@@ -559,7 +559,7 @@ async fn fetch_url_custom_sni_host(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            info!("Connection failed: {err:?}");
+            error!("Connection failed: {err:?}");
         }
     });
 
@@ -709,7 +709,7 @@ fn check_verify_keys(
 
     for (key_id, key_data) in keys.verify_keys.clone() {
         let algorithm = key_id.split(':').next().unwrap();
-        info!(
+        debug!(
             "Checking key_id: {key_id}, algorithm: {algorithm}, public key: {}",
             key_data.key
         );
