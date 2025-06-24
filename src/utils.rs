@@ -29,6 +29,8 @@ use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 use tracing::{error, info};
 
+const NETWORK_TIMEOUT_SECS: u64 = 5;
+
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     if server_name.is_empty() {
         data.error = Some("Invalid server name: empty string".to_string());
@@ -102,7 +104,7 @@ pub async fn lookup_server_well_known(data: &mut Root, server_name: &str) -> Opt
     }
 
     for addr in addrs {
-        let timeout_duration = Duration::from_secs(10);
+        let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
         let response = timeout(
             timeout_duration,
             fetch_url_custom_sni_host(
@@ -256,9 +258,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
 
     if !server_name.contains(':') {
         // If there isn't an explicit port set then try to look up the SRV record.
-        let srv_records = resolver
-            .srv_lookup(&format!("_matrix._tcp.{server_name}."))
-            .await;
+        let srv_records = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.srv_lookup(&format!("_matrix._tcp.{server_name}.")),
+        )
+        .await?;
 
         match srv_records {
             Ok(records) => {
@@ -266,7 +270,12 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     let srv = record.clone();
                     let target = srv.target().to_utf8();
                     //  Check whether the target is a CNAME record
-                    match resolver.lookup(&target, RecordType::CNAME).await {
+                    match timeout(
+                        Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                        resolver.lookup(&target, RecordType::CNAME),
+                    )
+                    .await?
+                    {
                         Ok(cname) => {
                             let cname_target = cname.record_iter().next().map(|c| {
                                 c.data()
@@ -369,7 +378,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
     // Look up the A/AAAA records for each target
     for (host, records) in srv_responses {
         // Lookup CNAME but ignore any errors.
-        let cname_resp = resolver.lookup(&host, RecordType::CNAME).await;
+        let cname_resp = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.lookup(&host, RecordType::CNAME),
+        )
+        .await?;
         if let Err(e) = &cname_resp {
             if let ResolveErrorKind::Proto(proto_error) = e.kind()
                 && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
@@ -393,8 +406,16 @@ pub async fn lookup_server<P: ConnectionProvider>(
         };
 
         // Lookup A AND AAAA records
-        let ipv4_records = resolver.lookup(&host, RecordType::A).await;
-        let ipv6_records = resolver.lookup(&host, RecordType::AAAA).await;
+        let ipv4_records = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.lookup(&host, RecordType::A),
+        )
+        .await?;
+        let ipv6_records = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.lookup(&host, RecordType::AAAA),
+        )
+        .await?;
 
         // For each SRV record, for each IP address, convert it to `<ip>:<port>` before inserting
         for record in records.iter() {
@@ -470,7 +491,11 @@ async fn fetch_url_custom_sni_host(
     info!(
         "[fetch_url_custom_sni_host] Fetching {path} from {addr} with SNI {sni_host} and host {host_host}"
     );
-    let stream = TcpStream::connect(addr).await?;
+    let stream = timeout(
+        Duration::from_secs(NETWORK_TIMEOUT_SECS),
+        TcpStream::connect(addr),
+    )
+    .await??;
     let stream = TokioIo::new(stream);
 
     let builder = SslConnector::builder(SslMethod::tls_client())?;
@@ -557,7 +582,7 @@ async fn fetch_keys(
     server_name: &str,
     sni: &str,
 ) -> color_eyre::eyre::Result<FullKeysResponse> {
-    let timeout_duration = Duration::from_secs(10);
+    let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
     let response = timeout(
         timeout_duration,
         fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni),
