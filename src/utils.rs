@@ -663,7 +663,7 @@ pub async fn connection_check(
         ed25519_checks,
         ed25519_verify_keys,
         matching_server_name,
-    ) = verify_keys(server_name, &report.keys, key_resp.keys_string);
+    ) = verify_keys(server_name, &report.keys, &key_resp.keys_string);
     report.checks.future_valid_until_ts = future_valid_until_ts;
     report.checks.has_ed25519key = has_ed25519_key;
     report.checks.all_ed25519checks_ok = all_ed25519checks_ok;
@@ -683,7 +683,7 @@ pub async fn connection_check(
 fn verify_keys(
     server_name: &str,
     keys: &Keys,
-    keys_string: String,
+    keys_string: &str,
 ) -> (
     bool,
     bool,
@@ -712,7 +712,7 @@ fn verify_keys(
 fn check_verify_keys(
     server_name: &str,
     keys: &Keys,
-    keys_string: String,
+    keys_string: &str,
 ) -> (
     BTreeMap<String, Ed25519Check>,
     bool,
