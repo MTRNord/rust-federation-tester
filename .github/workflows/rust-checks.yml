@@ -1,0 +1,117 @@
+name: Checks / Rust
+
+on:
+  push:
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Configure sccache
+        uses: actions/github-script@v7
+        with:
+          script: |
+              core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+              core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+      - shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+
+      - name: Cache Rust registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/git
+            !~/.cargo/git/checkouts
+            ~/.cargo/registry
+            !~/.cargo/registry/src
+          key: rust-registry-${{hashFiles('**/Cargo.lock') }}
+
+      - name: Clippy
+        run: |
+          cargo clippy \
+            --workspace \
+            --locked \
+            --no-deps \
+            --profile test \
+            -- \
+            -D warnings
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  cargo-test:
+    name: Cargo Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Configure sccache
+        uses: actions/github-script@v7
+        with:
+          script: |
+              core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+              core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+      - shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+      - name: Cache Rust registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/git
+            !~/.cargo/git/checkouts
+            ~/.cargo/registry
+            !~/.cargo/registry/src
+          key: rust-registry-${{hashFiles('**/Cargo.lock') }}
+
+      - name: Cargo Test
+        run: |
+          cargo test \
+            --workspace \
+            --locked \
+            --profile test \
+            --all-targets \
+            --no-fail-fast
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats

@@ -2,6 +2,12 @@
 name = "rust-federation-tester"
 version = "0.1.0"
 edition = "2024"
+description = "A library for testing Matrix federation compatibility of servers"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/MTRNord/rust-federation-tester"
+readme = "README.md"
+keywords = ["matrix", "federation", "testing"]
+categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 axum = "0.8.4"

@@ -3,14 +3,12 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use rust_federation_tester::response::generate_json_report;
 use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
-
-mod response;
-mod utils;
 
 #[derive(Deserialize)]
 struct ApiParams {
@@ -25,7 +23,7 @@ async fn get_report(Query(params): Query<ApiParams>) -> impl IntoResponse {
         );
     }
 
-    match response::generate_json_report(&params.server_name).await {
+    match generate_json_report(&params.server_name).await {
         Ok(report) => {
             // Convert the report to a Value for JSON serialization
             let report = serde_json::to_value(report)
@@ -51,7 +49,7 @@ async fn get_fed_ok(Query(params): Query<ApiParams>) -> impl IntoResponse {
         );
     }
 
-    match response::generate_json_report(&params.server_name).await {
+    match generate_json_report(&params.server_name).await {
         Ok(report) => (
             StatusCode::OK,
             if report.federation_ok {
@@ -69,6 +67,7 @@ async fn get_fed_ok(Query(params): Query<ApiParams>) -> impl IntoResponse {
         }
     }
 }
+
 #[tokio::main]
 async fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install().expect("Failed to install `color_eyre::install`");
