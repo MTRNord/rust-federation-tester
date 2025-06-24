@@ -186,11 +186,11 @@ pub struct VersionResp {
 }
 
 pub async fn query_server_version(
-    mut data: Root,
+    data: &mut ConnectionReportData,
     addr: &str,
     sni: &str,
     federation_address: &str,
-) -> color_eyre::eyre::Result<Root> {
+) -> color_eyre::eyre::Result<()> {
     match fetch_url_custom_sni_host(
         "/_matrix/federation/v1/version",
         addr,
@@ -214,15 +214,15 @@ pub async fn query_server_version(
                         );
                         data.error =
                             Some("Unexpected Content-Type in server version response".to_string());
-                        data.federation_ok = false;
-                        return Ok(data);
+                        data.checks.server_version_parses = false;
+                        return Ok(());
                     }
                 } else {
                     error!("No Content-Type header in server version response");
                     data.error =
                         Some("No Content-Type header in server version response".to_string());
-                    data.federation_ok = false;
-                    return Ok(data);
+                    data.checks.server_version_parses = false;
+                    return Ok(());
                 }
 
                 let body = response.into_body().collect().await?.to_bytes();
@@ -231,25 +231,33 @@ pub async fn query_server_version(
                         data.version = json.server;
                     }
                     Err(e) => {
-                        error!("Error parsing server version response: {e:?}");
+                        error!(
+                            "Error parsing server version response: {e:?}\nBody: {}",
+                            String::from_utf8_lossy(&body)
+                        );
                         data.error = Some("Failed to parse server version response".to_string());
-                        data.federation_ok = false;
+                        data.checks.server_version_parses = false;
+                        return Ok(());
                     }
                 }
             } else {
                 error!("Error querying server version: {}", response.status());
                 data.error = Some("Failed to query server version".to_string());
-                data.federation_ok = false;
+                data.checks.server_version_parses = false;
+                return Ok(());
             }
         }
         Err(e) => {
             error!("Error fetching server version: {e:?}");
             data.error = Some(format!("Failed to fetch server version: {e}"));
-            data.federation_ok = false;
+            data.checks.server_version_parses = false;
+            return Ok(());
         }
     }
 
-    Ok(data)
+    data.checks.server_version_parses = true;
+
+    Ok(())
 }
 
 pub async fn lookup_server<P: ConnectionProvider>(
@@ -625,6 +633,14 @@ pub async fn connection_check(
     sni: &str,
 ) -> Result<ConnectionReportData, ConnectionError> {
     let mut report = ConnectionReportData::default();
+
+    // Should this be a hard error? Or should we just log and fallthrough?
+    query_server_version(&mut report, addr, server_host, server_host)
+        .await
+        .map_err(|e| ConnectionError {
+            error: Some(format!("Error querying server version: {e}")),
+        })?;
+
     let key_resp = fetch_keys(addr, server_host, sni).await;
     if let Err(e) = key_resp {
         error!("Error fetching keys from {addr}: {e:?}");
@@ -657,7 +673,8 @@ pub async fn connection_check(
         && report.checks.all_ed25519checks_ok
         && report.checks.valid_certificates
         && report.checks.matching_server_name
-        && report.checks.future_valid_until_ts;
+        && report.checks.future_valid_until_ts
+        && report.checks.server_version_parses;
     report.ed25519verify_keys = ed25519_verify_keys;
 
     Ok(report)

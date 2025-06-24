@@ -1,6 +1,5 @@
 use crate::utils::{
     connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
-    query_server_version,
 };
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -8,7 +7,6 @@ use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use tracing::error;
 
@@ -92,11 +90,12 @@ pub struct ConnectionReportData {
     pub certificates: Vec<Certificate>,
     pub cipher: Cipher,
     pub checks: Checks,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     #[serde(rename = "Ed25519VerifyKeys")]
     pub ed25519verify_keys: BTreeMap<String, String>,
     pub keys: Keys,
+    pub version: Version,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,6 +133,7 @@ pub struct Checks {
     #[serde(rename = "Ed25519Checks")]
     pub ed25519checks: BTreeMap<String, Ed25519Check>,
     pub valid_certificates: bool,
+    pub server_version_parses: bool,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,10 +210,6 @@ pub async fn generate_json_report<P: ConnectionProvider>(
         resp_data.federation_ok = false;
     }
 
-    for addr in resp_data.clone().dnsresult.addrs {
-        resp_data = query_server_version(resp_data, &addr, server_host, server_host).await?;
-    }
-
     // Iterate through the addresses and perform connection checks in parallel
     let server_name_clone = server_name.to_string();
     let mut tasks = FuturesUnordered::new();
@@ -250,6 +246,9 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                     resp_data.federation_ok =
                         resp_data.federation_ok && report_data.checks.all_checks_ok;
                     resp_data.connection_reports.insert(addr, report_data);
+
+                    // We just update the main version always for compatibility
+                    resp_data.version = resp_data.version;
                 }
             }
             Ok(Err(e)) => {
