@@ -2,10 +2,10 @@ use crate::utils::{
     connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
     query_server_version,
 };
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use hickory_resolver::name_server::ConnectionProvider;
+use futures::stream::FuturesUnordered;
 use hickory_resolver::Resolver;
+use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;

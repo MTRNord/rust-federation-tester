@@ -2,22 +2,22 @@ use crate::response::{
     Certificate, ConnectionError, ConnectionReportData, Ed25519Check, HostData, Keys, Root,
     SrvRecord, Version, WellKnownResult,
 };
+use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
-use base64::Engine;
 use bytes::Bytes;
-use ed25519::signature::Verifier;
 use ed25519::Signature;
+use ed25519::signature::Verifier;
 use ed25519_dalek::VerifyingKey;
-use hickory_resolver::name_server::ConnectionProvider;
-use hickory_resolver::proto::rr::RecordType;
-use hickory_resolver::proto::ProtoErrorKind;
 use hickory_resolver::ResolveErrorKind::Proto;
+use hickory_resolver::name_server::ConnectionProvider;
+use hickory_resolver::proto::ProtoErrorKind;
+use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{ResolveErrorKind, Resolver};
 use http_body_util::BodyExt;
 use http_body_util::Empty;
-use hyper::body::Incoming;
 use hyper::Request;
+use hyper::body::Incoming;
 use hyper_openssl::SslStream;
 use hyper_util::rt::TokioIo;
 use openssl::ssl::SslConnector;
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{error, info};
 
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
