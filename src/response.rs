@@ -245,10 +245,10 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                 for (addr, report_data) in report {
                     resp_data.federation_ok =
                         resp_data.federation_ok && report_data.checks.all_checks_ok;
-                    resp_data.connection_reports.insert(addr, report_data);
 
                     // We just update the main version always for compatibility
-                    resp_data.version = resp_data.version;
+                    resp_data.version = report_data.version.clone();
+                    resp_data.connection_reports.insert(addr, report_data);
                 }
             }
             Ok(Err(e)) => {
