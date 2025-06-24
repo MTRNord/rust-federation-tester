@@ -196,7 +196,7 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     parse_and_validate_server_name(&mut resp_data, server_name);
 
     // Get well-known data
-    let new_server = lookup_server_well_known(&mut resp_data, server_name).await;
+    let new_server = lookup_server_well_known(&mut resp_data, server_name, resolver).await;
     if let Some(ref new_server) = new_server {
         server_host = new_server;
     }

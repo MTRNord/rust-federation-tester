@@ -70,8 +70,11 @@ pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     }
 }
 
-pub async fn lookup_server_well_known(data: &mut Root, server_name: &str) -> Option<String> {
-    let resolver = Resolver::builder_tokio().unwrap().build();
+pub async fn lookup_server_well_known<P: ConnectionProvider>(
+    data: &mut Root,
+    server_name: &str,
+    resolver: &Resolver<P>,
+) -> Option<String> {
     let ipv4 = resolver
         .lookup(&format!("{server_name}."), RecordType::A)
         .await;
@@ -254,10 +257,12 @@ pub async fn lookup_server<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
 ) -> color_eyre::eyre::Result<()> {
+    use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
+
     let mut srv_responses: BTreeMap<String, Vec<SrvRecord>> = BTreeMap::new();
 
     if !server_name.contains(':') {
-        // If there isn't an explicit port set then try to look up the SRV record.
         let srv_records = timeout(
             Duration::from_secs(NETWORK_TIMEOUT_SECS),
             resolver.srv_lookup(&format!("_matrix._tcp.{server_name}.")),
@@ -269,7 +274,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 for record in records.iter() {
                     let srv = record.clone();
                     let target = srv.target().to_utf8();
-                    //  Check whether the target is a CNAME record
                     match timeout(
                         Duration::from_secs(NETWORK_TIMEOUT_SECS),
                         resolver.lookup(&target, RecordType::CNAME),
@@ -304,7 +308,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
                             );
                         }
                         Err(e) => {
-                            // This emulates LookupCNAME in Go, which returns the target as a CNAME record if no CNAME is found.
                             if let ResolveErrorKind::Proto(proto_error) = e.kind()
                                 && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
                             {
@@ -335,7 +338,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 }
             }
             Err(e) => {
-                // Check if timeout occurred
                 if let Proto(proto_error) = e.kind()
                     && let ProtoErrorKind::Timeout = proto_error.kind()
                 {
@@ -343,8 +345,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         "Timeout while looking up SRV records for {server_name}: {e}"
                     ));
                 }
-
-                // If there is no SRV then fallback to "serverName:8448"
                 srv_responses.insert(
                     server_name.to_string(),
                     vec![SrvRecord {
@@ -357,9 +357,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
             }
         }
     } else {
-        // There is an explicit port set in the server name.
-        // We don't need to look up any SRV records.
-
         let parts: Vec<&str> = server_name.split(':').collect();
         let target = parts[0].to_string();
         let port: u16 = parts.get(1).and_then(|p| p.parse().ok()).unwrap();
@@ -375,98 +372,107 @@ pub async fn lookup_server<P: ConnectionProvider>(
         data.dnsresult.srvskipped = true;
     }
 
-    // Look up the A/AAAA records for each target
-    for (host, records) in srv_responses {
-        // Lookup CNAME but ignore any errors.
-        let cname_resp = timeout(
-            Duration::from_secs(NETWORK_TIMEOUT_SECS),
-            resolver.lookup(&host, RecordType::CNAME),
-        )
-        .await?;
-        if let Err(e) = &cname_resp {
-            if let ResolveErrorKind::Proto(proto_error) = e.kind()
-                && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
-            {
-                // Fall through if no CNAME records are found
-            } else {
-                error!("Error looking up CNAME for {host}: {e}");
-                continue;
-            }
-        }
-        let cname_target = if let Ok(cname) = cname_resp {
-            let cname_target_res = cname.record_iter().next().map(|c| {
-                c.data()
-                    .as_cname()
-                    .expect("CNAME record expected")
-                    .to_utf8()
-            });
-            cname_target_res.map(|cname_target_inner| cname_target_inner.to_string())
-        } else {
-            None
-        };
+    // Parallele DNS-Lookups für alle Hosts
+    let mut lookup_tasks = FuturesUnordered::new();
+    for (host, records) in srv_responses.clone() {
+        let resolver = resolver.clone();
+        let host = host.clone();
+        let records = records.clone();
+        lookup_tasks.push(async move {
+            // CNAME-Lookup (optional)
+            let cname_resp = timeout(
+                Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                resolver.lookup(&host, RecordType::CNAME),
+            )
+            .await;
 
-        // Lookup A AND AAAA records
-        let ipv4_records = timeout(
-            Duration::from_secs(NETWORK_TIMEOUT_SECS),
-            resolver.lookup(&host, RecordType::A),
-        )
-        .await?;
-        let ipv6_records = timeout(
-            Duration::from_secs(NETWORK_TIMEOUT_SECS),
-            resolver.lookup(&host, RecordType::AAAA),
-        )
-        .await?;
-
-        // For each SRV record, for each IP address, convert it to `<ip>:<port>` before inserting
-        for record in records.iter() {
-            let target = record.target.clone();
-            let port = record.port;
-            info!(
-                "Found SRV record for {host} -> {target}:{port} (priority: {:?}, weight: {:?})",
-                record.priority, record.weight
+            // A- und AAAA-Lookup parallel
+            let a_lookup = timeout(
+                Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                resolver.lookup(&host, RecordType::A),
             );
-
-            // Collect all addresses for this target
-            let mut addrs: Vec<String> = vec![];
-            let mut addrs_with_port: Vec<String> = vec![];
-            if let Ok(ref ipv4) = ipv4_records {
-                for addr in ipv4.record_iter() {
-                    if let Some(ip) = addr.data().as_a() {
-                        addrs.push(ip.0.to_string());
-                        addrs_with_port.push(format!("{}:{}", ip.0, port));
-                    }
-                }
-            } else {
-                error!("Error looking up A records for {host}: {ipv4_records:?}",);
-            }
-            if let Ok(ref ipv6) = ipv6_records {
-                for addr in ipv6.record_iter() {
-                    if let Some(ip) = addr.data().as_aaaa() {
-                        addrs.push(ip.0.to_string());
-                        addrs_with_port.push(format!("[{}]:{}", ip.0, port));
-                    }
-                }
-            } else {
-                error!("Error looking up AAAA records for {host}: {ipv6_records:?}",);
-            }
-
-            // If no addresses were found, log an error
-            if addrs.is_empty() {
-                continue;
-            }
-
-            // Insert the host data into the result
-            let canonical_target = cname_target.clone().unwrap_or(target.clone());
-            let dns_formatted_target = format!("{canonical_target}.");
-            data.dnsresult.hosts.insert(
-                target.clone(),
-                HostData {
-                    cname: Some(dns_formatted_target),
-                    error: None,
-                    addrs,
-                },
+            let aaaa_lookup = timeout(
+                Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                resolver.lookup(&host, RecordType::AAAA),
             );
-            data.dnsresult.addrs.extend(addrs_with_port);
+            let (ipv4_records, ipv6_records) = tokio::try_join!(a_lookup, aaaa_lookup)?;
+
+            Ok::<_, color_eyre::eyre::Error>((
+                host,
+                records,
+                cname_resp,
+                ipv4_records,
+                ipv6_records,
+            ))
+        });
+    }
+
+    while let Some(result) = lookup_tasks.next().await {
+        match result {
+            Ok((host, records, cname_resp, ipv4_records, ipv6_records)) => {
+                let cname_target = if let Ok(Ok(cname)) = &cname_resp {
+                    cname.record_iter().next().map(|c| {
+                        c.data()
+                            .as_cname()
+                            .expect("CNAME record expected")
+                            .to_utf8()
+                            .to_string()
+                    })
+                } else {
+                    None
+                };
+
+                for record in records.iter() {
+                    let target = record.target.clone();
+                    let port = record.port;
+                    info!(
+                        "Found SRV record for {host} -> {target}:{port} (priority: {:?}, weight: {:?})",
+                        record.priority, record.weight
+                    );
+
+                    let mut addrs: Vec<String> = vec![];
+                    let mut addrs_with_port: Vec<String> = vec![];
+                    if let Ok(ref ipv4) = ipv4_records {
+                        for addr in ipv4.record_iter() {
+                            if let Some(ip) = addr.data().as_a() {
+                                addrs.push(ip.0.to_string());
+                                addrs_with_port.push(format!("{}:{}", ip.0, port));
+                            }
+                        }
+                    } else {
+                        error!("Error looking up A records for {host}: {ipv4_records:?}");
+                    }
+                    if let Ok(ref ipv6) = ipv6_records {
+                        for addr in ipv6.record_iter() {
+                            if let Some(ip) = addr.data().as_aaaa() {
+                                addrs.push(ip.0.to_string());
+                                addrs_with_port.push(format!("[{}]:{}", ip.0, port));
+                            }
+                        }
+                    } else {
+                        error!("Error looking up AAAA records for {host}: {ipv6_records:?}");
+                    }
+
+                    if addrs.is_empty() {
+                        continue;
+                    }
+
+                    let canonical_target = cname_target.clone().unwrap_or(target.clone());
+                    let dns_formatted_target = format!("{canonical_target}.");
+                    data.dnsresult.hosts.insert(
+                        target.clone(),
+                        HostData {
+                            cname: Some(dns_formatted_target),
+                            error: None,
+                            addrs,
+                        },
+                    );
+                    data.dnsresult.addrs.extend(addrs_with_port);
+                }
+            }
+            Err(e) => {
+                error!("DNS-Lookup-Fehler: {e}");
+            }
         }
     }
 
