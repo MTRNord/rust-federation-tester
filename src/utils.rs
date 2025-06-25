@@ -1,6 +1,6 @@
 use crate::response::{
-    Certificate, ConnectionError, ConnectionReportData, Ed25519Check, HostData, Keys, Root,
-    SrvRecord, Version, WellKnownResult,
+    Certificate, ConnectionError, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root,
+    SRVData, Version, WellKnownResult,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -84,6 +84,14 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
 ) -> Option<String> {
+    // If there is an port in the server name, we skip the well-known lookup
+    if server_name.contains(':') {
+        info!(
+            "[lookup_server_well_known] Skipping well-known lookup for {server_name} as it contains a port"
+        );
+        return None;
+    }
+
     let ipv4 = resolver
         .lookup(&format!("{server_name}."), RecordType::A)
         .await;
@@ -277,8 +285,6 @@ pub async fn lookup_server<P: ConnectionProvider>(
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
 
-    let mut srv_responses: BTreeMap<String, Vec<SrvRecord>> = BTreeMap::new();
-
     info!("[lookup_server] Looking up server {server_name}");
 
     if !server_name.contains(':') {
@@ -313,50 +319,77 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                     .to_utf8()
                             });
                             if cname_target.clone().is_some_and(|c| c != target) {
-                                data.dnsresult.hosts.insert(target.clone(), HostData {
-                                    resolved_hostname: cname_target,
-                                    error: Some(format!(
-                                        "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
-                                    )),
+                                let srv_data = SRVData {
+                                    target: cname_target.unwrap(),
                                     addrs: vec![],
-                                });
-                                continue;
-                            }
-                            srv_responses.insert(
-                                target,
-                                vec![SrvRecord {
+                                    error: Some(Error {
+                                        error_code: ErrorCode::SRVPointsToCNAME,
+                                        error: format!(
+                                            "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
+                                        ),
+                                    }),
+                                    port: srv.port(),
                                     priority: Some(srv.priority()),
                                     weight: Some(srv.weight()),
-                                    port: srv.port(),
-                                    target: cname_target.unwrap(),
-                                }],
-                            );
+                                };
+
+                                let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                if let Some(existing) = existing {
+                                    existing.push(srv_data);
+                                } else {
+                                    data.dnsresult
+                                        .srv_targets
+                                        .insert(target.clone(), vec![srv_data]);
+                                }
+
+                                continue;
+                            }
                         }
                         Err(e) => {
                             if let ResolveErrorKind::Proto(proto_error) = e.kind()
                                 && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
                             {
                                 let cname_target = target.clone();
-                                srv_responses.insert(
-                                    target,
-                                    vec![SrvRecord {
-                                        priority: Some(srv.priority()),
-                                        weight: Some(srv.weight()),
-                                        port: srv.port(),
-                                        target: cname_target,
-                                    }],
-                                );
+                                let srv_data = SRVData {
+                                    target: cname_target,
+                                    addrs: vec![],
+                                    error: None,
+                                    port: srv.port(),
+                                    priority: Some(srv.priority()),
+                                    weight: Some(srv.weight()),
+                                };
+
+                                let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                if let Some(existing) = existing {
+                                    existing.push(srv_data);
+                                } else {
+                                    data.dnsresult
+                                        .srv_targets
+                                        .insert(target.clone(), vec![srv_data]);
+                                }
                             } else {
-                                data.dnsresult.hosts.insert(
-                                    target.clone(),
-                                    HostData {
-                                        resolved_hostname: Some(target),
-                                        error: Some(format!(
+                                let srv_data = SRVData {
+                                    target: target.clone(),
+                                    addrs: vec![],
+                                    error: Some(Error {
+                                        error: format!(
                                             "Failed to resolve CNAME for SRV record target: {e}"
-                                        )),
-                                        addrs: vec![],
-                                    },
-                                );
+                                        ),
+                                        error_code: ErrorCode::Unknown,
+                                    }),
+                                    port: srv.port(),
+                                    priority: Some(srv.priority()),
+                                    weight: Some(srv.weight()),
+                                };
+
+                                let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                if let Some(existing) = existing {
+                                    existing.push(srv_data);
+                                } else {
+                                    data.dnsresult
+                                        .srv_targets
+                                        .insert(target.clone(), vec![srv_data]);
+                                }
                             }
                         }
                     }
@@ -370,36 +403,28 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         "Timeout while looking up SRV records for {server_name}: {e}"
                     ));
                 }
-                srv_responses.insert(
+
+                data.dnsresult.srv_targets.insert(
                     server_name.to_string(),
-                    vec![SrvRecord {
+                    vec![SRVData {
+                        target: server_name.to_string(),
+                        addrs: vec![],
+                        // This is a fallthrough case. So no error is expected.
+                        error: None,
                         priority: None,
                         weight: None,
                         port: 8448,
-                        target: server_name.to_string(),
                     }],
                 );
             }
         }
     } else {
-        let parts: Vec<&str> = server_name.split(':').collect();
-        let target = parts[0].to_string();
-        let port: u16 = parts.get(1).and_then(|p| p.parse().ok()).unwrap();
-        srv_responses.insert(
-            target.clone(),
-            vec![SrvRecord {
-                priority: None,
-                weight: None,
-                port,
-                target,
-            }],
-        );
+        info!("[lookup_server] No SRV lookup for {server_name} as it contains a port");
         data.dnsresult.srvskipped = true;
     }
 
-    // Parallele DNS-Lookups für alle Hosts
     let mut lookup_tasks = FuturesUnordered::new();
-    for (host, records) in srv_responses.clone() {
+    for (host, records) in data.dnsresult.srv_targets.clone() {
         let resolver = resolver.clone();
         let host = if host.ends_with('.') {
             host
@@ -438,7 +463,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
 
     while let Some(result) = lookup_tasks.next().await {
         match result {
-            Ok((host, records, cname_resp, ipv4_records, ipv6_records)) => {
+            Ok((host, mut records, cname_resp, ipv4_records, ipv6_records)) => {
                 let cname_target = if let Ok(Ok(cname)) = &cname_resp {
                     cname.record_iter().next().map(|c| {
                         c.data()
@@ -451,7 +476,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     None
                 };
 
-                for record in records.iter() {
+                for record in records.iter_mut() {
                     let target = record.target.clone();
                     let port = record.port;
                     debug!(
@@ -504,20 +529,76 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         "Resolved {host} to {dns_formatted_target} with {} addresses and server_name {server_name}",
                         addrs.len()
                     );
-                    data.dnsresult.hosts.insert(
-                        target.clone(),
-                        HostData {
-                            resolved_hostname: Some(dns_formatted_target),
-                            error: None,
-                            addrs,
-                        },
-                    );
-                    data.dnsresult.addrs.extend(addrs_with_port);
+
+                    record.addrs.extend(addrs_with_port.clone());
+                    data.dnsresult.addrs.extend(addrs_with_port.clone());
                 }
+                data.dnsresult.srv_targets.insert(host, records);
             }
             Err(e) => {
                 error!("DNS-Lookup-Fehler: {e:#?}");
             }
+        }
+    }
+
+    // Also look up the general A/AAAA records for the server name
+    if data.dnsresult.srvskipped {
+        let server_part = server_name.split(':').next().unwrap();
+        let port = if server_name.contains(':') {
+            server_name.split(':').nth(1).unwrap_or("8448")
+        } else {
+            "8448"
+        };
+        info!(
+            "[lookup_server] Looking up A/AAAA records for {server_part} as SRV lookup was skipped"
+        );
+        let host_server_name = format!("{server_part}.");
+        let a_lookup = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.lookup(&host_server_name, RecordType::A),
+        );
+        let aaaa_lookup = timeout(
+            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+            resolver.lookup(&host_server_name, RecordType::AAAA),
+        );
+        let (ipv4_records, ipv6_records) = tokio::try_join!(a_lookup, aaaa_lookup)?;
+        let mut addrs: Vec<String> = vec![];
+        let mut addrs_with_port: Vec<String> = vec![];
+        match ipv4_records {
+            Ok(ref ipv4) => {
+                for addr in ipv4.record_iter() {
+                    if let Some(ip) = addr.data().as_a() {
+                        addrs.push(ip.0.to_string());
+                        addrs_with_port.push(format!("{}:{port}", ip.0));
+                    }
+                }
+            }
+            Err(ref e) => {
+                warn!("Error looking up A records for {server_part}: {e:#?}");
+            }
+        }
+        match ipv6_records {
+            Ok(ref ipv6) => {
+                for addr in ipv6.record_iter() {
+                    if let Some(ip) = addr.data().as_aaaa() {
+                        addrs.push(ip.0.to_string());
+                        addrs_with_port.push(format!("[{}]:443", ip.0));
+                    }
+                }
+            }
+            Err(ref e) => {
+                warn!("Error looking up AAAA records for {server_part}: {e:#?}");
+            }
+        }
+        if !addrs.is_empty() {
+            info!(
+                "Resolved {server_part} to {} addresses with server_name {server_name}",
+                addrs.len()
+            );
+            data.dnsresult.addrs.extend(addrs_with_port);
+        } else {
+            warn!("No A/AAAA records found for {server_part}");
+            // TODO: Pass to user?
         }
     }
 
@@ -775,7 +856,7 @@ fn check_verify_keys(
                 if public_key.len() == 32 {
                     // Validate the key (set matching_signature to true if the key is valid)
                     // Parse keys_string as a json value
-                    if let Ok(json_keys) = serde_json::from_str::<serde_json::Value>(&keys_string)
+                    if let Ok(json_keys) = serde_json::from_str::<serde_json::Value>(keys_string)
                         && let Some(signatures) = json_keys.get("signatures")
                         && let Some(server_signatures) = signatures.get(server_name)
                         && let Some(signature) = server_signatures.get(key_id.clone())

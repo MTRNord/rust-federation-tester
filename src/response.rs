@@ -42,29 +42,10 @@ pub struct WellKnownResult {
 pub struct Dnsresult {
     #[serde(rename = "SRVSkipped")]
     pub srvskipped: bool,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    #[serde(rename = "SRVCName")]
-    pub srvcname: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "SRVRecords")]
-    pub srvrecords: Option<Vec<SrvRecord>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "SRVError")]
-    pub srverror: Option<SrvErrorData>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub hosts: BTreeMap<String, HostData>,
+    pub srv_targets: BTreeMap<String, Vec<SRVData>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
-}
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct SrvRecord {
-    pub target: String,
-    pub port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub weight: Option<u16>,
 }
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -73,14 +54,17 @@ pub struct SrvErrorData {
 }
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct HostData {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_hostname: Option<String>,
+pub struct SRVData {
+    pub target: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    // TODO: extend this to also show the priority and weight of the SRV records if available and explicitly denote it as srv record when we got it
+    pub error: Option<Error>,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u16>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,6 +164,25 @@ pub struct ConnectionError {
 pub struct Version {
     pub name: String,
     pub version: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ErrorCode {
+    #[default]
+    Unknown,
+    NoAddressesFound,
+    #[serde(rename = "SRVPointsToCNAME")]
+    SRVPointsToCNAME,
+    DNSLookupTimeout,
+    SRVLookupTimeout,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Error {
+    pub error: String,
+    pub error_code: ErrorCode,
 }
 
 pub async fn generate_json_report<P: ConnectionProvider>(
