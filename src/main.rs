@@ -30,7 +30,7 @@ async fn get_report<P: ConnectionProvider>(
         );
     }
 
-    match generate_json_report(&params.server_name, state.resolver.as_ref()).await {
+    match generate_json_report(&params.server_name.to_lowercase(), state.resolver.as_ref()).await {
         Ok(report) => {
             // Convert the report to a Value for JSON serialization
             let report = serde_json::to_value(report)
@@ -59,7 +59,7 @@ async fn get_fed_ok<P: ConnectionProvider>(
         );
     }
 
-    match generate_json_report(&params.server_name, state.resolver.as_ref()).await {
+    match generate_json_report(&params.server_name.to_lowercase(), state.resolver.as_ref()).await {
         Ok(report) => (
             StatusCode::OK,
             if report.federation_ok {
