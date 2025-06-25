@@ -28,8 +28,17 @@ use std::pin::Pin;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error};
+use tracing::{info, warn};
 
 const NETWORK_TIMEOUT_SECS: u64 = 5;
+
+fn absolutize_srv_target(target: &str, base: &str) -> String {
+    if target.ends_with('.') {
+        target.to_string()
+    } else {
+        format!("{}.{}.", target, base.trim_end_matches('.'))
+    }
+}
 
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     if server_name.is_empty() {
@@ -232,7 +241,7 @@ pub async fn query_server_version(
                     }
                     Err(e) => {
                         error!(
-                            "Error parsing server version response: {e:?}\nBody: {}",
+                            "Error parsing server version response: {e:#?}\nBody: {}",
                             String::from_utf8_lossy(&body)
                         );
                         data.error = Some("Failed to parse server version response".to_string());
@@ -248,7 +257,7 @@ pub async fn query_server_version(
             }
         }
         Err(e) => {
-            error!("Error fetching server version: {e:?}");
+            error!("Error fetching server version: {e:#?}");
             data.error = Some(format!("Failed to fetch server version: {e}"));
             data.checks.server_version_parses = false;
             return Ok(());
@@ -270,7 +279,13 @@ pub async fn lookup_server<P: ConnectionProvider>(
 
     let mut srv_responses: BTreeMap<String, Vec<SrvRecord>> = BTreeMap::new();
 
+    info!("[lookup_server] Looking up server {server_name}");
+
     if !server_name.contains(':') {
+        info!(
+            "[lookup_server] Looking up srv {}",
+            format!("_matrix._tcp.{server_name}.")
+        );
         let srv_records = timeout(
             Duration::from_secs(NETWORK_TIMEOUT_SECS),
             resolver.srv_lookup(&format!("_matrix._tcp.{server_name}.")),
@@ -281,7 +296,9 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Ok(records) => {
                 for record in records.iter() {
                     let srv = record.clone();
-                    let target = srv.target().to_utf8();
+                    let target = absolutize_srv_target(&srv.target().to_utf8(), server_name);
+
+                    info!("[lookup_server] Looking up {target}");
                     match timeout(
                         Duration::from_secs(NETWORK_TIMEOUT_SECS),
                         resolver.lookup(&target, RecordType::CNAME),
@@ -297,7 +314,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                             });
                             if cname_target.clone().is_some_and(|c| c != target) {
                                 data.dnsresult.hosts.insert(target.clone(), HostData {
-                                    cname: cname_target,
+                                    resolved_hostname: cname_target,
                                     error: Some(format!(
                                         "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
                                     )),
@@ -333,7 +350,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                 data.dnsresult.hosts.insert(
                                     target.clone(),
                                     HostData {
-                                        cname: Some(target),
+                                        resolved_hostname: Some(target),
                                         error: Some(format!(
                                             "Failed to resolve CNAME for SRV record target: {e}"
                                         )),
@@ -384,7 +401,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
     let mut lookup_tasks = FuturesUnordered::new();
     for (host, records) in srv_responses.clone() {
         let resolver = resolver.clone();
-        let host = host.clone();
+        let host = if host.ends_with('.') {
+            host
+        } else {
+            format!("{host}.")
+        };
         let records = records.clone();
         lookup_tasks.push(async move {
             // CNAME-Lookup (optional)
@@ -440,25 +461,32 @@ pub async fn lookup_server<P: ConnectionProvider>(
 
                     let mut addrs: Vec<String> = vec![];
                     let mut addrs_with_port: Vec<String> = vec![];
-                    if let Ok(ref ipv4) = ipv4_records {
-                        for addr in ipv4.record_iter() {
-                            if let Some(ip) = addr.data().as_a() {
-                                addrs.push(ip.0.to_string());
-                                addrs_with_port.push(format!("{}:{}", ip.0, port));
+                    match ipv4_records {
+                        Ok(ref ipv4) => {
+                            for addr in ipv4.record_iter() {
+                                if let Some(ip) = addr.data().as_a() {
+                                    addrs.push(ip.0.to_string());
+                                    addrs_with_port.push(format!("{}:{}", ip.0, port));
+                                }
                             }
                         }
-                    } else {
-                        error!("Error looking up A records for {host}: {ipv4_records:?}");
+                        Err(ref e) => {
+                            warn!("Error looking up A records for {host}: {e:#?}");
+                        }
                     }
-                    if let Ok(ref ipv6) = ipv6_records {
-                        for addr in ipv6.record_iter() {
-                            if let Some(ip) = addr.data().as_aaaa() {
-                                addrs.push(ip.0.to_string());
-                                addrs_with_port.push(format!("[{}]:{}", ip.0, port));
+
+                    match ipv6_records {
+                        Ok(ref ipv6) => {
+                            for addr in ipv6.record_iter() {
+                                if let Some(ip) = addr.data().as_aaaa() {
+                                    addrs.push(ip.0.to_string());
+                                    addrs_with_port.push(format!("[{}]:{}", ip.0, port));
+                                }
                             }
                         }
-                    } else {
-                        error!("Error looking up AAAA records for {host}: {ipv6_records:?}");
+                        Err(ref e) => {
+                            warn!("Error looking up AAAA records for {host}: {e:#?}");
+                        }
                     }
 
                     if addrs.is_empty() {
@@ -466,11 +494,20 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     }
 
                     let canonical_target = cname_target.clone().unwrap_or(target.clone());
-                    let dns_formatted_target = format!("{canonical_target}.");
+                    let dns_formatted_target = if canonical_target.ends_with('.') {
+                        canonical_target
+                    } else {
+                        format!("{canonical_target}.")
+                    };
+
+                    info!(
+                        "Resolved {host} to {dns_formatted_target} with {} addresses and server_name {server_name}",
+                        addrs.len()
+                    );
                     data.dnsresult.hosts.insert(
                         target.clone(),
                         HostData {
-                            cname: Some(dns_formatted_target),
+                            resolved_hostname: Some(dns_formatted_target),
                             error: None,
                             addrs,
                         },
@@ -479,7 +516,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 }
             }
             Err(e) => {
-                error!("DNS-Lookup-Fehler: {e}");
+                error!("DNS-Lookup-Fehler: {e:#?}");
             }
         }
     }
@@ -567,7 +604,7 @@ async fn fetch_url_custom_sni_host(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            error!("Connection failed: {err:?}");
+            error!("Connection failed: {err:#?}");
         }
     });
 
@@ -643,7 +680,7 @@ pub async fn connection_check(
 
     let key_resp = fetch_keys(addr, server_host, sni).await;
     if let Err(e) = key_resp {
-        error!("Error fetching keys from {addr}: {e:?}");
+        error!("Error fetching keys from {addr}: {e:#?}");
         return Err(ConnectionError {
             error: Some(format!("Error fetching keys from {addr}: {e}",)),
         });

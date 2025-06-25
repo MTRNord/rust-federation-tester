@@ -75,12 +75,12 @@ pub struct SrvErrorData {
 #[serde(rename_all = "PascalCase")]
 pub struct HostData {
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "CName")]
-    pub cname: Option<String>,
+    pub resolved_hostname: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    // TODO: extend this to also show the priority and weight of the SRV records if available and explicitly denote it as srv record when we got it
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
