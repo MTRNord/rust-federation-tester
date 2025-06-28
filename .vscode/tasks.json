@@ -1,0 +1,25 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Load Test",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"run",
+				"--package",
+				"loadtest",
+				"--",
+				"--host",
+				"http://localhost:8080",
+				"--users",
+				"10",
+				"--run-time",
+				"30s"
+			],
+			"group": "test",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}
