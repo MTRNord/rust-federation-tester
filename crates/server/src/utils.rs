@@ -4,8 +4,8 @@ use crate::response::{
     Certificate, ConnectionError, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root,
     SRVData, Version, WellKnownResult,
 };
+use ::time as time_crate;
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
 use bytes::Bytes;
 use ed25519::Signature;
@@ -22,18 +22,18 @@ use http_body_util::BodyExt;
 use http_body_util::Empty;
 use hyper::Request;
 use hyper::body::Incoming;
-use hyper_openssl::SslStream;
 use hyper_util::rt::TokioIo;
-use openssl::ssl::SslConnector;
-use openssl::ssl::SslMethod;
-use serde::__private::from_utf8_lossy;
+use rustls::{ClientConfig, RootCertStore};
+use rustls_pki_types::ServerName;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::pin::Pin;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
+use tokio_rustls::TlsConnector;
 use tracing::{debug, error};
 use tracing::{info, warn};
+use x509_parser::prelude::*;
 
 const NETWORK_TIMEOUT_SECS: u64 = 3;
 
@@ -153,11 +153,12 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                 Ok(Ok(resp)) => {
                     if let Some(resp) = resp.response {
                         if resp.status().is_success() {
+                            // Handle cache headers
                             if let Some(expires_header) = resp.headers().get("Expires") {
                                 if let Ok(expires_str) = expires_header.to_str()
-                                    && let Ok(expires_time) = time::OffsetDateTime::parse(
+                                    && let Ok(expires_time) = time_crate::OffsetDateTime::parse(
                                         expires_str,
-                                        &time::format_description::well_known::Rfc2822,
+                                        &time_crate::format_description::well_known::Rfc2822,
                                     )
                                 {
                                     result.cache_expires_at = expires_time.unix_timestamp();
@@ -169,11 +170,12 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                                     .find_map(|s| s.trim().strip_prefix("max-age="))
                                 && let Ok(max_age_secs) = max_age.parse::<u64>()
                             {
-                                result.cache_expires_at = time::OffsetDateTime::now_utc()
+                                result.cache_expires_at = time_crate::OffsetDateTime::now_utc()
                                     .unix_timestamp()
                                     + max_age_secs as i64;
                             }
 
+                            // Always try to parse the body regardless of cache headers
                             if let Ok(body) = resp.into_body().collect().await {
                                 let body = body.to_bytes();
                                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
@@ -274,7 +276,7 @@ pub async fn query_server_version(
                     error!(
                         "No Content-Type header in server version response: {:#?}\nBody: {}",
                         headers,
-                        from_utf8_lossy(&body).to_string()
+                        String::from_utf8_lossy(&body).to_string()
                     );
                     data.error =
                         Some("No Content-Type header in server version response".to_string());
@@ -667,58 +669,49 @@ async fn fetch_url_custom_sni_host(
         TcpStream::connect(addr),
     )
     .await??;
-    let stream = TokioIo::new(stream);
 
-    let builder = SslConnector::builder(SslMethod::tls_client())?;
-    let ssl = builder
-        .build()
-        .configure()?
-        .verify_hostname(true)
-        .into_ssl(sni_host)?;
-    let mut stream = SslStream::new(ssl, stream)?;
-    Pin::new(&mut stream).connect().await?;
-    let ssl_ref = stream.ssl();
-    let protocol = ssl_ref.version_str();
-    let cipher = ssl_ref.current_cipher();
-    let chain = ssl_ref.peer_cert_chain();
+    // Create TLS configuration
+    let mut root_cert_store = RootCertStore::empty();
+    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    let connector = TlsConnector::from(std::sync::Arc::new(config));
+    let domain = ServerName::try_from(sni_host.to_string())
+        .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
+
+    let tls_stream = connector.connect(domain, stream).await?;
+
+    // Extract connection info from the TLS stream
+    let (_io, connection_info) = tls_stream.get_ref();
+    let protocol_version = connection_info
+        .protocol_version()
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_default();
+    let cipher_suite = connection_info
+        .negotiated_cipher_suite()
+        .map(|c| c.suite().as_str().unwrap_or("unknown"))
+        .unwrap_or("unknown");
+
+    // Extract certificates from the Rustls connection
+    let certificates = if let Some(peer_certs) = connection_info.peer_certificates() {
+        peer_certs
+            .iter()
+            .filter_map(extract_certificate_info)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let stream = TokioIo::new(tls_stream);
 
     let mut response = FullResponse {
         response: None,
-        protocol: protocol.to_string(),
-        cipher_suite: cipher
-            .map(|c| c.standard_name().unwrap().to_string())
-            .unwrap(),
-        certificates: chain
-            .unwrap()
-            .iter()
-            .map(|cert| {
-                let digest = cert.digest(openssl::hash::MessageDigest::sha256()).unwrap();
-                let sha256fingerprint = digest.as_ref();
-                let sha256fingerprint = STANDARD.encode(sha256fingerprint);
-
-                Certificate {
-                    subject_common_name: cert
-                        .subject_name()
-                        .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                        .next()
-                        .map(|e| e.data().as_utf8().unwrap().to_string())
-                        .unwrap_or_default(),
-                    issuer_common_name: cert
-                        .issuer_name()
-                        .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                        .next()
-                        .map(|e| e.data().as_utf8().unwrap().to_string())
-                        .unwrap_or_default(),
-                    sha256fingerprint,
-                    dnsnames: cert.subject_alt_names().map(|stack| {
-                        stack
-                            .iter()
-                            .map(|name| name.dnsname().map(ToString::to_string).unwrap_or_default())
-                            .collect()
-                    }),
-                }
-            })
-            .collect(),
+        protocol: protocol_version,
+        cipher_suite: cipher_suite.to_string(),
+        certificates,
     };
 
     let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
@@ -797,7 +790,7 @@ fn verify_keys(
 ) {
     let matching_server_name = keys.server_name == server_name;
     let future_valid_until_ts =
-        keys.valid_until_ts > time::OffsetDateTime::now_utc().unix_timestamp();
+        keys.valid_until_ts > time_crate::OffsetDateTime::now_utc().unix_timestamp();
 
     let (ed25519checks, has_ed25519key, all_ed25519checks_ok, ed25519_verify_keys) =
         check_verify_keys(server_name, keys, keys_string);
@@ -1186,18 +1179,23 @@ async fn fetch_url_pooled_simple(
         TcpStream::connect(addr),
     )
     .await??;
-    let stream = TokioIo::new(stream);
 
-    let builder = SslConnector::builder(SslMethod::tls_client())?;
-    let ssl = builder
-        .build()
-        .configure()?
-        .verify_hostname(true)
-        .into_ssl(sni_host)?;
-    let mut ssl_stream = SslStream::new(ssl, stream)?;
-    Pin::new(&mut ssl_stream).connect().await?;
+    // Create TLS configuration
+    let mut root_cert_store = RootCertStore::empty();
+    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(ssl_stream).await?;
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    let connector = TlsConnector::from(std::sync::Arc::new(config));
+    let domain = ServerName::try_from(sni_host.to_string())
+        .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
+
+    let tls_stream = connector.connect(domain, stream).await?;
+    let io = TokioIo::new(tls_stream);
+
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
 
     // Spawn connection handler
     tokio::task::spawn(async move {
@@ -1219,4 +1217,65 @@ async fn fetch_url_pooled_simple(
     connection_pool.return_connection(addr, sni, sender).await;
 
     Ok(Some(response))
+}
+
+/// Extract certificate information from a CertificateDer for federation reporting
+fn extract_certificate_info(
+    cert_der: &rustls_pki_types::CertificateDer<'_>,
+) -> Option<Certificate> {
+    // Parse the certificate using x509-parser
+    let cert_bytes = cert_der.as_ref();
+    let (_, x509_cert) = X509Certificate::from_der(cert_bytes).ok()?;
+
+    // Extract subject common name
+    let subject_cn = x509_cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    // Extract issuer common name
+    let issuer_cn = x509_cert
+        .issuer()
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    // Calculate SHA256 fingerprint
+    let mut hasher = Sha256::new();
+    hasher.update(cert_bytes);
+    let fingerprint = format!("{:X}", hasher.finalize());
+
+    // Extract Subject Alternative Names (DNS names)
+    let mut dns_names = Vec::new();
+    if let Ok(extensions_map) = x509_cert.extensions_map() {
+        if let Some(san_ext) =
+            extensions_map.get(&x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME)
+        {
+            if let ParsedExtension::SubjectAlternativeName(san_general_names) =
+                san_ext.parsed_extension()
+            {
+                for name in &san_general_names.general_names {
+                    if let GeneralName::DNSName(dns_name) = name {
+                        dns_names.push(dns_name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Some(Certificate {
+        subject_common_name: subject_cn,
+        issuer_common_name: issuer_cn,
+        sha256fingerprint: fingerprint,
+        dnsnames: if dns_names.is_empty() {
+            None
+        } else {
+            Some(dns_names)
+        },
+    })
 }

@@ -249,9 +249,18 @@ pub async fn generate_json_report<P: ConnectionProvider>(
         if let Some(cached_addrs) = dns_cache.get(&dns_cache_key) {
             // Use cached DNS results
             resp_data.dnsresult.addrs = cached_addrs;
+            tracing::debug!(
+                "Using cached DNS results for {}: {:?}",
+                dns_cache_key,
+                resp_data.dnsresult.addrs
+            );
             Ok(())
         } else {
             let error = lookup_server(&mut resp_data, &resolved_server, resolver).await;
+            tracing::debug!(
+                "After federation lookup, addrs: {:?}",
+                resp_data.dnsresult.addrs
+            );
             if error.is_ok() && !resp_data.dnsresult.addrs.is_empty() {
                 dns_cache.insert(dns_cache_key, resp_data.dnsresult.addrs.clone());
             }
@@ -268,6 +277,10 @@ pub async fn generate_json_report<P: ConnectionProvider>(
 
     // If we have addresses, run connection checks in parallel
     if !resp_data.dnsresult.addrs.is_empty() {
+        tracing::debug!(
+            "Starting connection checks for addresses: {:?}",
+            resp_data.dnsresult.addrs
+        );
         let mut futures = FuturesUnordered::new();
 
         for addr in &resp_data.dnsresult.addrs {

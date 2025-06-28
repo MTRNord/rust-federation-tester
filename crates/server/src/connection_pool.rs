@@ -3,14 +3,14 @@ use dashmap::DashMap;
 use futures::FutureExt;
 use http_body_util::Empty;
 use hyper::client::conn::http1::SendRequest;
-use hyper_openssl::SslStream;
 use hyper_util::rt::TokioIo;
-use openssl::ssl::{SslConnector, SslMethod};
-use std::pin::Pin;
+use rustls::{ClientConfig, RootCertStore};
+use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
+use tokio_rustls::TlsConnector;
 use tracing::{debug, warn};
 
 type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni) - use Arc<str> for better memory efficiency
@@ -93,19 +93,23 @@ impl ConnectionPool {
         let sni_host = sni.split(':').next().unwrap();
 
         let stream = timeout(self.connection_timeout, TcpStream::connect(addr)).await??;
-        let stream = TokioIo::new(stream);
 
-        let builder = SslConnector::builder(SslMethod::tls_client())?;
-        let ssl = builder
-            .build()
-            .configure()?
-            .verify_hostname(true)
-            .into_ssl(sni_host)?;
+        // Create TLS configuration
+        let mut root_cert_store = RootCertStore::empty();
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-        let mut stream = SslStream::new(ssl, stream)?;
-        Pin::new(&mut stream).connect().await?;
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
 
-        let (sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
+        let connector = TlsConnector::from(Arc::new(config));
+        let domain = ServerName::try_from(sni_host.to_string())
+            .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
+
+        let tls_stream = connector.connect(domain, stream).await?;
+        let io = TokioIo::new(tls_stream);
+
+        let (sender, conn) = hyper::client::conn::http1::handshake(io).await?;
 
         // Spawn the connection task
         tokio::task::spawn(async move {

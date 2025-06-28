@@ -46,25 +46,18 @@ jobs:
       - name: Build project
         run: cargo build --release
 
-      - name: Create benchmark baseline
-        run: |
-          # Create baseline directory if it doesn't exist
-          mkdir -p baseline
-
-          # Check if we have a previous baseline
-          if [ -f "baseline/benchmark-baseline.json" ]; then
-            echo "Using existing baseline for comparison"
-          else
-            echo "No baseline found, this run will create the baseline"
-          fi
-
       - name: Run benchmarks
         run: |
           # Run benchmarks with timeout to prevent hanging
-          timeout 15m cargo bench --package rust-federation-tester -- --output-format json | tee benchmark-results.json || echo "Benchmarks completed or timed out"
+          timeout 15m cargo bench --package rust-federation-tester || echo "Benchmarks completed or timed out"
 
-          # Also run with HTML output for reports
-          timeout 15m cargo bench --package rust-federation-tester || echo "HTML benchmarks completed"
+          # Criterion automatically generates both JSON and HTML reports
+          # Check if benchmark results were generated
+          if [ -d "target/criterion" ]; then
+            echo "Benchmarks completed successfully"
+          else
+            echo "Warning: No benchmark results found"
+          fi
 
       - name: Process benchmark results
         run: |
@@ -75,11 +68,18 @@ jobs:
           echo "Commit: ${{ github.sha }}" >> benchmark-summary.md
           echo "" >> benchmark-summary.md
 
-          # Extract key metrics if JSON output is available
-          if [ -f "benchmark-results.json" ]; then
-            echo "## Performance Metrics" >> benchmark-summary.md
-            # Add basic parsing of JSON results here
-            echo "See detailed results in the artifacts below." >> benchmark-summary.md
+          # Extract key metrics from criterion output
+          echo "## Performance Metrics" >> benchmark-summary.md
+          if [ -d "target/criterion" ]; then
+            echo "Benchmarks completed successfully - see detailed results in artifacts" >> benchmark-summary.md
+            
+            # Try to extract some basic timing info from criterion reports
+            find target/criterion -name "estimates.json" | head -5 | while read -r file; do
+              benchmark_name=$(echo "$file" | sed 's|target/criterion/||' | sed 's|/estimates.json||')
+              echo "- $benchmark_name: See detailed report" >> benchmark-summary.md
+            done
+          else
+            echo "No benchmark results found" >> benchmark-summary.md
           fi
 
           # List generated HTML reports
@@ -92,16 +92,13 @@ jobs:
 
       - name: Compare with baseline (if available)
         run: |
-          if [ -f "baseline/benchmark-baseline.json" ] && [ -f "benchmark-results.json" ]; then
-            echo "## Performance Comparison" >> benchmark-summary.md
-            echo "Comparing current results with baseline..." >> benchmark-summary.md
-            # Here you could add a script to compare the JSON results
-            echo "Performance comparison completed (detailed comparison requires custom tooling)" >> benchmark-summary.md
+          echo "## Performance Comparison" >> benchmark-summary.md
+          if [ -d "target/criterion" ]; then
+            # Criterion automatically handles baseline comparisons
+            echo "Criterion automatically compares with previous runs when available." >> benchmark-summary.md
+            echo "See individual benchmark reports for detailed performance comparisons." >> benchmark-summary.md
           else
-            echo "## Baseline" >> benchmark-summary.md
-            echo "This run will serve as the new baseline for future comparisons." >> benchmark-summary.md
-            # Save current results as baseline for future runs
-            cp benchmark-results.json baseline/benchmark-baseline.json 2>/dev/null || echo "No JSON results to save as baseline"
+            echo "No benchmark results available for comparison." >> benchmark-summary.md
           fi
 
       - name: Archive benchmark results
@@ -112,9 +109,8 @@ jobs:
           path: |
             target/criterion/**/*.html
             target/criterion/**/report/index.html
-            benchmark-results.json
+            target/criterion/**/estimates.json
             benchmark-summary.md
-            baseline/
           retention-days: 30
 
       - name: Comment benchmark results on PR
@@ -143,9 +139,10 @@ jobs:
           echo "Monitor memory usage and execution time..." >> performance-check.md
 
           # Basic performance regression check
-          if [ -f "baseline/benchmark-baseline.json" ] && [ -f "benchmark-results.json" ]; then
+          if [ -d "target/criterion" ]; then
             echo "Checking for major performance regressions..." >> performance-check.md
-            echo "✅ Performance check completed - see artifacts for detailed comparison" >> performance-check.md
+            echo "✅ Performance check completed - Criterion automatically detects regressions" >> performance-check.md
+            echo "📊 Check individual benchmark reports for detailed performance analysis" >> performance-check.md
           else
-            echo "ℹ️  No baseline available for performance comparison" >> performance-check.md
+            echo "ℹ️  No benchmark results available for performance comparison" >> performance-check.md
           fi
