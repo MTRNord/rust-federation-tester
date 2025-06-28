@@ -55,14 +55,14 @@ where
         const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 
         // Check if cleanup is needed (non-blocking)
-        if let Ok(mut last_cleanup) = self.last_cleanup.try_lock() {
-            if last_cleanup.elapsed() >= CLEANUP_INTERVAL {
-                *last_cleanup = Instant::now();
-                drop(last_cleanup); // Release lock before cleanup
+        if let Ok(mut last_cleanup) = self.last_cleanup.try_lock()
+            && last_cleanup.elapsed() >= CLEANUP_INTERVAL
+        {
+            *last_cleanup = Instant::now();
+            drop(last_cleanup); // Release lock before cleanup
 
-                // Perform cleanup
-                self.cache.retain(|_, entry| !entry.is_expired());
-            }
+            // Perform cleanup
+            self.cache.retain(|_, entry| !entry.is_expired());
         }
     }
 
