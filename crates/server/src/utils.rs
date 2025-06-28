@@ -544,7 +544,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                             for addr in ipv6.record_iter() {
                                 if let Some(ip) = addr.data().as_aaaa() {
                                     addrs.push(ip.0.to_string());
-                                    addrs_with_port.push(format!("[{}]:{}", ip.0, port));
+                                    addrs_with_port.push(format!("[{}]:{port}", ip.0));
                                 }
                             }
                         }
