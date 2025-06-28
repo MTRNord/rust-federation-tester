@@ -22,6 +22,7 @@ use hyper_openssl::SslStream;
 use hyper_util::rt::TokioIo;
 use openssl::ssl::SslConnector;
 use openssl::ssl::SslMethod;
+use serde::__private::from_utf8_lossy;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -218,8 +219,11 @@ pub async fn query_server_version(
     {
         Ok(response) => {
             let response = response.response.unwrap();
-            if response.status().is_success() {
-                if let Some(response_type) = response.headers().get("Content-Type") {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response.into_body().collect().await?.to_bytes();
+            if status.is_success() {
+                if let Some(response_type) = headers.get("Content-Type") {
                     if !response_type
                         .to_str()
                         .unwrap_or("")
@@ -235,14 +239,17 @@ pub async fn query_server_version(
                         return Ok(());
                     }
                 } else {
-                    error!("No Content-Type header in server version response");
+                    error!(
+                        "No Content-Type header in server version response: {:#?}\nBody: {}",
+                        headers,
+                        from_utf8_lossy(&body).to_string()
+                    );
                     data.error =
                         Some("No Content-Type header in server version response".to_string());
                     data.checks.server_version_parses = false;
                     return Ok(());
                 }
 
-                let body = response.into_body().collect().await?.to_bytes();
                 match serde_json::from_slice::<VersionResp>(&body) {
                     Ok(json) => {
                         data.version = json.server;
@@ -258,7 +265,7 @@ pub async fn query_server_version(
                     }
                 }
             } else {
-                error!("Error querying server version: {}", response.status());
+                error!("Error querying server version: {}", status);
                 data.error = Some("Failed to query server version".to_string());
                 data.checks.server_version_parses = false;
                 return Ok(());
