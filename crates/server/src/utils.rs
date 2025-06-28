@@ -1,3 +1,5 @@
+use crate::cache::{DnsCache, VersionCache, WellKnownCache};
+use crate::connection_pool::ConnectionPool;
 use crate::response::{
     Certificate, ConnectionError, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root,
     SRVData, Version, WellKnownResult,
@@ -9,6 +11,8 @@ use bytes::Bytes;
 use ed25519::Signature;
 use ed25519::signature::Verifier;
 use ed25519_dalek::VerifyingKey;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use hickory_resolver::ResolveErrorKind::Proto;
 use hickory_resolver::name_server::ConnectionProvider;
 use hickory_resolver::proto::ProtoErrorKind;
@@ -31,7 +35,7 @@ use tokio::time::{Duration, timeout};
 use tracing::{debug, error};
 use tracing::{info, warn};
 
-const NETWORK_TIMEOUT_SECS: u64 = 5;
+const NETWORK_TIMEOUT_SECS: u64 = 3;
 
 fn absolutize_srv_target(target: &str, base: &str) -> String {
     if target.ends_with('.') {
@@ -93,25 +97,23 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         return None;
     }
 
-    let ipv4 = resolver
-        .lookup(&format!("{server_name}."), RecordType::A)
-        .await;
-    let ipv6 = resolver
-        .lookup(&format!("{server_name}."), RecordType::AAAA)
-        .await;
-
-    let mut found_server: Option<String> = None;
+    // Parallelize IPv4 and IPv6 lookups
+    let server_lookup = format!("{server_name}.");
+    let (ipv4_result, ipv6_result) = tokio::join!(
+        resolver.lookup(&server_lookup, RecordType::A),
+        resolver.lookup(&server_lookup, RecordType::AAAA)
+    );
 
     let mut addrs: Vec<String> = vec![];
 
-    if let Ok(lookup) = ipv4 {
+    if let Ok(lookup) = ipv4_result {
         for record in lookup.record_iter() {
             if let Some(ip) = record.data().as_a() {
                 addrs.push(format!("{}:443", ip.0));
             }
         }
     }
-    if let Ok(lookup) = ipv6 {
+    if let Ok(lookup) = ipv6_result {
         for record in lookup.record_iter() {
             if let Some(ip) = record.data().as_aaaa() {
                 addrs.push(format!("[{}]:443", ip.0));
@@ -124,74 +126,104 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         return None;
     }
 
-    for addr in addrs {
+    let mut found_server: Option<String> = None;
+
+    // Parallelize well-known requests to all addresses
+    let mut futures = FuturesUnordered::new();
+    for addr in &addrs {
+        let addr = addr.clone();
+        let server_name = server_name.to_string();
         let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
-        let response = timeout(
-            timeout_duration,
-            fetch_url_custom_sni_host(
-                "/.well-known/matrix/server",
-                &addr,
-                server_name,
-                server_name,
-            ),
-        )
-        .await;
 
-        let mut result = WellKnownResult::default();
+        futures.push(async move {
+            let response = timeout(
+                timeout_duration,
+                fetch_url_custom_sni_host(
+                    "/.well-known/matrix/server",
+                    &addr,
+                    &server_name,
+                    &server_name,
+                ),
+            )
+            .await;
 
-        match response {
-            Ok(Ok(resp)) => {
-                if let Some(resp) = resp.response {
-                    if resp.status().is_success() {
-                        if let Some(expires_header) = resp.headers().get("Expires") {
-                            if let Ok(expires_str) = expires_header.to_str()
-                                && let Ok(expires_time) = time::OffsetDateTime::parse(
-                                    expires_str,
-                                    &time::format_description::well_known::Rfc2822,
-                                )
+            let mut result = WellKnownResult::default();
+
+            match response {
+                Ok(Ok(resp)) => {
+                    if let Some(resp) = resp.response {
+                        if resp.status().is_success() {
+                            if let Some(expires_header) = resp.headers().get("Expires") {
+                                if let Ok(expires_str) = expires_header.to_str()
+                                    && let Ok(expires_time) = time::OffsetDateTime::parse(
+                                        expires_str,
+                                        &time::format_description::well_known::Rfc2822,
+                                    )
+                                {
+                                    result.cache_expires_at = expires_time.unix_timestamp();
+                                }
+                            } else if let Some(cache_control) = resp.headers().get("Cache-Control")
+                                && let Ok(cache_control_str) = cache_control.to_str()
+                                && let Some(max_age) = cache_control_str
+                                    .split(',')
+                                    .find_map(|s| s.trim().strip_prefix("max-age="))
+                                && let Ok(max_age_secs) = max_age.parse::<u64>()
                             {
-                                result.cache_expires_at = expires_time.unix_timestamp();
+                                result.cache_expires_at = time::OffsetDateTime::now_utc()
+                                    .unix_timestamp()
+                                    + max_age_secs as i64;
                             }
-                        } else if let Some(cache_control) = resp.headers().get("Cache-Control")
-                            && let Ok(cache_control_str) = cache_control.to_str()
-                            && let Some(max_age) = cache_control_str
-                                .split(',')
-                                .find_map(|s| s.trim().strip_prefix("max-age="))
-                            && let Ok(max_age_secs) = max_age.parse::<u64>()
-                        {
-                            result.cache_expires_at = time::OffsetDateTime::now_utc()
-                                .unix_timestamp()
-                                + max_age_secs as i64;
-                        }
 
-                        if let Ok(body) = resp.into_body().collect().await {
-                            let body = body.to_bytes();
-                            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
-                                && let Some(m_server) = json.get("m.server")
-                                && let Some(server_str) = m_server.as_str()
-                            {
-                                result.m_server = server_str.to_string();
-                                parse_and_validate_server_name(data, server_str);
-                                if data.error.is_none() && found_server.is_none() {
-                                    found_server = Some(server_str.to_string());
+                            if let Ok(body) = resp.into_body().collect().await {
+                                let body = body.to_bytes();
+                                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+                                    && let Some(m_server) = json.get("m.server")
+                                    && let Some(server_str) = m_server.as_str()
+                                {
+                                    result.m_server = server_str.to_string();
+                                    // Return the server string for validation
+                                    return (addr, result, Some(server_str.to_string()));
                                 }
                             }
+                        } else {
+                            result.error =
+                                Some(format!("Error fetching well-known URL:  {}", resp.status()));
                         }
                     } else {
-                        result.error =
-                            Some(format!("Error fetching well-known URL:  {}", resp.status()));
+                        result.error = Some("Error fetching well-known URL".to_string());
                     }
-                } else {
-                    result.error = Some("Error fetching well-known URL".to_string());
+                }
+                Ok(Err(e)) => {
+                    result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
+                }
+                Err(e) => {
+                    result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
                 }
             }
-            Ok(Err(e)) => {
-                result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
-            }
-            Err(e) => {
-                result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
+            (addr, result, None::<String>)
+        });
+    }
+
+    // Process results as they come in
+    while let Some((addr, result, server_candidate)) = futures.next().await {
+        data.well_known_result.insert(addr, result);
+
+        // If we found a valid server and haven't found one yet, validate and use it
+        if let Some(server_str) = server_candidate
+            && found_server.is_none()
+        {
+            let mut temp_data = Root::default();
+            parse_and_validate_server_name(&mut temp_data, &server_str);
+            if temp_data.error.is_none() {
+                found_server = Some(server_str);
+                // We can break early once we find the first valid server
+                break;
             }
         }
+    }
+
+    // Process any remaining futures to complete the well-known results
+    while let Some((addr, result, _)) = futures.next().await {
         data.well_known_result.insert(addr, result);
     }
 
@@ -589,7 +621,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 for addr in ipv6.record_iter() {
                     if let Some(ip) = addr.data().as_aaaa() {
                         addrs.push(ip.0.to_string());
-                        addrs_with_port.push(format!("[{}]:443", ip.0));
+                        addrs_with_port.push(format!("[{}]:{port}", ip.0));
                     }
                 }
             }
@@ -751,60 +783,6 @@ async fn fetch_keys(
     })
 }
 
-pub async fn connection_check(
-    addr: &str,
-    server_name: &str,
-    server_host: &str,
-    sni: &str,
-) -> Result<ConnectionReportData, ConnectionError> {
-    let mut report = ConnectionReportData::default();
-
-    // Should this be a hard error? Or should we just log and fallthrough?
-    query_server_version(&mut report, addr, server_host, server_host)
-        .await
-        .map_err(|e| ConnectionError {
-            error: Some(format!("Error querying server version: {e}")),
-        })?;
-
-    let key_resp = fetch_keys(addr, server_host, sni).await;
-    if let Err(e) = key_resp {
-        error!("Error fetching keys from {addr}: {e:#?}");
-        return Err(ConnectionError {
-            error: Some(format!("Error fetching keys from {addr}: {e}",)),
-        });
-    }
-    let key_resp = key_resp.unwrap();
-    report.keys = key_resp.keys;
-    report.cipher.version = key_resp.protocol;
-    report.cipher.cipher_suite = key_resp.cipher_suite;
-    report.certificates = key_resp.certificates;
-    // It seems rust openssl already does the same as go validate is doing here. So as long as we have a chain we should be good.
-    report.checks.valid_certificates = !report.certificates.is_empty();
-
-    let (
-        future_valid_until_ts,
-        has_ed25519_key,
-        all_ed25519checks_ok,
-        ed25519_checks,
-        ed25519_verify_keys,
-        matching_server_name,
-    ) = verify_keys(server_name, &report.keys, &key_resp.keys_string);
-    report.checks.future_valid_until_ts = future_valid_until_ts;
-    report.checks.has_ed25519key = has_ed25519_key;
-    report.checks.all_ed25519checks_ok = all_ed25519checks_ok;
-    report.checks.matching_server_name = matching_server_name;
-    report.checks.ed25519checks = ed25519_checks;
-    report.checks.all_checks_ok = report.checks.has_ed25519key
-        && report.checks.all_ed25519checks_ok
-        && report.checks.valid_certificates
-        && report.checks.matching_server_name
-        && report.checks.future_valid_until_ts
-        && report.checks.server_version_parses;
-    report.ed25519verify_keys = ed25519_verify_keys;
-
-    Ok(report)
-}
-
 fn verify_keys(
     server_name: &str,
     keys: &Keys,
@@ -946,4 +924,299 @@ fn check_verify_keys(
         all_ed25519checks_ok,
         ed25519_verify_keys,
     )
+}
+
+pub async fn lookup_server_well_known_cached<P: ConnectionProvider>(
+    data: &mut Root,
+    server_name: &str,
+    resolver: &Resolver<P>,
+    cache: &WellKnownCache,
+    use_cache: bool,
+) -> Option<String> {
+    // Check cache first if enabled
+    if use_cache && let Some(cached_result) = cache.get_cached(&server_name.to_string(), use_cache)
+    {
+        data.well_known_result
+            .insert(server_name.to_string(), cached_result.clone());
+        if !cached_result.m_server.is_empty() {
+            return Some(cached_result.m_server);
+        }
+        return None;
+    }
+
+    // Fall back to original function and cache result
+    let result = lookup_server_well_known(data, server_name, resolver).await;
+
+    // Cache the well-known result if enabled
+    if use_cache && let Some(well_known) = data.well_known_result.get(server_name) {
+        cache.insert(server_name.to_string(), well_known.clone());
+    }
+
+    result
+}
+
+pub async fn lookup_server_cached<P: ConnectionProvider>(
+    data: &mut Root,
+    server_name: &str,
+    resolver: &Resolver<P>,
+    cache: &DnsCache,
+    use_cache: bool,
+) -> color_eyre::eyre::Result<()> {
+    // Check cache first if enabled
+    if use_cache && let Some(cached_addrs) = cache.get_cached(&server_name.to_string(), use_cache) {
+        data.dnsresult.addrs = cached_addrs;
+        return Ok(());
+    }
+
+    // Fall back to original function and cache result
+    lookup_server(data, server_name, resolver).await?;
+
+    // Cache the DNS result if enabled
+    if use_cache && !data.dnsresult.addrs.is_empty() {
+        cache.insert(server_name.to_string(), data.dnsresult.addrs.clone());
+    }
+
+    Ok(())
+}
+
+pub async fn connection_check(
+    addr: &str,
+    server_name: &str,
+    server_host: &str,
+    sni: &str,
+    connection_pool: &ConnectionPool,
+    version_cache: &VersionCache,
+    use_cache: bool,
+) -> Result<ConnectionReportData, ConnectionError> {
+    let mut report = ConnectionReportData::default();
+
+    // Check version cache first if enabled
+    let version_cache_key = format!("{addr}:{server_host}");
+    let cached_version = if use_cache {
+        if let Some(cached_version_str) = version_cache.get_cached(&version_cache_key, use_cache) {
+            serde_json::from_str::<Version>(&cached_version_str).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Parallelize version query and key fetch if no cached version available
+    let (version_result, key_result) = if let Some(cached_version) = cached_version {
+        // Use cached version, only fetch keys
+        report.version = cached_version;
+        report.checks.server_version_parses = true;
+
+        let key_resp = fetch_keys(addr, server_host, sni).await;
+        (Ok(None), key_resp)
+    } else {
+        // Parallelize both operations
+        let addr_clone = addr.to_string();
+        let server_host_clone = server_host.to_string();
+        let sni_clone = sni.to_string();
+        let pool_clone = connection_pool.clone();
+
+        tokio::join!(
+            query_server_version_pooled(&addr_clone, &server_host_clone, &sni_clone, &pool_clone),
+            fetch_keys(&addr_clone, &server_host_clone, &sni_clone)
+        )
+    };
+
+    // Handle version result
+    match version_result {
+        Ok(version_data) => {
+            if let Some((version, parses)) = version_data {
+                report.version = version;
+                report.checks.server_version_parses = parses;
+
+                // Cache the version response if enabled and successful
+                if use_cache
+                    && report.checks.server_version_parses
+                    && let Ok(version_json) = serde_json::to_string(&report.version)
+                {
+                    version_cache.insert(version_cache_key, version_json);
+                }
+            }
+            // If None, then we used cached version (already set above)
+        }
+        Err(e) => {
+            return Err(ConnectionError {
+                error: Some(format!("Error querying server version: {e}")),
+            });
+        }
+    }
+
+    // Handle key result
+    let key_resp = match key_result {
+        Ok(key_resp) => {
+            report.keys = key_resp.keys.clone();
+            report.cipher.version = key_resp.protocol.clone();
+            report.cipher.cipher_suite = key_resp.cipher_suite.clone();
+            report.certificates = key_resp.certificates.clone();
+            report.checks.valid_certificates = !report.certificates.is_empty();
+            key_resp
+        }
+        Err(e) => {
+            error!("Error fetching keys from {addr}: {e:#?}");
+            return Err(ConnectionError {
+                error: Some(format!("Error fetching keys from {addr}: {e}",)),
+            });
+        }
+    };
+
+    let (
+        future_valid_until_ts,
+        has_ed25519_key,
+        all_ed25519checks_ok,
+        ed25519_checks,
+        ed25519_verify_keys,
+        matching_server_name,
+    ) = verify_keys(server_name, &report.keys, &key_resp.keys_string);
+    report.checks.future_valid_until_ts = future_valid_until_ts;
+    report.checks.has_ed25519key = has_ed25519_key;
+    report.checks.all_ed25519checks_ok = all_ed25519checks_ok;
+    report.checks.matching_server_name = matching_server_name;
+    report.checks.ed25519checks = ed25519_checks;
+    report.checks.all_checks_ok = report.checks.has_ed25519key
+        && report.checks.all_ed25519checks_ok
+        && report.checks.valid_certificates
+        && report.checks.matching_server_name
+        && report.checks.future_valid_until_ts
+        && report.checks.server_version_parses;
+    report.ed25519verify_keys = ed25519_verify_keys;
+
+    Ok(report)
+}
+
+// Version query using connection pool (no certificates needed)
+async fn query_server_version_pooled(
+    addr: &str,
+    server_name: &str,
+    sni: &str,
+    connection_pool: &ConnectionPool,
+) -> color_eyre::eyre::Result<Option<(Version, bool)>> {
+    let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
+
+    let response = timeout(
+        timeout_duration,
+        fetch_url_pooled_simple(
+            "/_matrix/federation/v1/version",
+            addr,
+            server_name,
+            sni,
+            connection_pool,
+        ),
+    )
+    .await??;
+
+    let http_response = response.unwrap();
+    let status = http_response.status();
+    let headers = http_response.headers().clone();
+    let body = http_response.into_body().collect().await?.to_bytes();
+
+    if status.is_success() {
+        if let Some(response_type) = headers.get("Content-Type") {
+            if !response_type
+                .to_str()
+                .unwrap_or("")
+                .contains("application/json")
+            {
+                return Ok(Some((Version::default(), false)));
+            }
+        } else {
+            return Ok(Some((Version::default(), false)));
+        }
+
+        match serde_json::from_slice::<VersionResp>(&body) {
+            Ok(json) => Ok(Some((json.server, true))),
+            Err(_) => Ok(Some((Version::default(), false))),
+        }
+    } else {
+        Ok(Some((Version::default(), false)))
+    }
+}
+
+// Simple pooled HTTP client for requests that don't need certificate info
+async fn fetch_url_pooled_simple(
+    path: &str,
+    addr: &str,
+    host: &str,
+    sni: &str,
+    connection_pool: &ConnectionPool,
+) -> color_eyre::eyre::Result<Option<hyper::Response<Incoming>>> {
+    let sni_host = sni.split(':').next().unwrap();
+    let host_host = host.split(':').next().unwrap();
+
+    debug!(
+        "[fetch_url_pooled_simple] Fetching {path} from {addr} with SNI {sni_host} and host {host_host} using connection pool"
+    );
+
+    // Try to get a connection from the pool
+    match connection_pool.get_connection(addr, sni).await {
+        Ok(mut sender) => {
+            let req = Request::builder()
+                .uri(path)
+                .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
+                .header(hyper::header::HOST, host_host)
+                .body(Empty::<Bytes>::new())?;
+
+            match sender.send_request(req).await {
+                Ok(response) => {
+                    debug!("Successfully used pooled connection for {path}");
+                    // Return the connection to the pool
+                    connection_pool.return_connection(addr, sni, sender).await;
+                    return Ok(Some(response));
+                }
+                Err(e) => {
+                    debug!("Pooled connection failed for {path}: {e}, creating fresh connection");
+                    // Don't return the failed connection to the pool
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Failed to get pooled connection for {path}: {e}, creating fresh connection");
+        }
+    }
+
+    // Fall back to fresh connection if pool failed
+    debug!("Creating fresh connection for {path}");
+    let stream = timeout(
+        Duration::from_secs(NETWORK_TIMEOUT_SECS),
+        TcpStream::connect(addr),
+    )
+    .await??;
+    let stream = TokioIo::new(stream);
+
+    let builder = SslConnector::builder(SslMethod::tls_client())?;
+    let ssl = builder
+        .build()
+        .configure()?
+        .verify_hostname(true)
+        .into_ssl(sni_host)?;
+    let mut ssl_stream = SslStream::new(ssl, stream)?;
+    Pin::new(&mut ssl_stream).connect().await?;
+
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(ssl_stream).await?;
+
+    // Spawn connection handler
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            debug!("Fresh connection task ended: {err:#?}");
+        }
+    });
+
+    // Send the request
+    let req = Request::builder()
+        .uri(path)
+        .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
+        .header(hyper::header::HOST, host_host)
+        .body(Empty::<Bytes>::new())?;
+
+    let response = sender.send_request(req).await?;
+
+    // Store the connection in the pool for reuse
+    connection_pool.return_connection(addr, sni, sender).await;
+
+    Ok(Some(response))
 }

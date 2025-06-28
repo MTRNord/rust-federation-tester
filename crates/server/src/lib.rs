@@ -3,5 +3,7 @@
 //! This library allows checking Matrix federation compatibility for a given server
 //! by validating DNS records, well-known configurations, and connection details.
 
+pub mod cache;
+pub mod connection_pool;
 pub mod response;
 pub mod utils;

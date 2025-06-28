@@ -1,3 +1,5 @@
+use crate::cache::{DnsCache, VersionCache, WellKnownCache};
+use crate::connection_pool::ConnectionPool;
 use crate::utils::{
     connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
 };
@@ -8,7 +10,6 @@ use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use tracing::error;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -188,78 +189,123 @@ pub struct Error {
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
+    connection_pool: &ConnectionPool,
+    dns_cache: &DnsCache,
+    well_known_cache: &WellKnownCache,
+    version_cache: &VersionCache,
+    use_cache: bool,
 ) -> color_eyre::eyre::Result<Root> {
     let mut resp_data = Root {
         federation_ok: true,
         ..Default::default()
     };
-    let mut server_host = server_name;
 
     // Validate server name
     parse_and_validate_server_name(&mut resp_data, server_name);
-
-    // Get well-known data
-    let new_server = lookup_server_well_known(&mut resp_data, server_name, resolver).await;
-    if let Some(ref new_server) = new_server {
-        server_host = new_server;
+    if resp_data.error.is_some() {
+        resp_data.federation_ok = false;
+        return Ok(resp_data);
     }
 
-    let resolved_server = server_host;
+    let server_name_lower = server_name.to_lowercase();
+    let cache_key = server_name_lower.clone();
 
-    let lookup_error = lookup_server(&mut resp_data, resolved_server, resolver).await;
+    // Handle well-known lookup with caching
+    let well_known_result = if use_cache {
+        if let Some(cached_result) = well_known_cache.get(&cache_key) {
+            // Use cached well-known result
+            resp_data
+                .well_known_result
+                .insert(server_name_lower.clone(), cached_result.clone());
+            if !cached_result.m_server.is_empty() {
+                Some(cached_result.m_server)
+            } else {
+                None
+            }
+        } else {
+            // Fetch well-known
+            let result =
+                lookup_server_well_known(&mut resp_data, &server_name_lower, resolver).await;
+            // Cache the well-known result if we have one
+            if let Some(well_known_result) = resp_data.well_known_result.get(&server_name_lower) {
+                well_known_cache.insert(cache_key, well_known_result.clone());
+            }
+            result
+        }
+    } else {
+        lookup_server_well_known(&mut resp_data, &server_name_lower, resolver).await
+    };
 
-    // Mark federation as not ok if there are errors or if no addresses were found
+    // Determine the server to resolve
+    let resolved_server = if let Some(ref new_server) = well_known_result {
+        new_server.clone()
+    } else {
+        server_name_lower.clone()
+    };
+
+    // DNS lookup with caching
+    let dns_cache_key = resolved_server.clone();
+    let lookup_error = if use_cache {
+        if let Some(cached_addrs) = dns_cache.get(&dns_cache_key) {
+            // Use cached DNS results
+            resp_data.dnsresult.addrs = cached_addrs;
+            Ok(())
+        } else {
+            let error = lookup_server(&mut resp_data, &resolved_server, resolver).await;
+            if error.is_ok() && !resp_data.dnsresult.addrs.is_empty() {
+                dns_cache.insert(dns_cache_key, resp_data.dnsresult.addrs.clone());
+            }
+            error
+        }
+    } else {
+        lookup_server(&mut resp_data, &resolved_server, resolver).await
+    };
+
+    // Mark federation as not ok if there are DNS errors or no addresses
     if lookup_error.is_err() || resp_data.dnsresult.addrs.is_empty() {
         resp_data.federation_ok = false;
     }
 
-    // Iterate through the addresses and perform connection checks in parallel
-    let server_name_clone = server_name.to_string();
-    let mut tasks = FuturesUnordered::new();
-    for addr in &resp_data.dnsresult.addrs {
-        let addr_clone = addr.clone();
-        let server_name_clone = server_name_clone.clone();
-        let server_host_clone = server_host.to_string();
-        tasks.push(tokio::spawn(async move {
-            match connection_check(
-                &addr_clone,
-                &server_name_clone,
-                &server_host_clone,
-                &server_host_clone,
-            )
-            .await
-            {
+    // If we have addresses, run connection checks in parallel
+    if !resp_data.dnsresult.addrs.is_empty() {
+        let mut futures = FuturesUnordered::new();
+
+        for addr in &resp_data.dnsresult.addrs {
+            let addr = addr.clone();
+            let server_name = server_name_lower.clone();
+            let resolved_server = resolved_server.clone();
+            let pool = connection_pool.clone();
+            let version_cache = version_cache.clone();
+
+            futures.push(async move {
+                let result = connection_check(
+                    &addr,
+                    &server_name,
+                    &resolved_server,
+                    &resolved_server,
+                    &pool,
+                    &version_cache,
+                    use_cache,
+                )
+                .await;
+                (addr, result)
+            });
+        }
+
+        // Process all connection checks concurrently
+        while let Some((addr, result)) = futures.next().await {
+            match result {
                 Ok(report) => {
-                    let mut map = BTreeMap::new();
-                    map.insert(addr_clone, report);
-                    Ok(map)
+                    // Update global checks
+                    resp_data.federation_ok =
+                        resp_data.federation_ok && report.checks.all_checks_ok;
+                    resp_data.version = report.version.clone();
+                    resp_data.connection_reports.insert(addr, report);
                 }
                 Err(e) => {
-                    let mut map = BTreeMap::new();
-                    map.insert(addr_clone, e);
-                    Err(map)
+                    resp_data.connection_errors.insert(addr, e);
+                    resp_data.federation_ok = false;
                 }
-            }
-        }));
-    }
-    while let Some(result) = tasks.next().await {
-        match result {
-            Ok(Ok(report)) => {
-                for (addr, report_data) in report {
-                    resp_data.federation_ok =
-                        resp_data.federation_ok && report_data.checks.all_checks_ok;
-
-                    // We just update the main version always for compatibility
-                    resp_data.version = report_data.version.clone();
-                    resp_data.connection_reports.insert(addr, report_data);
-                }
-            }
-            Ok(Err(e)) => {
-                resp_data.federation_ok = false;
-                resp_data.connection_errors.extend(e);
-            }
-            Err(e) => {
-                error!("Task failed: {e:?}");
             }
         }
     }

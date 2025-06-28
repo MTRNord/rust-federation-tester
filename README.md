@@ -23,7 +23,7 @@ The service will listen on `0.0.0.0:8080` by default.
 
 ### API Endpoints
 
-#### `GET /api/report?server_name=<server_name>`
+#### `GET /api/report?server_name=<server_name>&no_cache=<true|false>`
 
 Returns a detailed JSON report about the federation status of the given server.
 
@@ -33,7 +33,7 @@ Returns a detailed JSON report about the federation status of the given server.
 GET /api/report?server_name=matrix.org
 ```
 
-#### `GET /api/federation-ok?server_name=<server_name>`
+#### `GET /api/federation-ok?server_name=<server_name>&no_cache=<true|false>`
 
 Returns `GOOD` if federation is OK, otherwise `BAD`.
 

@@ -6,10 +6,13 @@ use axum::routing::get;
 use axum::{Json, Router};
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
+use rust_federation_tester::cache::{DnsCache, VersionCache, WellKnownCache};
+use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::response::generate_json_report;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use tokio::time::{Duration, interval};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -17,6 +20,9 @@ use tracing::{error, info};
 #[derive(Deserialize)]
 struct ApiParams {
     pub server_name: String,
+    /// Skip cache and force fresh requests - useful for debugging
+    #[serde(default)]
+    pub no_cache: bool,
 }
 
 async fn get_report<P: ConnectionProvider>(
@@ -30,7 +36,17 @@ async fn get_report<P: ConnectionProvider>(
         );
     }
 
-    match generate_json_report(&params.server_name.to_lowercase(), state.resolver.as_ref()).await {
+    match generate_json_report(
+        &params.server_name.to_lowercase(),
+        state.resolver.as_ref(),
+        &state.connection_pool,
+        &state.dns_cache,
+        &state.well_known_cache,
+        &state.version_cache,
+        !params.no_cache,
+    )
+    .await
+    {
         Ok(report) => {
             // Convert the report to a Value for JSON serialization
             let report = serde_json::to_value(report)
@@ -59,7 +75,17 @@ async fn get_fed_ok<P: ConnectionProvider>(
         );
     }
 
-    match generate_json_report(&params.server_name.to_lowercase(), state.resolver.as_ref()).await {
+    match generate_json_report(
+        &params.server_name.to_lowercase(),
+        state.resolver.as_ref(),
+        &state.connection_pool,
+        &state.dns_cache,
+        &state.well_known_cache,
+        &state.version_cache,
+        !params.no_cache,
+    )
+    .await
+    {
         Ok(report) => (
             StatusCode::OK,
             if report.federation_ok {
@@ -81,6 +107,10 @@ async fn get_fed_ok<P: ConnectionProvider>(
 #[derive(Clone)]
 struct AppState<P: ConnectionProvider> {
     resolver: Arc<Resolver<P>>,
+    connection_pool: ConnectionPool,
+    dns_cache: DnsCache,
+    well_known_cache: WellKnownCache,
+    version_cache: VersionCache,
 }
 
 #[tokio::main]
@@ -88,7 +118,32 @@ async fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install().expect("Failed to install `color_eyre::install`");
     tracing_subscriber::fmt().init();
     let resolver = Arc::new(Resolver::builder_tokio()?.build());
-    let state = AppState { resolver };
+
+    // Initialize performance components
+    let connection_pool = ConnectionPool::default();
+    let dns_cache = DnsCache::default();
+    let well_known_cache = WellKnownCache::default();
+    let version_cache = VersionCache::default();
+
+    let state = AppState {
+        resolver,
+        connection_pool: connection_pool.clone(),
+        dns_cache,
+        well_known_cache,
+        version_cache,
+    };
+
+    // Start background cleanup task for connection pool
+    {
+        let pool = connection_pool.clone();
+        tokio::spawn(async move {
+            let mut interval = interval(Duration::from_secs(300)); // 5 minutes
+            loop {
+                interval.tick().await;
+                pool.cleanup_dead_connections().await;
+            }
+        });
+    }
 
     let app = Router::new()
         .route("/api/report", get(get_report))

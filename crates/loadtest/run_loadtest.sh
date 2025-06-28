@@ -2,7 +2,7 @@
 
 # Default values
 HOST="http://localhost:8080"
-USERS="10000"
+USERS="50"
 RUN_TIME="60s"
 SERVER_NAME="mtrnord.blog"
 
@@ -68,10 +68,11 @@ echo "Server Name: $SERVER_NAME"
 echo ""
 
 # Set server name environment variable and run the load test
-SERVER_NAME="$SERVER_NAME" cargo run --package loadtest -- \
+SERVER_NAME="$SERVER_NAME" cargo run --package loadtest --release -- \
     --host "$HOST" \
     --users "$USERS" \
     --run-time "$RUN_TIME" \
+    --startup-time "1m" \
     --report-file=report.html \
     "${ARGS[@]}"
 
