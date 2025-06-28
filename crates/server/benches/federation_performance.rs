@@ -1,4 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use rust_federation_tester::cache::{DnsCache, VersionCache};
 use rust_federation_tester::connection_pool::ConnectionPool;
 
