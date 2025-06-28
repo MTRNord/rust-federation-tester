@@ -688,7 +688,7 @@ async fn fetch_url_custom_sni_host(
     let (_io, connection_info) = tls_stream.get_ref();
     let protocol_version = connection_info
         .protocol_version()
-        .map(|v| format!("{:?}", v))
+        .map(|v| format!("{v:?}"))
         .unwrap_or_default();
     let cipher_suite = connection_info
         .negotiated_cipher_suite()
@@ -1252,18 +1252,15 @@ fn extract_certificate_info(
 
     // Extract Subject Alternative Names (DNS names)
     let mut dns_names = Vec::new();
-    if let Ok(extensions_map) = x509_cert.extensions_map() {
-        if let Some(san_ext) =
+    if let Ok(extensions_map) = x509_cert.extensions_map()
+        && let Some(san_ext) =
             extensions_map.get(&x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME)
-        {
-            if let ParsedExtension::SubjectAlternativeName(san_general_names) =
-                san_ext.parsed_extension()
-            {
-                for name in &san_general_names.general_names {
-                    if let GeneralName::DNSName(dns_name) = name {
-                        dns_names.push(dns_name.to_string());
-                    }
-                }
+        && let ParsedExtension::SubjectAlternativeName(san_general_names) =
+            san_ext.parsed_extension()
+    {
+        for name in &san_general_names.general_names {
+            if let GeneralName::DNSName(dns_name) = name {
+                dns_names.push(dns_name.to_string());
             }
         }
     }
