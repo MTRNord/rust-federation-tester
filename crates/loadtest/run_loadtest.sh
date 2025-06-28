@@ -73,6 +73,6 @@ SERVER_NAME="$SERVER_NAME" cargo run --package loadtest --release -- \
     --users "$USERS" \
     --run-time "$RUN_TIME" \
     --startup-time "1m" \
-    --report-file=report.html \
+    --report-file=report-nocache.html \
     "${ARGS[@]}"
 

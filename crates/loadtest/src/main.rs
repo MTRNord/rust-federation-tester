@@ -8,14 +8,14 @@ async fn health_check(user: &mut GooseUser) -> TransactionResult {
 
 async fn get_federation_report(user: &mut GooseUser) -> TransactionResult {
     let server_name = env::var("SERVER_NAME").unwrap_or_else(|_| "matrix.org".to_string());
-    let path = format!("/api/report?server_name={server_name}&no_cache=false");
+    let path = format!("/api/report?server_name={server_name}&no_cache=true");
     let _goose_metrics = user.get(&path).await?;
     Ok(())
 }
 
 async fn get_federation_ok(user: &mut GooseUser) -> TransactionResult {
     let server_name = env::var("SERVER_NAME").unwrap_or_else(|_| "matrix.org".to_string());
-    let path = format!("/api/federation-ok?server_name={server_name}&no_cache=false");
+    let path = format!("/api/federation-ok?server_name={server_name}&no_cache=true");
     let _goose_metrics = user.get(&path).await?;
     Ok(())
 }

@@ -34,6 +34,7 @@ where
 {
     cache: Arc<DashMap<K, CacheEntry<V>>>,
     default_ttl: Duration,
+    last_cleanup: Arc<std::sync::Mutex<Instant>>,
 }
 
 impl<K, V> ResponseCache<K, V>
@@ -42,25 +43,33 @@ where
     V: Clone + Send + Sync + 'static,
 {
     pub fn new(default_ttl: Duration) -> Self {
-        let cache = Self {
+        Self {
             cache: Arc::new(DashMap::new()),
             default_ttl,
-        };
+            last_cleanup: Arc::new(std::sync::Mutex::new(Instant::now())),
+        }
+    }
 
-        // Start cleanup task
-        let cache_clone = cache.cache.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                cache_clone.retain(|_, entry| !entry.is_expired());
+    /// Perform lazy cleanup if enough time has passed
+    fn maybe_cleanup(&self) {
+        const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+        // Check if cleanup is needed (non-blocking)
+        if let Ok(mut last_cleanup) = self.last_cleanup.try_lock() {
+            if last_cleanup.elapsed() >= CLEANUP_INTERVAL {
+                *last_cleanup = Instant::now();
+                drop(last_cleanup); // Release lock before cleanup
+
+                // Perform cleanup
+                self.cache.retain(|_, entry| !entry.is_expired());
             }
-        });
-
-        cache
+        }
     }
 
     pub fn get(&self, key: &K) -> Option<V> {
+        // Perform lazy cleanup on get operations
+        self.maybe_cleanup();
+
         self.cache.get(key).and_then(|entry| {
             if entry.is_expired() {
                 None
@@ -79,6 +88,9 @@ where
     }
 
     pub fn insert(&self, key: K, value: V) {
+        // Perform lazy cleanup on insert operations
+        self.maybe_cleanup();
+
         self.cache
             .insert(key, CacheEntry::new(value, self.default_ttl));
     }

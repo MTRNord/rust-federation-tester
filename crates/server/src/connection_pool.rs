@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, warn};
 
-type ConnectionKey = (String, String); // (addr, sni)
+type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni) - use Arc<str> for better memory efficiency
 type PooledConnection = SendRequest<Empty<Bytes>>;
 
 /// Connection pool for reusing HTTP/1.1 connections with custom SNI
@@ -22,6 +22,7 @@ type PooledConnection = SendRequest<Empty<Bytes>>;
 pub struct ConnectionPool {
     pools: Arc<DashMap<ConnectionKey, Arc<Mutex<Vec<PooledConnection>>>>>,
     max_connections_per_key: usize,
+    max_total_connections: usize,
     connection_timeout: Duration,
 }
 
@@ -30,6 +31,7 @@ impl ConnectionPool {
         Self {
             pools: Arc::new(DashMap::new()),
             max_connections_per_key,
+            max_total_connections: max_connections_per_key * 20, // Reasonable total limit
             connection_timeout: Duration::from_secs(connection_timeout_secs),
         }
     }
@@ -40,7 +42,7 @@ impl ConnectionPool {
         addr: &str,
         sni: &str,
     ) -> color_eyre::eyre::Result<PooledConnection> {
-        let key = (addr.to_string(), sni.to_string());
+        let key = (Arc::from(addr), Arc::from(sni));
 
         // Try to get an existing connection from the pool
         if let Some(pool) = self.pools.get(&key) {
@@ -55,6 +57,11 @@ impl ConnectionPool {
             }
         }
 
+        // Check memory limits before creating new connection
+        if !self.can_create_connection() {
+            self.enforce_memory_limits().await;
+        }
+
         // Create new connection
         debug!("Creating new connection for {addr} with SNI {sni}");
         self.create_new_connection(addr, sni).await
@@ -62,7 +69,7 @@ impl ConnectionPool {
 
     /// Return a connection to the pool for reuse
     pub async fn return_connection(&self, addr: &str, sni: &str, mut conn: PooledConnection) {
-        let key = (addr.to_string(), sni.to_string());
+        let key = (Arc::from(addr), Arc::from(sni));
 
         // Only return connection if it's still ready
         if conn.ready().now_or_never().is_some_and(|r| r.is_ok()) {
@@ -168,6 +175,51 @@ impl ConnectionPool {
             pools_count,
             total_connections,
             max_connections_per_key: self.max_connections_per_key,
+        }
+    }
+
+    /// Get total number of connections across all pools
+    fn total_connections(&self) -> usize {
+        let mut total = 0;
+        for entry in self.pools.iter() {
+            if let Ok(connections) = entry.value().try_lock() {
+                total += connections.len();
+            }
+        }
+        total
+    }
+
+    /// Check if we can create a new connection without exceeding limits
+    fn can_create_connection(&self) -> bool {
+        self.total_connections() < self.max_total_connections
+    }
+
+    /// Force cleanup of excess connections if memory limits are exceeded
+    async fn enforce_memory_limits(&self) {
+        let total = self.total_connections();
+        if total > self.max_total_connections {
+            let excess = total - self.max_total_connections;
+            let mut removed = 0;
+
+            // Remove connections from pools, starting with largest pools
+            for entry in self.pools.iter() {
+                if removed >= excess {
+                    break;
+                }
+
+                let mut connections = entry.value().lock().await;
+                while !connections.is_empty() && removed < excess {
+                    connections.pop();
+                    removed += 1;
+                }
+            }
+
+            if removed > 0 {
+                debug!(
+                    "Enforced memory limits: removed {} excess connections",
+                    removed
+                );
+            }
         }
     }
 }

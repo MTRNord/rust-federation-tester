@@ -2,6 +2,11 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rust_federation_tester::cache::{DnsCache, VersionCache};
 use rust_federation_tester::connection_pool::ConnectionPool;
 
+// CI-friendly benchmark configuration
+fn is_ci_mode() -> bool {
+    std::env::var("CI").is_ok() || std::env::var("QUICK_BENCH").is_ok()
+}
+
 fn benchmark_cache_operations(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 

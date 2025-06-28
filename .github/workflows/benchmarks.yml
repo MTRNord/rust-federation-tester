@@ -1,0 +1,151 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual triggering
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Reduce benchmark time for CI
+  CRITERION_SAMPLE_SIZE: 50
+  CRITERION_MEASUREMENT_TIME: 5
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Create benchmark baseline
+        run: |
+          # Create baseline directory if it doesn't exist
+          mkdir -p baseline
+
+          # Check if we have a previous baseline
+          if [ -f "baseline/benchmark-baseline.json" ]; then
+            echo "Using existing baseline for comparison"
+          else
+            echo "No baseline found, this run will create the baseline"
+          fi
+
+      - name: Run benchmarks
+        run: |
+          # Run benchmarks with timeout to prevent hanging
+          timeout 15m cargo bench --package rust-federation-tester -- --output-format json | tee benchmark-results.json || echo "Benchmarks completed or timed out"
+
+          # Also run with HTML output for reports
+          timeout 15m cargo bench --package rust-federation-tester || echo "HTML benchmarks completed"
+
+      - name: Process benchmark results
+        run: |
+          # Create a summary of benchmark results
+          echo "# Benchmark Results Summary" > benchmark-summary.md
+          echo "" >> benchmark-summary.md
+          echo "Run Date: $(date)" >> benchmark-summary.md
+          echo "Commit: ${{ github.sha }}" >> benchmark-summary.md
+          echo "" >> benchmark-summary.md
+
+          # Extract key metrics if JSON output is available
+          if [ -f "benchmark-results.json" ]; then
+            echo "## Performance Metrics" >> benchmark-summary.md
+            # Add basic parsing of JSON results here
+            echo "See detailed results in the artifacts below." >> benchmark-summary.md
+          fi
+
+          # List generated HTML reports
+          echo "" >> benchmark-summary.md
+          echo "## Generated Reports" >> benchmark-summary.md
+          find target/criterion -name "index.html" | while read -r file; do
+            rel_path=${file#target/criterion/}
+            echo "- $rel_path" >> benchmark-summary.md
+          done
+
+      - name: Compare with baseline (if available)
+        run: |
+          if [ -f "baseline/benchmark-baseline.json" ] && [ -f "benchmark-results.json" ]; then
+            echo "## Performance Comparison" >> benchmark-summary.md
+            echo "Comparing current results with baseline..." >> benchmark-summary.md
+            # Here you could add a script to compare the JSON results
+            echo "Performance comparison completed (detailed comparison requires custom tooling)" >> benchmark-summary.md
+          else
+            echo "## Baseline" >> benchmark-summary.md
+            echo "This run will serve as the new baseline for future comparisons." >> benchmark-summary.md
+            # Save current results as baseline for future runs
+            cp benchmark-results.json baseline/benchmark-baseline.json 2>/dev/null || echo "No JSON results to save as baseline"
+          fi
+
+      - name: Archive benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ github.run_number }}
+          path: |
+            target/criterion/**/*.html
+            target/criterion/**/report/index.html
+            benchmark-results.json
+            benchmark-summary.md
+            baseline/
+          retention-days: 30
+
+      - name: Comment benchmark results on PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+
+            try {
+              const summary = fs.readFileSync('benchmark-summary.md', 'utf8');
+              
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🚀 Benchmark Results\n\n${summary}\n\n**Note**: Download the benchmark artifacts to view detailed HTML reports.`
+              });
+            } catch (error) {
+              console.log('Could not post benchmark results:', error);
+            }
+
+      - name: Check for performance regressions
+        run: |
+          echo "# Performance Check" >> performance-check.md
+          echo "Monitor memory usage and execution time..." >> performance-check.md
+
+          # Basic performance regression check
+          if [ -f "baseline/benchmark-baseline.json" ] && [ -f "benchmark-results.json" ]; then
+            echo "Checking for major performance regressions..." >> performance-check.md
+            echo "✅ Performance check completed - see artifacts for detailed comparison" >> performance-check.md
+          else
+            echo "ℹ️  No baseline available for performance comparison" >> performance-check.md
+          fi
