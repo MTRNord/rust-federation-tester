@@ -20,10 +20,10 @@ pub struct Root {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub connection_reports: BTreeMap<String, ConnectionReportData>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub connection_errors: BTreeMap<String, ConnectionError>,
+    pub connection_errors: BTreeMap<String, Error>,
     pub version: Version,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<Error>,
     #[serde(rename = "FederationOK")]
     pub federation_ok: bool,
 }
@@ -35,7 +35,7 @@ pub struct WellKnownResult {
     pub m_server: String,
     pub cache_expires_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<Error>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub struct ConnectionReportData {
     pub cipher: Cipher,
     pub checks: Checks,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<Error>,
     #[serde(rename = "Ed25519VerifyKeys")]
     pub ed25519verify_keys: BTreeMap<String, String>,
     pub keys: Keys,
@@ -155,16 +155,20 @@ pub struct Ed25519VerifyKey {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ConnectionError {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
     pub version: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde[rename_all = "PascalCase"]]
+pub enum InvalidServerNameErrorCode {
+    #[default]
+    Unknown,
+    EmptyString,
+    EmptyHostname,
+    NotValidDNS,
+    InvalidCharacter,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -177,6 +181,14 @@ pub enum ErrorCode {
     SRVPointsToCNAME,
     DNSLookupTimeout,
     SRVLookupTimeout,
+    InvalidServerName(InvalidServerNameErrorCode),
+    NoRecordsFound,
+    UnexpectedContentType(String),
+    MissingContentType,
+    InvalidJson(String),
+    NotOk(String),
+    NoResponse,
+    Timeout,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]

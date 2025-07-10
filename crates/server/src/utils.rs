@@ -1,8 +1,8 @@
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
 use crate::response::{
-    Certificate, ConnectionError, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root,
-    SRVData, Version, WellKnownResult,
+    Certificate, ConnectionReportData, Ed25519Check, Error, ErrorCode, InvalidServerNameErrorCode,
+    Keys, Root, SRVData, Version, WellKnownResult,
 };
 use ::time as time_crate;
 use base64::Engine;
@@ -47,7 +47,10 @@ fn absolutize_srv_target(target: &str, base: &str) -> String {
 
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     if server_name.is_empty() {
-        data.error = Some("Invalid server name: empty string".to_string());
+        data.error = Some(Error {
+            error: "Invalid server name: empty string".to_string(),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::EmptyString),
+        });
     }
 
     // Split off the port if it exists
@@ -59,25 +62,32 @@ pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     // - an IP literal (IPv4 or IPv6)
 
     if hostname.is_empty() {
-        data.error = Some("Invalid server name: empty hostname".to_string());
+        data.error = Some(Error {
+            error: "Invalid server name: empty hostname".to_string(),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::EmptyHostname),
+        });
         return;
     }
 
     if hostname.parse::<std::net::IpAddr>().is_err() {
         // Check if it's a valid DNS name
         if !hostname.is_ascii() || hostname.len() > 255 || hostname.contains("..") {
-            data.error = Some(format!(
-                "Invalid server name: {server_name} (Not a valid DNS name)",
-            ));
+            data.error = Some(Error {
+                error: format!("Invalid server name: {server_name} (Not a valid DNS name)",),
+                error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+            });
             return;
         }
 
         // Check for invalid characters in the hostname
         for c in hostname.chars() {
             if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
-                data.error = Some(format!(
-                    "Invalid server name: {server_name} (Invalid character '{c}')",
-                ));
+                data.error = Some(Error {
+                    error: format!("Invalid server name: {server_name} (Invalid character '{c}')",),
+                    error_code: ErrorCode::InvalidServerName(
+                        InvalidServerNameErrorCode::InvalidCharacter,
+                    ),
+                });
                 return;
             }
         }
@@ -122,7 +132,10 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 
     if addrs.is_empty() {
-        data.error = Some(format!("No A/AAAA-Records for {server_name} found"));
+        data.error = Some(Error {
+            error: format!("No A/AAAA-Records for {server_name} found"),
+            error_code: ErrorCode::NoRecordsFound,
+        });
         return None;
     }
 
@@ -188,18 +201,29 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                                 }
                             }
                         } else {
-                            result.error =
-                                Some(format!("Error fetching well-known URL:  {}", resp.status()));
+                            result.error = Some(Error {
+                                error: format!("Error fetching well-known URL:  {}", resp.status()),
+                                error_code: ErrorCode::NotOk(resp.status().to_string()),
+                            });
                         }
                     } else {
-                        result.error = Some("Error fetching well-known URL".to_string());
+                        result.error = Some(Error {
+                            error: "No response received from well-known URL".to_string(),
+                            error_code: ErrorCode::NoResponse,
+                        });
                     }
                 }
                 Ok(Err(e)) => {
-                    result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
+                    result.error = Some(Error {
+                        error: format!("Error fetching well-known URL: {e:#?}"),
+                        error_code: ErrorCode::Unknown,
+                    });
                 }
                 Err(e) => {
-                    result.error = Some(format!("Error fetching well-known URL:  {e:#?}"));
+                    result.error = Some(Error {
+                        error: format!("Timeout while fetching well-known URL: {e:#?}"),
+                        error_code: ErrorCode::Timeout,
+                    });
                 }
             }
             (addr, result, None::<String>)
@@ -267,8 +291,12 @@ pub async fn query_server_version(
                             "Unexpected Content-Type: {}. Expected application/json",
                             response_type.to_str().unwrap_or("")
                         );
-                        data.error =
-                            Some("Unexpected Content-Type in server version response".to_string());
+                        data.error = Some(Error {
+                            error: "Unexpected Content-Type in server version response".to_string(),
+                            error_code: ErrorCode::UnexpectedContentType(
+                                response_type.to_str().unwrap_or("Unknown").to_string(),
+                            ),
+                        });
                         data.checks.server_version_parses = false;
                         return Ok(());
                     }
@@ -278,8 +306,10 @@ pub async fn query_server_version(
                         headers,
                         String::from_utf8_lossy(&body).to_string()
                     );
-                    data.error =
-                        Some("No Content-Type header in server version response".to_string());
+                    data.error = Some(Error {
+                        error: "No Content-Type header in server version response".to_string(),
+                        error_code: ErrorCode::MissingContentType,
+                    });
                     data.checks.server_version_parses = false;
                     return Ok(());
                 }
@@ -293,21 +323,30 @@ pub async fn query_server_version(
                             "Error parsing server version response: {e:#?}\nBody: {}",
                             String::from_utf8_lossy(&body)
                         );
-                        data.error = Some("Failed to parse server version response".to_string());
+                        data.error = Some(Error {
+                            error: "Failed to parse server version response".to_string(),
+                            error_code: ErrorCode::InvalidJson(e.to_string()),
+                        });
                         data.checks.server_version_parses = false;
                         return Ok(());
                     }
                 }
             } else {
                 error!("Error querying server version: {}", status);
-                data.error = Some("Failed to query server version".to_string());
+                data.error = Some(Error {
+                    error: format!("Error querying server version: {status}"),
+                    error_code: ErrorCode::NotOk(status.to_string()),
+                });
                 data.checks.server_version_parses = false;
                 return Ok(());
             }
         }
         Err(e) => {
             error!("Error fetching server version: {e:#?}");
-            data.error = Some(format!("Failed to fetch server version: {e}"));
+            data.error = Some(Error {
+                error: format!("Error fetching server version: {e:#?}"),
+                error_code: ErrorCode::Unknown,
+            });
             data.checks.server_version_parses = false;
             return Ok(());
         }
@@ -980,7 +1019,7 @@ pub async fn connection_check(
     connection_pool: &ConnectionPool,
     version_cache: &VersionCache,
     use_cache: bool,
-) -> Result<ConnectionReportData, ConnectionError> {
+) -> Result<ConnectionReportData, Error> {
     let mut report = ConnectionReportData::default();
 
     // Check version cache first if enabled
@@ -1034,8 +1073,9 @@ pub async fn connection_check(
             // If None, then we used cached version (already set above)
         }
         Err(e) => {
-            return Err(ConnectionError {
-                error: Some(format!("Error querying server version: {e}")),
+            return Err(Error {
+                error: format!("Error fetching server version from {addr}: {e}"),
+                error_code: ErrorCode::Unknown,
             });
         }
     }
@@ -1052,8 +1092,9 @@ pub async fn connection_check(
         }
         Err(e) => {
             error!("Error fetching keys from {addr}: {e:#?}");
-            return Err(ConnectionError {
-                error: Some(format!("Error fetching keys from {addr}: {e}",)),
+            return Err(Error {
+                error: format!("Error fetching keys from {addr}: {e}"),
+                error_code: ErrorCode::Unknown,
             });
         }
     };
