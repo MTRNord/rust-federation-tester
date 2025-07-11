@@ -1,3 +1,5 @@
 /target
 report.html
 report*.html
+alerts.db
+config.yaml

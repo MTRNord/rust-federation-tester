@@ -1,129 +1,55 @@
-use axum::extract::Query;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::{Json, Router};
 use hickory_resolver::Resolver;
-use hickory_resolver::name_server::ConnectionProvider;
+use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
+use rust_federation_tester::AppResources;
+use rust_federation_tester::api::alert_api::AlertAppState;
+use rust_federation_tester::api::federation_tester_api::AppState;
+use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::cache::{DnsCache, VersionCache, WellKnownCache};
+use rust_federation_tester::config::load_config;
 use rust_federation_tester::connection_pool::ConnectionPool;
-use rust_federation_tester::response::generate_json_report;
-use serde::Deserialize;
-use serde_json::json;
+use rust_federation_tester::recurring_alerts::AlertTaskManager;
+use rust_federation_tester::recurring_alerts::recurring_alert_checks;
+use rustls::crypto;
+use rustls::crypto::CryptoProvider;
+use sea_orm::Database;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
-use tracing::{error, info};
-
-#[derive(Deserialize)]
-struct ApiParams {
-    pub server_name: String,
-    /// Skip cache and force fresh requests - useful for debugging
-    #[serde(default)]
-    pub no_cache: bool,
-}
-
-async fn get_report<P: ConnectionProvider>(
-    State(state): State<AppState<P>>,
-    Query(params): Query<ApiParams>,
-) -> impl IntoResponse {
-    if params.server_name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "server_name parameter is required" })),
-        );
-    }
-
-    match generate_json_report(
-        &params.server_name.to_lowercase(),
-        state.resolver.as_ref(),
-        &state.connection_pool,
-        &state.dns_cache,
-        &state.well_known_cache,
-        &state.version_cache,
-        !params.no_cache,
-    )
-    .await
-    {
-        Ok(report) => {
-            // Convert the report to a Value for JSON serialization
-            let report = serde_json::to_value(report)
-                .unwrap_or_else(|_| json!({ "error": "Failed to serialize report" }));
-            (StatusCode::OK, Json(report))
-        }
-        Err(e) => {
-            error!("Error generating report: {e:?}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to generate report: {}", e)
-                })),
-            )
-        }
-    }
-}
-async fn get_fed_ok<P: ConnectionProvider>(
-    State(state): State<AppState<P>>,
-    Query(params): Query<ApiParams>,
-) -> impl IntoResponse {
-    if params.server_name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "server_name parameter is required".to_string(),
-        );
-    }
-
-    match generate_json_report(
-        &params.server_name.to_lowercase(),
-        state.resolver.as_ref(),
-        &state.connection_pool,
-        &state.dns_cache,
-        &state.well_known_cache,
-        &state.version_cache,
-        !params.no_cache,
-    )
-    .await
-    {
-        Ok(report) => (
-            StatusCode::OK,
-            if report.federation_ok {
-                "GOOD".to_string()
-            } else {
-                "BAD".to_string()
-            },
-        ),
-        Err(e) => {
-            error!("Error generating report: {e:?}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to generate report: {e}"),
-            )
-        }
-    }
-}
-
-#[derive(Clone)]
-struct AppState<P: ConnectionProvider> {
-    resolver: Arc<Resolver<P>>,
-    connection_pool: ConnectionPool,
-    dns_cache: DnsCache,
-    well_known_cache: WellKnownCache,
-    version_cache: VersionCache,
-}
 
 #[tokio::main]
 async fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install().expect("Failed to install `color_eyre::install`");
     tracing_subscriber::fmt().init();
-    let resolver = Arc::new(Resolver::builder_tokio()?.build());
 
-    // Initialize performance components
+    // Load config
+    let config = Arc::new(load_config());
+
+    let ring_provider = crypto::ring::default_provider();
+    CryptoProvider::install_default(ring_provider).expect("Failed to install crypto provider");
+
+    // Set up SeaORM database connection
+    let db = Arc::new(
+        Database::connect(&config.database_url)
+            .await
+            .expect("Failed to connect to database"),
+    );
+
+    // Set up lettre SMTP client
+    let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
+    let mailer = Arc::new(
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
+            .unwrap()
+            .port(config.smtp.port)
+            .credentials(creds)
+            .build(),
+    );
+
+    // Set up resolver and caches
+    let resolver = Arc::new(Resolver::builder_tokio()?.build());
     let connection_pool = ConnectionPool::default();
     let dns_cache = DnsCache::default();
     let well_known_cache = WellKnownCache::default();
     let version_cache = VersionCache::default();
+    let task_manager = Arc::new(AlertTaskManager::new());
 
     let state = AppState {
         resolver,
@@ -132,6 +58,12 @@ async fn main() -> color_eyre::eyre::Result<()> {
         well_known_cache,
         version_cache,
     };
+
+    let alert_state = AlertAppState {
+        task_manager: task_manager.clone(),
+    };
+
+    let resources = AppResources { db, mailer, config };
 
     // Start background cleanup task for connection pool
     {
@@ -145,16 +77,27 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    let app = Router::new()
-        .route("/api/report", get(get_report))
-        .route("/api/federation-ok", get(get_fed_ok))
-        .with_state(state)
-        .route("/healthz", get(|| async { "OK" }))
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+    // Start recurring alert checks
+    let resources_for_checks = resources.clone();
+    let task_manager_for_checks = task_manager.clone();
+    let resolver_for_checks = state.resolver.clone();
+    let connection_pool_for_checks = state.connection_pool.clone();
+    let dns_cache_for_checks = state.dns_cache.clone();
+    let well_known_cache_for_checks = state.well_known_cache.clone();
+    let version_cache_for_checks = state.version_cache.clone();
+    tokio::spawn(async move {
+        recurring_alert_checks(
+            resources_for_checks.into(),
+            task_manager_for_checks,
+            resolver_for_checks,
+            connection_pool_for_checks,
+            dns_cache_for_checks,
+            well_known_cache_for_checks,
+            version_cache_for_checks,
+        )
+        .await;
+    });
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    info!("Server running on http://0.0.0:8080");
-    axum::serve(listener, app).await?;
+    start_webserver(state, alert_state, resources).await?;
     Ok(())
 }

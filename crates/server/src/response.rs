@@ -10,8 +10,9 @@ use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use utoipa::ToSchema;
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Root {
     pub well_known_result: BTreeMap<String, WellKnownResult>,
@@ -28,7 +29,7 @@ pub struct Root {
     pub federation_ok: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct WellKnownResult {
     #[serde(rename = "m.server")]
@@ -38,7 +39,7 @@ pub struct WellKnownResult {
     pub error: Option<Error>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Dnsresult {
     #[serde(rename = "SRVSkipped")]
@@ -48,12 +49,12 @@ pub struct Dnsresult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
 }
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct SrvErrorData {
     pub message: String,
 }
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct SRVData {
     pub target: String,
@@ -68,7 +69,7 @@ pub struct SRVData {
     pub weight: Option<u16>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct ConnectionReportData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -83,7 +84,7 @@ pub struct ConnectionReportData {
     pub version: Version,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Certificate {
     pub subject_common_name: String,
@@ -95,14 +96,14 @@ pub struct Certificate {
     pub dnsnames: Option<Vec<String>>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Cipher {
     pub version: String,
     pub cipher_suite: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Checks {
     #[serde(rename = "AllChecksOK")]
@@ -121,14 +122,14 @@ pub struct Checks {
     pub server_version_parses: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Ed25519Check {
     pub valid_ed25519: bool,
     pub matching_signature: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Keys {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,7 +147,7 @@ pub struct Keys {
     pub verify_keys: BTreeMap<String, Ed25519VerifyKey>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Ed25519VerifyKey {
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,13 +155,13 @@ pub struct Ed25519VerifyKey {
     pub expired_ts: Option<i64>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Version {
     pub name: String,
     pub version: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde[rename_all = "PascalCase"]]
 pub enum InvalidServerNameErrorCode {
     #[default]
@@ -171,7 +172,7 @@ pub enum InvalidServerNameErrorCode {
     InvalidCharacter,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub enum ErrorCode {
     #[default]
@@ -191,7 +192,7 @@ pub enum ErrorCode {
     Timeout,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Error {
     pub error: String,

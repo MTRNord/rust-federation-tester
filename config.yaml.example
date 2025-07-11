@@ -1,0 +1,10 @@
+#database_url: "postgres://user:pass@localhost/db?currentSchema=schema"
+database_url: "sqlite://alerts.db?mode=rwc"
+smtp:
+  server: "smtp.example.com"
+  port: 587
+  username: "alerts@example.com"
+  password: "supersecret"
+  from: "alerts@example.com"
+frontend_url: "https://your-frontend.com"
+magic_token_secret: "CHANGE_ME"
