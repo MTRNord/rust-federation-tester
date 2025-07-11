@@ -9,8 +9,4 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 WORKDIR /app
 COPY --from=builder /app/target/release/rust-federation-tester /usr/local/bin/rust-federation-tester
 EXPOSE 8080
-CMD [
-# Run migrations before starting the server
-    "sh", "-c",
-    "cargo run --package migration -- up && \
-     rust-federation-tester"]
+CMD ["sh", "-c", "cargo run --package migration -- up && rust-federation-tester"]
