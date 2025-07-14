@@ -1,4 +1,4 @@
-use sea_orm_migration::prelude::*;
+use sea_orm_migration::{prelude::*, schema::*};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -11,27 +11,48 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alert::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Alert::Id).uuid().not_null().primary_key())
-                    .col(ColumnDef::new(Alert::Email).string().not_null())
-                    .col(ColumnDef::new(Alert::ServerName).string().not_null())
+                    .col(pk_uuid(Alert::Id))
+                    .col(string(Alert::Email).not_null().unique_key().to_owned())
+                    .col(string(Alert::ServerName).not_null().to_owned())
                     .col(
-                        ColumnDef::new(Alert::Verified)
-                            .boolean()
+                        boolean(Alert::Verified)
+                            .default(false)
                             .not_null()
-                            .default(false),
+                            .to_owned(),
                     )
-                    .col(ColumnDef::new(Alert::MagicToken).string().not_null())
+                    .col(string(Alert::MagicToken).not_null().unique_key().to_owned())
                     .col(
-                        ColumnDef::new(Alert::CreatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null(),
+                        timestamp(Alert::CreatedAt)
+                            .default(Expr::current_timestamp())
+                            .not_null()
+                            .to_owned(),
                     )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_email_server_name_unique")
+                    .table(Alert::Table)
+                    .col(Alert::Id)
+                    .col(Alert::Email)
+                    .col(Alert::ServerName)
+                    .unique()
                     .to_owned(),
             )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_email_server_name_unique")
+                    .table(Alert::Table)
+                    .to_owned(),
+            )
+            .await?;
         manager
             .drop_table(Table::drop().table(Alert::Table).to_owned())
             .await

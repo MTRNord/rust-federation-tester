@@ -5,7 +5,10 @@ use crate::{
 use hickory_resolver::name_server::ConnectionProvider;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
-use utoipa::OpenApi;
+use utoipa::{
+    Modify, OpenApi,
+    openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
+};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
 
@@ -63,6 +66,7 @@ pub mod federation_tester_api {
         path = "/report",
         params(ApiParams),
         tag = FEDERATION_TAG,
+        operation_id = "Get Federation Report as JSON",
         responses(
             (status = 200, description = "JSON report of the federation test", body = Root, content_type = "application/json"),
             (status = 400, description = "Invalid request parameters", content_type = "application/json"),
@@ -114,6 +118,7 @@ pub mod federation_tester_api {
         path = "/federation-ok",
         params(ApiParams),
         tag = FEDERATION_TAG,
+        operation_id = "Check Federation Status",
         responses(
             (status = 200, description = "Returns 'GOOD' if federation is ok, 'BAD' otherwise", body = inline(String), example = "GOOD"),
             (status = 400, description = "Invalid request parameters"),
@@ -161,12 +166,16 @@ pub mod federation_tester_api {
     }
 }
 pub mod alert_api {
-    use std::sync::Arc;
-
+    use crate::{
+        AppResources,
+        api::ALERTS_TAG,
+        entity::{access_tokens, alert},
+        recurring_alerts::AlertTaskManager,
+    };
     use axum::{
         Extension, Json,
         extract::{Path, Query, State},
-        response::{Html, IntoResponse},
+        response::IntoResponse,
     };
     use hyper::{HeaderMap, StatusCode};
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -174,12 +183,11 @@ pub mod alert_api {
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use std::sync::Arc;
     use time::OffsetDateTime;
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
     use uuid::Uuid;
-
-    use crate::{AppResources, api::ALERTS_TAG, entity::alert, recurring_alerts::AlertTaskManager};
 
     #[derive(Serialize, Deserialize)]
     struct MagicClaims {
@@ -214,6 +222,7 @@ pub mod alert_api {
     #[utoipa::path(
         post,
         path = "/register",
+        operation_id = "Register Alert",
         tag = ALERTS_TAG,
         request_body = RegisterAlert,
         responses(
@@ -342,15 +351,34 @@ The Federation Tester Team"#,
         )
     }
 
+    #[derive(Serialize, ToSchema)]
+    struct VerificatonResponseData {
+        /// JWT Access token usable for further API calls
+        token: String,
+        /// Email address that was verified
+        email: String,
+        /// DateTime when the token expires
+        valid_until: OffsetDateTime,
+    }
+
     #[utoipa::path(
         get,
         path = "/verify",
         tag = ALERTS_TAG,
+        operation_id = "Verify Alert Email",
         params(VerifyParams),
+        params(
+            (
+                "token" = String,
+                Query,
+                description = "JWT token for email verification",
+                example = "123e4567-e89b-12d3-a456-426"
+            ),
+        ),
         responses(
-            (status = 200, description = "Email verified successfully", content_type = "text/html"),
-            (status = 400, description = "Invalid or expired token", content_type = "text/html"),
-            (status = 500, description = "Internal server error", content_type = "text/html")
+            (status = 200, description = "Email verified successfully", content_type = "application/json", body = VerificatonResponseData),
+            (status = 400, description = "Invalid or expired token", content_type = "application/json"),
+            (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
     async fn verify_alert(
@@ -380,214 +408,95 @@ The Federation Tester Team"#,
                         if let Err(e) = model.update(resources.db.as_ref()).await {
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
-                                format!(
-                                    r#"
-<html>
-    <head>
-        <title>Verification failed</title>
-        <style>
-            body {{
-                font-family: sans-serif;
-                text-align: center;
-                padding-top: 3em;
-                background:#f8f9fa;
-            }}
-            .card {{
-                background: #fff;
-                max-width: 400px;
-                margin: 2em auto;
-                padding: 2em 2em 1em 2em;
-                border-radius: 12px;
-                box-shadow: 0 2px 12px #0001;
-            }}
-            h1{{
-                color: #c00;
-            }}
-            p{{
-                color:#333;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class='card'>
-            <h1>❌ Verification failed</h1>
-            <p>Database error: {e}</p>
-        </div>
-    </body>
-</html>"#
-                                ),
+                                Json(json!({"error": format!("DB error: {e}")})),
                             )
                         } else {
+                            // Generate JWT token for further API calls
+                            let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1))
+                                .unix_timestamp() as usize;
+                            let claims = MagicClaims {
+                                exp,
+                                email: claims.email.clone(),
+                                server_name: claims.server_name.clone(),
+                            };
+                            let secret = resources.config.magic_token_secret.as_bytes();
+                            let token = match encode(
+                                &Header::default(),
+                                &claims,
+                                &EncodingKey::from_secret(secret),
+                            ) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(
+                                            json!({ "error": format!("Failed to generate token: {e}") }),
+                                        ),
+                                    );
+                                }
+                            };
+
+                            // Save access token in database
+                            let access_token = access_tokens::ActiveModel {
+                                id: Set(Uuid::new_v4()),
+                                email: Set(claims.email.clone()),
+                                access_token: Set(token.clone()),
+                                ..Default::default()
+                            };
+                            if let Err(e) = access_tokens::Entity::insert(access_token)
+                                .exec(resources.db.as_ref())
+                                .await
+                            {
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(json!({"error": format!("DB error: {e}")})),
+                                );
+                            }
+
+                            // Return response
                             (
                                 StatusCode::OK,
-                                format!(
-                                    r#"
-<html>
-    <head>
-        <title>Email Verified</title>
-        <style>
-            body {{
-                font-family: sans-serif;
-                text-align: center;
-                padding-top: 3em;
-                background: #f8f9fa;
-            }}
-            .card {{
-                background: #fff;
-                max-width: 400px;
-                margin: 2em auto;
-                padding: 2em 2em 1em 2em;
-                border-radius: 12px;
-                box-shadow: 0 2px 12px #0001;
-            }}
-            h1 {{
-                color: #090;
-            }}
-            p {{
-                color: #333;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class='card'>
-            <h1>✅ Email Verified!</h1>
-            <p>Your email has been verified and you will receive alerts for <b>{}</b>.</p>
-            <p>You may close this page.</p>
-        </div>
-    </body>
-</html>"#,
-                                    claims.server_name
-                                ),
+                                Json(json!({
+                                    "token": token,
+                                    "email": claims.email,
+                                    "lifetime": claims.exp
+                                })),
                             )
                         }
                     }
                     Ok(None) => (
                         StatusCode::BAD_REQUEST,
-                        r#"
-<html>
-    <head>
-        <title>Verification failed</title>
-        <style>
-            body {
-                font-family: sans-serif;
-                text-align: center;
-                padding-top: 3em;
-                background: #f8f9fa;
-            }
-            .card {
-                background: #fff;
-                max-width: 400px;
-                margin: 2em auto;
-                padding: 2em 2em 1em 2em;
-                border-radius: 12px;
-                box-shadow: 0 2px 12px #0001;
-            }
-            h1 {
-                color: #c00;
-            }
-            p {
-                color: #333;
-            }
-        </style>
-    </head>
-    <body>
-        <div class='card'>
-            <h1>❌ Verification failed</h1>
-            <p>No matching alert found.</p>
-        </div>
-    </body>
-</html>"#
-                            .to_string(),
+                        Json(json!({"error": "No alert found for this email and server"})),
                     ),
                     Err(e) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!(
-                            r#"
-<html>
-    <head>
-        <title>Verification failed</title>
-        <style>
-            body {{
-                font-family: sans-serif;
-                text-align: center;
-                padding-top: 3em;
-                background: #f8f9fa;
-            }}
-            .card {{
-                background: #fff;
-                max-width: 400px;
-                margin: 2em auto;
-                padding: 2em 2em 1em 2em;
-                border-radius: 12px;
-                box-shadow: 0 2px 12px #0001;
-            }}
-            h1 {{
-                color:#c00;
-            }}
-            p {{
-                color:#333;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class='card'>
-            <h1>❌ Verification failed</h1>
-            <p>Database error: {e}</p>
-        </div>
-    </body>
-</html>"#
-                        ),
+                        Json(json!({"error": format!("DB error: {e}")})),
                     ),
                 }
             }
             Err(_) => (
                 StatusCode::BAD_REQUEST,
-                r#"
-<html>
-    <head>
-        <title>Verification failed</title>
-        <style>
-            body {
-                font-family: sans-serif;
-                text-align: center;
-                padding-top: 3em;
-                background: #f8f9fa;
-            }
-            .card {
-                background: #fff;
-                max-width: 400px;
-                margin: 2em auto;
-                padding: 2em 2em 1em 2em;
-                border-radius: 12px;
-                box-shadow: 0 2px 12px #0001;
-            }
-            h1 {
-                color:#c00;
-            }
-            p {
-                color:#333;
-            }
-        </style>
-    </head>
-    <body>
-        <div class='card'>
-            <h1>❌ Verification failed</h1>
-            <p>Invalid or expired token.</p>
-        </div>
-    </body>
-</html>"#
-                    .to_string(),
+                Json(json!({"error": "Invalid or expired token"})),
             ),
         };
-        (status, Html(body))
+        (status, body)
+    }
+
+    #[derive(Serialize, ToSchema)]
+    struct AlertsList {
+        alerts: Vec<alert::Model>,
     }
 
     #[utoipa::path(
         get,
         path = "/list",
         tag = ALERTS_TAG,
+        operation_id = "List Alerts",
+        security(
+            ("Authorization" = [])
+        ),
         responses(
-            (status = 200, description = "List of alerts for the email", content_type = "application/json"),
+            (status = 200, description = "List of alerts for the email", content_type = "application/json", body = AlertsList),
             (status = 401, description = "Unauthorized - invalid or missing token", content_type = "application/json"),
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
@@ -609,8 +518,9 @@ The Federation Tester Team"#,
         }
         let token = token.unwrap();
         // Find alert by token
-        let found = alert::Entity::find()
-            .filter(alert::Column::MagicToken.eq(token))
+
+        let found = access_tokens::Entity::find()
+            .filter(access_tokens::Column::AccessToken.eq(token))
             .one(resources.db.as_ref())
             .await;
         let found = match found {
@@ -640,8 +550,20 @@ The Federation Tester Team"#,
         delete,
         path = "/{id}",
         tag = ALERTS_TAG,
+        operation_id = "Delete Alert",
+        params(
+            (
+                "id" = String,
+                Path,
+                description = "ID of the alert to delete",
+                example = "123e4567-e89b-12d3-a456-426"
+            ),
+        ),
+        security(
+            ("Authorization" = [])
+        ),
         responses(
-            (status = 200, description = "Alert deleted successfully", content_type = "application/json"),
+            (status = 200, description = "Alert deleted successfully", content_type = "application/json", example = json!({"status": "deleted"})),
             (status = 401, description = "Unauthorized - invalid or missing token", content_type = "application/json"),
             (status = 404, description = "Alert not found", content_type = "application/json"),
             (status = 500, description = "Internal server error", content_type = "application/json")
@@ -666,8 +588,8 @@ The Federation Tester Team"#,
         }
         let token = token.unwrap();
         // Find alert by token
-        let found = alert::Entity::find()
-            .filter(alert::Column::MagicToken.eq(token))
+        let found = access_tokens::Entity::find()
+            .filter(access_tokens::Column::AccessToken.eq(token))
             .one(resources.db.as_ref())
             .await;
         let found = match found {
@@ -705,8 +627,9 @@ The Federation Tester Team"#,
     method(get, head),
     path = "/healthz",
     tag = MISC_TAG,
+    operation_id = "Health Check",
     responses(
-        (status = OK, description = "Ok", body = str, content_type = "text/plain")
+        (status = OK, description = "Ok", body = str, content_type = "text/plain", example = "ok")
     )
 )]
 async fn health() -> &'static str {
@@ -741,8 +664,24 @@ pub async fn start_webserver<P: ConnectionProvider>(
     Ok(())
 }
 
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            let bearer = HttpBuilder::new()
+                .scheme(HttpAuthScheme::Bearer)
+                .bearer_format("JWT")
+                .description(Some("Use the JWT token obtained from the `/api/alerts/register` endpoint to authenticate."))
+                .build();
+            components.add_security_scheme("Authorization", SecurityScheme::Http(bearer));
+        }
+    }
+}
+
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&SecurityAddon),
     info(
         title = "Federation Tester API",
         version = "1.0.0",
