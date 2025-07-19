@@ -150,6 +150,7 @@ The Federation Tester Team"#
                                             .subject(subject)
                                             .header(ContentType::TEXT_PLAIN)
                                             .header(UnsubscribeHeader::from(unsubscribe_url))
+                                            .message_id(None)
                                             .body(body)
                                             .unwrap();
                                         if let Err(e) = mailer.send(email_msg).await {

@@ -334,6 +334,7 @@ The Federation Tester Team"#,
             .to(payload.email.parse().unwrap())
             .subject("Please verify your email for Federation Alerts")
             .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .message_id(None)
             .body(email_body)
             .unwrap();
         if let Err(e) = resources.mailer.send(email).await {
@@ -521,6 +522,7 @@ The Federation Tester Team"#,
             .to(payload.email.parse().unwrap())
             .subject("Verify to view your Federation Alerts")
             .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .message_id(None)
             .body(email_body)
             .unwrap();
         if let Err(e) = resources.mailer.send(email).await {
