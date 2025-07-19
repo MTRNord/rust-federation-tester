@@ -229,7 +229,7 @@ fn generate_list_unsubscribe_url(
         &EncodingKey::from_secret(secret),
     )
     .unwrap_or_default();
-    format!("{}/verify?token={}", frontend_url, token)
+    format!("{frontend_url}/verify?token={token}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
