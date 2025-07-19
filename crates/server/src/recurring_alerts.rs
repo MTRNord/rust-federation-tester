@@ -1,11 +1,14 @@
 use crate::AppResources;
+use crate::api::alert_api::MagicClaims;
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
 use crate::entity::alert;
 use crate::response::generate_json_report;
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
-use lettre::message::header::ContentType;
+use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
+use lettre::message::header::{ContentType, HeaderName};
+use lettre::message::header::{Header, HeaderValue};
 use lettre::{AsyncTransport, Message};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::HashMap;
@@ -20,7 +23,7 @@ use tracing::{error, info};
 type AlertCheckTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub struct AlertTaskManager {
-    running: RwLock<HashMap<uuid::Uuid, Arc<AtomicBool>>>,
+    running: RwLock<HashMap<i32, Arc<AtomicBool>>>,
 }
 
 impl Default for AlertTaskManager {
@@ -36,7 +39,7 @@ impl AlertTaskManager {
         }
     }
 
-    pub async fn start_or_restart_task<F>(&self, alert_id: uuid::Uuid, f: F)
+    pub async fn start_or_restart_task<F>(&self, alert_id: i32, f: F)
     where
         F: FnOnce(Arc<AtomicBool>) -> AlertCheckTask + Send + 'static,
     {
@@ -50,7 +53,7 @@ impl AlertTaskManager {
         tokio::spawn(task);
     }
 
-    pub async fn stop_task(&self, alert_id: uuid::Uuid) {
+    pub async fn stop_task(&self, alert_id: i32) {
         let mut running = self.running.write().await;
         if let Some(flag) = running.remove(&alert_id) {
             flag.store(false, Ordering::SeqCst);
@@ -131,11 +134,22 @@ Please review the latest report at {check_url} and take action if needed.
 Best regards,
 The Federation Tester Team"#
                                         );
+
+                                        // --- List-Unsubscribe header generation ---
+                                        let unsubscribe_url = generate_list_unsubscribe_url(
+                                            &config.magic_token_secret,
+                                            &email,
+                                            &server_name,
+                                            alert_id,
+                                            &config.frontend_url,
+                                        );
+
                                         let email_msg = Message::builder()
                                             .from(config.smtp.from.parse().unwrap())
                                             .to(email.parse().unwrap())
                                             .subject(subject)
                                             .header(ContentType::TEXT_PLAIN)
+                                            .header(UnsubscribeHeader::from(unsubscribe_url))
                                             .body(body)
                                             .unwrap();
                                         if let Err(e) = mailer.send(email_msg).await {
@@ -189,5 +203,59 @@ The Federation Tester Team"#
 
         // 5. Wait for a while before next full scan
         tokio::time::sleep(Duration::from_secs(300)).await; // 5 min
+    }
+}
+
+fn generate_list_unsubscribe_url(
+    magic_token_secret: &str,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    frontend_url: &str,
+) -> String {
+    let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
+    let claims = MagicClaims {
+        exp,
+        email: email.to_string(),
+        server_name: server_name.to_string(),
+        action: "delete".to_string(),
+        alert_id: Some(alert_id.to_string()),
+    };
+    let secret = magic_token_secret.as_bytes();
+    let token = encode(
+        &JwtHeader::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .unwrap_or_default();
+    format!("{}/verify?token={}", frontend_url, token)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnsubscribeHeader(String);
+
+impl Header for UnsubscribeHeader {
+    fn name() -> lettre::message::header::HeaderName {
+        HeaderName::new_from_ascii_str("List-Unsubscribe")
+    }
+
+    fn parse(s: &str) -> Result<Self, Box<dyn core::error::Error + Send + Sync>> {
+        Ok(Self(s.into()))
+    }
+
+    fn display(&self) -> lettre::message::header::HeaderValue {
+        HeaderValue::new(Self::name(), self.0.clone())
+    }
+}
+
+impl From<String> for UnsubscribeHeader {
+    fn from(content: String) -> Self {
+        Self(content)
+    }
+}
+
+impl AsRef<str> for UnsubscribeHeader {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }

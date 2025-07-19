@@ -2,13 +2,12 @@ use sea_orm::entity::prelude::*;
 use serde::Serialize;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, ToSchema)]
-#[sea_orm(table_name = "alerts")]
+#[sea_orm(table_name = "alert")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: Uuid,
+    pub id: i32,
     pub email: String,
     pub server_name: String,
     pub verified: bool,

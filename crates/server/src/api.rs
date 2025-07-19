@@ -166,18 +166,13 @@ pub mod federation_tester_api {
     }
 }
 pub mod alert_api {
-    use crate::{
-        AppResources,
-        api::ALERTS_TAG,
-        entity::{access_tokens, alert},
-        recurring_alerts::AlertTaskManager,
-    };
+    use crate::{AppResources, api::ALERTS_TAG, entity::alert, recurring_alerts::AlertTaskManager};
     use axum::{
         Extension, Json,
-        extract::{Path, Query, State},
+        extract::{Path, Query},
         response::IntoResponse,
     };
-    use hyper::{HeaderMap, StatusCode};
+    use hyper::StatusCode;
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
     use lettre::AsyncTransport;
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
@@ -185,15 +180,17 @@ pub mod alert_api {
     use serde_json::json;
     use std::sync::Arc;
     use time::OffsetDateTime;
+    use tracing::error;
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
-    use uuid::Uuid;
 
     #[derive(Serialize, Deserialize)]
-    struct MagicClaims {
-        exp: usize,
-        email: String,
-        server_name: String,
+    pub struct MagicClaims {
+        pub exp: usize,
+        pub email: String,
+        pub server_name: String,
+        pub action: String,           // "register", "list", "delete"
+        pub alert_id: Option<String>, // Only for delete
     }
 
     #[derive(serde::Deserialize, ToSchema)]
@@ -241,6 +238,8 @@ pub mod alert_api {
             exp,
             email: payload.email.clone(),
             server_name: payload.server_name.clone(),
+            action: "register".to_string(),
+            alert_id: None,
         };
         let secret = resources.config.magic_token_secret.as_bytes();
         let token = match encode(
@@ -257,7 +256,6 @@ pub mod alert_api {
             }
         };
 
-        let id = Uuid::new_v4();
         let now = OffsetDateTime::now_utc();
 
         // Check for existing alert
@@ -290,12 +288,12 @@ pub mod alert_api {
             Ok(None) => {
                 // Insert alert (unverified)
                 let new_alert = alert::ActiveModel {
-                    id: Set(id),
                     email: Set(payload.email.clone()),
                     server_name: Set(payload.server_name.clone()),
                     verified: Set(false),
                     magic_token: Set(token.clone()),
                     created_at: Set(now),
+                    ..Default::default()
                 };
                 let insert_res = alert::Entity::insert(new_alert)
                     .exec(resources.db.as_ref())
@@ -339,6 +337,7 @@ The Federation Tester Team"#,
             .body(email_body)
             .unwrap();
         if let Err(e) = resources.mailer.send(email).await {
+            error!("Failed to send verification email: {:#?}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("Failed to send email: {e}") })),
@@ -353,12 +352,13 @@ The Federation Tester Team"#,
 
     #[derive(Serialize, ToSchema)]
     struct VerificatonResponseData {
-        /// JWT Access token usable for further API calls
-        token: String,
-        /// Email address that was verified
-        email: String,
-        /// DateTime when the token expires
-        valid_until: OffsetDateTime,
+        /// The result status of the verification
+        status: String,
+    }
+
+    #[derive(Serialize, ToSchema)]
+    struct AlertsList {
+        alerts: Vec<alert::Model>,
     }
 
     #[utoipa::path(
@@ -377,6 +377,7 @@ The Federation Tester Team"#,
         ),
         responses(
             (status = 200, description = "Email verified successfully", content_type = "application/json", body = VerificatonResponseData),
+            (status = 200, description = "List of alerts for the email", content_type = "application/json", body = AlertsList),
             (status = 400, description = "Invalid or expired token", content_type = "application/json"),
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
@@ -391,86 +392,79 @@ The Federation Tester Team"#,
             &DecodingKey::from_secret(secret),
             &Validation::new(Algorithm::HS256),
         );
-        let (status, body) = match token_data {
+        match token_data {
             Ok(data) => {
-                // Find alert by email and server_name
                 let claims = data.claims;
-                let found = alert::Entity::find()
-                    .filter(alert::Column::Email.eq(claims.email.clone()))
-                    .filter(alert::Column::ServerName.eq(claims.server_name.clone()))
-                    .one(resources.db.as_ref())
-                    .await;
-                match found {
-                    Ok(Some(a)) => {
-                        // Mark as verified
-                        let mut model: alert::ActiveModel = a.into();
-                        model.verified = Set(true);
-                        if let Err(e) = model.update(resources.db.as_ref()).await {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error": format!("DB error: {e}")})),
-                            )
-                        } else {
-                            // Generate JWT token for further API calls
-                            let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1))
-                                .unix_timestamp() as usize;
-                            let claims = MagicClaims {
-                                exp,
-                                email: claims.email.clone(),
-                                server_name: claims.server_name.clone(),
-                            };
-                            let secret = resources.config.magic_token_secret.as_bytes();
-                            let token = match encode(
-                                &Header::default(),
-                                &claims,
-                                &EncodingKey::from_secret(secret),
-                            ) {
-                                Ok(t) => t,
-                                Err(e) => {
+                match claims.action.as_str() {
+                    "register" => {
+                        // Mark alert as verified (new flow)
+                        let found = alert::Entity::find()
+                            .filter(alert::Column::Email.eq(claims.email.clone()))
+                            .filter(alert::Column::ServerName.eq(claims.server_name.clone()))
+                            .one(resources.db.as_ref())
+                            .await;
+                        match found {
+                            Ok(Some(a)) => {
+                                let mut model: alert::ActiveModel = a.into();
+                                model.verified = Set(true);
+                                if let Err(e) = model.update(resources.db.as_ref()).await {
                                     return (
                                         StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(
-                                            json!({ "error": format!("Failed to generate token: {e}") }),
-                                        ),
+                                        Json(json!({"error": format!("DB error: {e}")})),
                                     );
                                 }
-                            };
-
-                            // Save access token in database
-                            let access_token = access_tokens::ActiveModel {
-                                id: Set(Uuid::new_v4()),
-                                email: Set(claims.email.clone()),
-                                access_token: Set(token.clone()),
-                                ..Default::default()
-                            };
-                            if let Err(e) = access_tokens::Entity::insert(access_token)
+                                (StatusCode::OK, Json(json!({"status": "alert verified"})))
+                            }
+                            Ok(None) => (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({"error": "No alert found for this email and server"})),
+                            ),
+                            Err(e) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": format!("DB error: {e}")})),
+                            ),
+                        }
+                    }
+                    "list" => {
+                        // Return all alerts for this email/server
+                        let alerts = alert::Entity::find()
+                            .filter(alert::Column::Email.eq(claims.email.clone()))
+                            .filter(alert::Column::ServerName.eq(claims.server_name.clone()))
+                            .all(resources.db.as_ref())
+                            .await;
+                        match alerts {
+                            Ok(list) => (StatusCode::OK, Json(json!({"alerts": list}))),
+                            Err(e) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": format!("DB error: {e}")})),
+                            ),
+                        }
+                    }
+                    "delete" => {
+                        // Delete the alert with the given id for this email
+                        if let Some(alert_id) = claims.alert_id.clone() {
+                            let del = alert::Entity::delete_many()
+                                .filter(alert::Column::Id.eq(alert_id.clone()))
+                                .filter(alert::Column::Email.eq(claims.email.clone()))
                                 .exec(resources.db.as_ref())
-                                .await
-                            {
-                                return (
+                                .await;
+                            match del {
+                                Ok(_) => (StatusCode::OK, Json(json!({"status": "deleted"}))),
+                                Err(e) => (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({"error": format!("DB error: {e}")})),
-                                );
+                                ),
                             }
-
-                            // Return response
+                        } else {
                             (
-                                StatusCode::OK,
-                                Json(json!({
-                                    "token": token,
-                                    "email": claims.email,
-                                    "lifetime": claims.exp
-                                })),
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({"error": "Missing alert_id in token"})),
                             )
                         }
                     }
-                    Ok(None) => (
+                    _ => (
                         StatusCode::BAD_REQUEST,
-                        Json(json!({"error": "No alert found for this email and server"})),
-                    ),
-                    Err(e) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": format!("DB error: {e}")})),
+                        Json(json!({"error": "Unknown action"})),
                     ),
                 }
             }
@@ -478,13 +472,7 @@ The Federation Tester Team"#,
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "Invalid or expired token"})),
             ),
-        };
-        (status, body)
-    }
-
-    #[derive(Serialize, ToSchema)]
-    struct AlertsList {
-        alerts: Vec<alert::Model>,
+        }
     }
 
     #[utoipa::path(
@@ -492,58 +480,60 @@ The Federation Tester Team"#,
         path = "/list",
         tag = ALERTS_TAG,
         operation_id = "List Alerts",
-        security(
-            ("Authorization" = [])
-        ),
         responses(
-            (status = 200, description = "List of alerts for the email", content_type = "application/json", body = AlertsList),
-            (status = 401, description = "Unauthorized - invalid or missing token", content_type = "application/json"),
+            (status = 200, description = "Verification email has successfully been sent", content_type = "application/json", example = json!({"status": "verification email sent"})),
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
     async fn list_alerts(
         Extension(resources): Extension<AppResources>,
-        headers: HeaderMap,
+        Json(payload): Json<RegisterAlert>,
     ) -> impl IntoResponse {
-        // Get token from Authorization header
-        let token = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "));
-        if token.is_none() {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing or invalid Authorization header"})),
-            );
-        }
-        let token = token.unwrap();
-        // Find alert by token
-
-        let found = access_tokens::Entity::find()
-            .filter(access_tokens::Column::AccessToken.eq(token))
-            .one(resources.db.as_ref())
-            .await;
-        let found = match found {
-            Ok(Some(a)) => a,
-            _ => {
+        let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
+        let claims = MagicClaims {
+            exp,
+            email: payload.email.clone(),
+            server_name: payload.server_name.clone(),
+            action: "list".to_string(),
+            alert_id: None,
+        };
+        let secret = resources.config.magic_token_secret.as_bytes();
+        let token = match encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        ) {
+            Ok(t) => t,
+            Err(e) => {
                 return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid token"})),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Failed to generate token: {e}") })),
                 );
             }
         };
-        // List all alerts for this email
-        let alerts = alert::Entity::find()
-            .filter(alert::Column::Email.eq(found.email.clone()))
-            .all(resources.db.as_ref())
-            .await;
-        match alerts {
-            Ok(list) => (StatusCode::OK, Json(json!({"alerts": list}))),
-            Err(e) => (
+        let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
+        let email_body = format!(
+            r#"Hello,\n\nYou requested to view your alerts for server: {}\n\nPlease verify by clicking the link below (valid for 1 hour):\n{}\n\nBest regards,\nThe Federation Tester Team"#,
+            payload.server_name, verify_url
+        );
+        let email = lettre::Message::builder()
+            .from(resources.config.smtp.from.parse().unwrap())
+            .to(payload.email.parse().unwrap())
+            .subject("Verify to view your Federation Alerts")
+            .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .body(email_body)
+            .unwrap();
+        if let Err(e) = resources.mailer.send(email).await {
+            error!("Failed to send verification email: {:#?}", e);
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("DB error: {e}")})),
-            ),
+                Json(json!({ "error": format!("Failed to send email: {e}") })),
+            );
         }
+        (
+            StatusCode::OK,
+            Json(json!({ "status": "verification email sent" })),
+        )
     }
 
     #[utoipa::path(
@@ -559,62 +549,74 @@ The Federation Tester Team"#,
                 example = "123e4567-e89b-12d3-a456-426"
             ),
         ),
-        security(
-            ("Authorization" = [])
-        ),
         responses(
-            (status = 200, description = "Alert deleted successfully", content_type = "application/json", example = json!({"status": "deleted"})),
-            (status = 401, description = "Unauthorized - invalid or missing token", content_type = "application/json"),
+            (status = 200, description = "Alert deletion verification flow has been started", content_type = "application/json", example = json!({"status": "verification email sent"})),
             (status = 404, description = "Alert not found", content_type = "application/json"),
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
     async fn delete_alert(
         Extension(resources): Extension<AppResources>,
-        State(state): State<AlertAppState>,
         Path(id): Path<String>,
-        headers: HeaderMap,
     ) -> impl IntoResponse {
-        // Get token from Authorization header
-        let token = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "));
-        if token.is_none() {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing or invalid Authorization header"})),
-            );
-        }
-        let token = token.unwrap();
-        // Find alert by token
-        let found = access_tokens::Entity::find()
-            .filter(access_tokens::Column::AccessToken.eq(token))
+        let found = alert::Entity::find()
+            .filter(alert::Column::Id.eq(id.clone()))
             .one(resources.db.as_ref())
             .await;
-        let found = match found {
-            Ok(Some(a)) => a,
-            _ => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid token"})),
+        match found {
+            Ok(Some(a)) => {
+                let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp()
+                    as usize;
+                let claims = MagicClaims {
+                    exp,
+                    email: a.email.clone(),
+                    server_name: a.server_name.clone(),
+                    action: "delete".to_string(),
+                    alert_id: Some(id.clone()),
+                };
+                let secret = resources.config.magic_token_secret.as_bytes();
+                let token = match encode(
+                    &Header::default(),
+                    &claims,
+                    &EncodingKey::from_secret(secret),
+                ) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": format!("Failed to generate token: {e}") })),
+                        );
+                    }
+                };
+                let verify_url =
+                    format!("{}/verify?token={}", resources.config.frontend_url, token);
+                let email_body = format!(
+                    r#"Hello,\n\nYou requested to delete your alert for server: {}\n\nPlease verify by clicking the link below (valid for 1 hour):\n{}\n\nBest regards,\nThe Federation Tester Team"#,
+                    a.server_name, verify_url
                 );
+                let email = lettre::Message::builder()
+                    .from(resources.config.smtp.from.parse().unwrap())
+                    .to(a.email.parse().unwrap())
+                    .subject("Verify to delete your Federation Alert")
+                    .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                    .body(email_body)
+                    .unwrap();
+                if let Err(e) = resources.mailer.send(email).await {
+                    error!("Failed to send verification email: {:#?}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("Failed to send email: {e}") })),
+                    );
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({ "status": "verification email sent" })),
+                )
             }
-        };
-        // Only allow deleting alerts for this email
-        let del = alert::Entity::delete_many()
-            .filter(alert::Column::Id.eq(id.clone()))
-            .filter(alert::Column::Email.eq(found.email.clone()))
-            .exec(resources.db.as_ref())
-            .await;
-        if del.is_ok() {
-            use uuid::Uuid;
-            if let Ok(uuid) = Uuid::parse_str(&id) {
-                state.task_manager.stop_task(uuid).await;
-            }
-        }
-        match del {
-            Ok(_) => (StatusCode::OK, Json(json!({"status": "deleted"}))),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Alert not found"})),
+            ),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": format!("DB error: {e}")})),

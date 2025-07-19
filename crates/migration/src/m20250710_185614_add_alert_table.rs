@@ -11,7 +11,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alert::Table)
                     .if_not_exists()
-                    .col(pk_uuid(Alert::Id))
+                    .col(pk_auto(Alert::Id))
                     .col(string(Alert::Email).not_null().unique_key().to_owned())
                     .col(string(Alert::ServerName).not_null().to_owned())
                     .col(
