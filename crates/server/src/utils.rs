@@ -404,6 +404,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                 if cname_target.clone().is_some_and(|c| c != target) {
                                     let srv_data = SRVData {
                                         target: cname_target.unwrap(),
+                                        srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
                                         error: Some(Error {
                                             error_code: ErrorCode::SRVPointsToCNAME,
@@ -436,6 +437,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                     let cname_target = target.clone();
                                     let srv_data = SRVData {
                                         target: cname_target,
+                                        srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
                                         error: None,
                                         port: srv.port(),
@@ -454,6 +456,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                 } else {
                                     let srv_data = SRVData {
                                         target: target.clone(),
+                                        srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
                                         error: Some(Error {
                                             error_code: ErrorCode::Unknown,
@@ -479,9 +482,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         }
                         // A/AAAA lookups and rest of logic remain unchanged
                     }
-                    // TODO: We should probably check for both but warn if both exist?
                     found_srv_records = true;
-                    break;
                 }
                 Err(e) => {
                     if let Proto(proto_error) = e.kind()
@@ -504,6 +505,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 server_name.to_string(),
                 vec![SRVData {
                     target: server_name.to_string(),
+                    srv_prefix: None,
                     addrs: vec![],
                     // This is a fallthrough case. So no error is expected.
                     error: None,

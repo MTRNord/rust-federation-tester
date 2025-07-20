@@ -58,6 +58,8 @@ pub struct SrvErrorData {
 #[serde(rename_all = "PascalCase")]
 pub struct SRVData {
     pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srv_prefix: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
