@@ -368,137 +368,153 @@ pub async fn lookup_server<P: ConnectionProvider>(
     info!("[lookup_server] Looking up server {server_name}");
 
     if !server_name.contains(':') {
-        info!(
-            "[lookup_server] Looking up srv {}",
-            format!("_matrix._tcp.{server_name}.")
-        );
-        let srv_records = timeout(
-            Duration::from_secs(NETWORK_TIMEOUT_SECS),
-            resolver.srv_lookup(&format!("_matrix._tcp.{server_name}.")),
-        )
-        .await?;
+        // Try _matrix-fed._tcp first
+        let mut found_srv_records = false;
+        for srv_prefix in ["_matrix-fed._tcp", "_matrix._tcp"] {
+            info!(
+                "[lookup_server] Looking up srv {}",
+                format!("{srv_prefix}.{server_name}.")
+            );
+            let srv_records = timeout(
+                Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                resolver.srv_lookup(&format!("{srv_prefix}.{server_name}.")),
+            )
+            .await?;
 
-        match srv_records {
-            Ok(records) => {
-                for record in records.iter() {
-                    let srv = record.clone();
-                    let target = absolutize_srv_target(&srv.target().to_utf8(), server_name);
+            match srv_records {
+                Ok(records) if !records.as_lookup().is_empty() => {
+                    for record in records.iter() {
+                        let srv = record.clone();
+                        let target = absolutize_srv_target(&srv.target().to_utf8(), server_name);
 
-                    info!("[lookup_server] Looking up {target}");
-                    match timeout(
-                        Duration::from_secs(NETWORK_TIMEOUT_SECS),
-                        resolver.lookup(&target, RecordType::CNAME),
-                    )
-                    .await?
-                    {
-                        Ok(cname) => {
-                            let cname_target = cname.record_iter().next().map(|c| {
-                                c.data()
-                                    .as_cname()
-                                    .expect("CNAME record expected")
-                                    .to_utf8()
-                            });
-                            if cname_target.clone().is_some_and(|c| c != target) {
-                                let srv_data = SRVData {
-                                    target: cname_target.unwrap(),
-                                    addrs: vec![],
-                                    error: Some(Error {
-                                        error_code: ErrorCode::SRVPointsToCNAME,
-                                        error: format!(
-                                            "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
-                                        ),
-                                    }),
-                                    port: srv.port(),
-                                    priority: Some(srv.priority()),
-                                    weight: Some(srv.weight()),
-                                };
+                        info!("[lookup_server] Looking up {target}");
+                        match timeout(
+                            Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                            resolver.lookup(&target, RecordType::CNAME),
+                        )
+                        .await?
+                        {
+                            Ok(cname) => {
+                                let cname_target = cname.record_iter().next().map(|c| {
+                                    c.data()
+                                        .as_cname()
+                                        .expect("CNAME record expected")
+                                        .to_utf8()
+                                });
+                                if cname_target.clone().is_some_and(|c| c != target) {
+                                    let srv_data = SRVData {
+                                        target: cname_target.unwrap(),
+                                        addrs: vec![],
+                                        error: Some(Error {
+                                            error_code: ErrorCode::SRVPointsToCNAME,
+                                            error: format!(
+                                                "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
+                                            ),
+                                        }),
+                                        port: srv.port(),
+                                        priority: Some(srv.priority()),
+                                        weight: Some(srv.weight()),
+                                    };
 
-                                let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                if let Some(existing) = existing {
-                                    existing.push(srv_data);
-                                } else {
-                                    data.dnsresult
-                                        .srv_targets
-                                        .insert(target.clone(), vec![srv_data]);
-                                }
+                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                    if let Some(existing) = existing {
+                                        existing.push(srv_data);
+                                    } else {
+                                        data.dnsresult
+                                            .srv_targets
+                                            .insert(target.clone(), vec![srv_data]);
+                                    }
 
-                                continue;
-                            }
-                        }
-                        Err(e) => {
-                            if let ResolveErrorKind::Proto(proto_error) = e.kind()
-                                && let ProtoErrorKind::NoRecordsFound { .. } = proto_error.kind()
-                            {
-                                let cname_target = target.clone();
-                                let srv_data = SRVData {
-                                    target: cname_target,
-                                    addrs: vec![],
-                                    error: None,
-                                    port: srv.port(),
-                                    priority: Some(srv.priority()),
-                                    weight: Some(srv.weight()),
-                                };
-
-                                let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                if let Some(existing) = existing {
-                                    existing.push(srv_data);
-                                } else {
-                                    data.dnsresult
-                                        .srv_targets
-                                        .insert(target.clone(), vec![srv_data]);
-                                }
-                            } else {
-                                let srv_data = SRVData {
-                                    target: target.clone(),
-                                    addrs: vec![],
-                                    error: Some(Error {
-                                        error: format!(
-                                            "Failed to resolve CNAME for SRV record target: {e}"
-                                        ),
-                                        error_code: ErrorCode::Unknown,
-                                    }),
-                                    port: srv.port(),
-                                    priority: Some(srv.priority()),
-                                    weight: Some(srv.weight()),
-                                };
-
-                                let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                if let Some(existing) = existing {
-                                    existing.push(srv_data);
-                                } else {
-                                    data.dnsresult
-                                        .srv_targets
-                                        .insert(target.clone(), vec![srv_data]);
+                                    continue;
                                 }
                             }
+                            Err(e) => {
+                                if let ResolveErrorKind::Proto(proto_error) = e.kind()
+                                    && let ProtoErrorKind::NoRecordsFound { .. } =
+                                        proto_error.kind()
+                                {
+                                    let cname_target = target.clone();
+                                    let srv_data = SRVData {
+                                        target: cname_target,
+                                        addrs: vec![],
+                                        error: None,
+                                        port: srv.port(),
+                                        priority: Some(srv.priority()),
+                                        weight: Some(srv.weight()),
+                                    };
+
+                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                    if let Some(existing) = existing {
+                                        existing.push(srv_data);
+                                    } else {
+                                        data.dnsresult
+                                            .srv_targets
+                                            .insert(target.clone(), vec![srv_data]);
+                                    }
+                                } else {
+                                    let srv_data = SRVData {
+                                        target: target.clone(),
+                                        addrs: vec![],
+                                        error: Some(Error {
+                                            error_code: ErrorCode::Unknown,
+                                            error: format!(
+                                                "Unknown error during CNAME lookup for {target}"
+                                            ),
+                                        }),
+                                        port: srv.port(),
+                                        priority: Some(srv.priority()),
+                                        weight: Some(srv.weight()),
+                                    };
+
+                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
+                                    if let Some(existing) = existing {
+                                        existing.push(srv_data);
+                                    } else {
+                                        data.dnsresult
+                                            .srv_targets
+                                            .insert(target.clone(), vec![srv_data]);
+                                    }
+                                }
+                            }
                         }
+                        // A/AAAA lookups and rest of logic remain unchanged
                     }
+                    // TODO: We should probably check for both but warn if both exist?
+                    found_srv_records = true;
+                    break;
                 }
-            }
-            Err(e) => {
-                if let Proto(proto_error) = e.kind()
-                    && let ProtoErrorKind::Timeout = proto_error.kind()
-                {
-                    return Err(color_eyre::eyre::eyre!(
-                        "Timeout while looking up SRV records for {server_name}: {e}"
-                    ));
+                Err(e) => {
+                    if let Proto(proto_error) = e.kind()
+                        && let ProtoErrorKind::Timeout = proto_error.kind()
+                    {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Timeout while looking up SRV records for {server_name}: {e}"
+                        ));
+                    }
+                    // If not found, try next prefix
                 }
-
-                data.dnsresult.srv_targets.insert(
-                    server_name.to_string(),
-                    vec![SRVData {
-                        target: server_name.to_string(),
-                        addrs: vec![],
-                        // This is a fallthrough case. So no error is expected.
-                        error: None,
-                        priority: None,
-                        weight: None,
-                        port: 8448,
-                    }],
-                );
+                _ => {
+                    // No records found, try next prefix
+                }
             }
         }
+        if !found_srv_records {
+            // No SRV records found for either prefix, insert fallback
+            data.dnsresult.srv_targets.insert(
+                server_name.to_string(),
+                vec![SRVData {
+                    target: server_name.to_string(),
+                    addrs: vec![],
+                    // This is a fallthrough case. So no error is expected.
+                    error: None,
+                    priority: None,
+                    weight: None,
+                    port: 8448,
+                }],
+            );
+        }
     } else {
+        // TODO: Consider doing this anyway? Might make sense for debugging to still check if it exists anyway but warn about it not being used.
         info!("[lookup_server] No SRV lookup for {server_name} as it contains a port");
         data.dnsresult.srvskipped = true;
     }
