@@ -1,0 +1,14 @@
+/target
+.git
+.github
+*.db
+*.html
+*.yaml
+*.yml
+*.md
+*.lock
+*.toml
+*.rs.bk
+*.swp
+*.swo
+*.log
