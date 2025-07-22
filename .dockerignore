@@ -8,6 +8,7 @@
 *.md
 *.lock
 *.toml
+!Cargo.toml
 *.rs.bk
 *.swp
 *.swo
