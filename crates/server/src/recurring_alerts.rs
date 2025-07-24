@@ -218,7 +218,7 @@ fn generate_list_unsubscribe_url(
     let claims = MagicClaims {
         exp,
         email: email.to_string(),
-        server_name: server_name.to_string(),
+        server_name: Some(server_name.to_string()),
         action: "delete".to_string(),
         alert_id: Some(alert_id.to_string()),
     };

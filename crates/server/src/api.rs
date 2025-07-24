@@ -188,8 +188,10 @@ pub mod alert_api {
     pub struct MagicClaims {
         pub exp: usize,
         pub email: String,
-        pub server_name: String,
-        pub action: String,           // "register", "list", "delete"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub server_name: Option<String>,
+        pub action: String, // "register", "list", "delete"
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub alert_id: Option<String>, // Only for delete
     }
 
@@ -197,6 +199,10 @@ pub mod alert_api {
     struct RegisterAlert {
         email: String,
         server_name: String,
+    }
+    #[derive(serde::Deserialize, ToSchema)]
+    struct ListAlerts {
+        email: String,
     }
 
     #[derive(Deserialize, IntoParams)]
@@ -211,7 +217,8 @@ pub mod alert_api {
 
     pub(crate) fn router(alert_state: AlertAppState) -> OpenApiRouter {
         OpenApiRouter::new()
-            .routes(routes!(register_alert, list_alerts, delete_alert))
+            .routes(routes!(register_alert, delete_alert))
+            .routes(routes!(list_alerts))
             .routes(routes!(verify_alert))
             .with_state(alert_state)
     }
@@ -237,7 +244,7 @@ pub mod alert_api {
         let claims = MagicClaims {
             exp,
             email: payload.email.clone(),
-            server_name: payload.server_name.clone(),
+            server_name: Some(payload.server_name.clone()),
             action: "register".to_string(),
             alert_id: None,
         };
@@ -430,7 +437,6 @@ The Federation Tester Team"#,
                         // Return all alerts for this email/server
                         let alerts = alert::Entity::find()
                             .filter(alert::Column::Email.eq(claims.email.clone()))
-                            .filter(alert::Column::ServerName.eq(claims.server_name.clone()))
                             .all(resources.db.as_ref())
                             .await;
                         match alerts {
@@ -477,7 +483,7 @@ The Federation Tester Team"#,
     }
 
     #[utoipa::path(
-        get,
+        post,
         path = "/list",
         tag = ALERTS_TAG,
         operation_id = "List Alerts",
@@ -488,15 +494,15 @@ The Federation Tester Team"#,
     )]
     async fn list_alerts(
         Extension(resources): Extension<AppResources>,
-        Json(payload): Json<RegisterAlert>,
+        Json(payload): Json<ListAlerts>,
     ) -> impl IntoResponse {
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
         let claims = MagicClaims {
             exp,
             email: payload.email.clone(),
-            server_name: payload.server_name.clone(),
             action: "list".to_string(),
             alert_id: None,
+            server_name: None,
         };
         let secret = resources.config.magic_token_secret.as_bytes();
         let token = match encode(
@@ -514,8 +520,16 @@ The Federation Tester Team"#,
         };
         let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
         let email_body = format!(
-            r#"Hello,\n\nYou requested to view your alerts for server: {}\n\nPlease verify by clicking the link below (valid for 1 hour):\n{}\n\nBest regards,\nThe Federation Tester Team"#,
-            payload.server_name, verify_url
+            r#"Hello,
+            
+You requested to view your alerts.
+
+Please verify by clicking the link below (valid for 1 hour):
+{}
+
+Best regards,
+The Federation Tester Team"#,
+            verify_url
         );
         let email = lettre::Message::builder()
             .from(resources.config.smtp.from.parse().unwrap())
@@ -572,7 +586,7 @@ The Federation Tester Team"#,
                 let claims = MagicClaims {
                     exp,
                     email: a.email.clone(),
-                    server_name: a.server_name.clone(),
+                    server_name: Some(a.server_name.clone()),
                     action: "delete".to_string(),
                     alert_id: Some(id.clone()),
                 };
@@ -593,7 +607,15 @@ The Federation Tester Team"#,
                 let verify_url =
                     format!("{}/verify?token={}", resources.config.frontend_url, token);
                 let email_body = format!(
-                    r#"Hello,\n\nYou requested to delete your alert for server: {}\n\nPlease verify by clicking the link below (valid for 1 hour):\n{}\n\nBest regards,\nThe Federation Tester Team"#,
+                    r#"Hello,
+                    
+You requested to delete your alert for server: {}
+
+Please verify by clicking the link below (valid for 1 hour):
+{}
+
+Best regards,
+The Federation Tester Team"#,
                     a.server_name, verify_url
                 );
                 let email = lettre::Message::builder()
