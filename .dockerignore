@@ -13,4 +13,3 @@
 *.swp
 *.swo
 *.log
-/.cargo/config.toml
