@@ -12,14 +12,21 @@ RUN if [ \"$TARGETPLATFORM\" = \"linux/arm64\" ]; then \
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
 # Build for the target platform
-RUN echo $TARGETPLATFORM
-RUN case \"$TARGETPLATFORM\" in \
-      \"linux/amd64\") TARGET_TRIPLE=x86_64-unknown-linux-gnu ;; \
-      \"linux/arm64\") TARGET_TRIPLE=aarch64-unknown-linux-gnu ;; \
-      *) echo \"Unsupported platform: $TARGETPLATFORM\"; exit 1 ;; \
-    esac && \
-    cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
-    cargo build --release --package migration --target $TARGET_TRIPLE
+RUN case "$TARGETPLATFORM" in \
+      "linux/amd64") TARGET_TRIPLE=x86_64-unknown-linux-gnu; \
+        cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
+        cargo build --release --package migration --target $TARGET_TRIPLE ;; \
+      "linux/arm64") TARGET_TRIPLE=aarch64-unknown-linux-gnu; \
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+        CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+        cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+        CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+        cargo build --release --package migration --target $TARGET_TRIPLE ;; \
+      *) echo "Unsupported platform: $TARGETPLATFORM"; exit 1 ;; \
+    esac
 
 # Copy the binaries to a common location
 RUN mkdir -p /app/target/dist
