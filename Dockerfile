@@ -1,4 +1,5 @@
 FROM --platform=$BUILDPLATFORM rustlang/rust:nightly AS builder
+ARG TARGETPLATFORM
 WORKDIR /app
 COPY . .
 
@@ -15,6 +16,8 @@ RUN cargo build --release --package rust-federation-tester --target ${TARGETPLAT
 RUN cargo build --release --package migration --target ${TARGETPLATFORM#linux/}-unknown-linux-gnu
 
 FROM debian:bookworm-slim
+ARG TARGETPLATFORM
+
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
