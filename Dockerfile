@@ -22,7 +22,6 @@ RUN case \"$TARGETPLATFORM\" in \
     cargo build --release --package migration --target $TARGET_TRIPLE
 
 FROM debian:bookworm-slim
-ARG TARGETPLATFORM
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
