@@ -11,8 +11,8 @@ RUN if [ \"$TARGETPLATFORM\" = \"linux/arm64\" ]; then \
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
 # Build for the target platform
-RUN cargo build --release --package rust-federation-tester --target $(echo $TARGETPLATFORM | sed 's/linux\\///')-unknown-linux-gnu
-RUN cargo build --release --package migration --target $(echo $TARGETPLATFORM | sed 's/linux\\///')-unknown-linux-gnu
+RUN cargo build --release --package rust-federation-tester --target ${TARGETPLATFORM#linux/}-unknown-linux-gnu
+RUN cargo build --release --package migration --target ${TARGETPLATFORM#linux/}-unknown-linux-gnu
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
