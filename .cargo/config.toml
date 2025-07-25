@@ -1,5 +1,5 @@
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-Zsanitizer=cfi", "-Clto"]
+rustflags = ["-Zsanitizer=cfi", "-Clto", "-Ccodegen-units=1"]
 
 [target.aarch64-unknown-linux-gnu]
-rustflags = ["-Clto"]
+rustflags = []
