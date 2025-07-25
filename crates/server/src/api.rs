@@ -525,11 +525,10 @@ The Federation Tester Team"#,
 You requested to view your alerts.
 
 Please verify by clicking the link below (valid for 1 hour):
-{}
+{verify_url}
 
 Best regards,
-The Federation Tester Team"#,
-            verify_url
+The Federation Tester Team"#
         );
         let email = lettre::Message::builder()
             .from(resources.config.smtp.from.parse().unwrap())
