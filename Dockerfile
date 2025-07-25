@@ -12,9 +12,10 @@ RUN if [ \"$TARGETPLATFORM\" = \"linux/arm64\" ]; then \
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
 # Build for the target platform
+RUN echo $TARGETPLATFORM
 RUN case \"$TARGETPLATFORM\" in \
-      \"linux/amd64\") TARGET_TRIPLE=\"x86_64-unknown-linux-gnu\" ;; \
-      \"linux/arm64\") TARGET_TRIPLE=\"aarch64-unknown-linux-gnu\" ;; \
+      \"linux/amd64\") TARGET_TRIPLE=x86_64-unknown-linux-gnu ;; \
+      \"linux/arm64\") TARGET_TRIPLE=aarch64-unknown-linux-gnu ;; \
       *) echo \"Unsupported platform: $TARGETPLATFORM\"; exit 1 ;; \
     esac && \
     cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
@@ -27,14 +28,10 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 WORKDIR /app
 
 # Copy the correct binary for the target platform
-# Copy the correct binary for the target platform
-RUN case \"$TARGETPLATFORM\" in \
-      \"linux/amd64\") TARGET_TRIPLE=\"x86_64-unknown-linux-gnu\" ;; \
-      \"linux/arm64\") TARGET_TRIPLE=\"aarch64-unknown-linux-gnu\" ;; \
-      *) echo \"Unsupported platform: $TARGETPLATFORM\"; exit 1 ;; \
-    esac && \
-    cp /app/target/$TARGET_TRIPLE/release/rust-federation-tester /usr/local/bin/rust-federation-tester && \
-    cp /app/target/$TARGET_TRIPLE/release/migration /usr/local/bin/migration
+COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/rust-federation-tester /usr/local/bin/rust-federation-tester
+COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/migration /usr/local/bin/migration
+COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/rust-federation-tester /usr/local/bin/rust-federation-tester
+COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/migration /usr/local/bin/migration
 
 EXPOSE 8080
 CMD ["sh", "-c", "migration up && rust-federation-tester"]
