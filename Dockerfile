@@ -21,16 +21,24 @@ RUN case \"$TARGETPLATFORM\" in \
     cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
     cargo build --release --package migration --target $TARGET_TRIPLE
 
+# Copy the binaries to a common location
+RUN mkdir -p /app/target/dist
+RUN case \"$TARGETPLATFORM\" in \
+      \"linux/amd64\") TARGET_TRIPLE=x86_64-unknown-linux-gnu ;; \
+      \"linux/arm64\") TARGET_TRIPLE=aarch64-unknown-linux-gnu ;; \
+      *) echo \"Unsupported platform: $TARGETPLATFORM\"; exit 1 ;; \
+    esac && \
+    cp /app/target/$TARGET_TRIPLE/release/rust-federation-tester /app/target/dist/rust-federation-tester && \
+    cp /app/target/$TARGET_TRIPLE/release/migration /app/target/dist/migration
+
 FROM debian:bookworm-slim
+ARG TARGETPLATFORM
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-# Copy the correct binary for the target platform
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/rust-federation-tester /usr/local/bin/rust-federation-tester
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/migration /usr/local/bin/migration
-COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/rust-federation-tester /usr/local/bin/rust-federation-tester
-COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/migration /usr/local/bin/migration
+COPY --from=builder /app/target/dist/rust-federation-tester /usr/local/bin/rust-federation-tester
+COPY --from=builder /app/target/dist/migration /usr/local/bin/migration
 
 EXPOSE 8080
 CMD ["sh", "-c", "migration up && rust-federation-tester"]
