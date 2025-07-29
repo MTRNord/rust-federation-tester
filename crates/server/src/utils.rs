@@ -33,6 +33,7 @@ use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, error};
 use tracing::{info, warn};
+use url::Url;
 use x509_parser::prelude::*;
 
 const NETWORK_TIMEOUT_SECS: u64 = 3;
@@ -149,25 +150,49 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
 
         futures.push(async move {
+            let (_resp_opt, result, server_candidate) =
+                fetch_url_with_redirects(&addr, &server_name, &server_name, 10, timeout_duration)
+                    .await;
+            (addr, result, server_candidate)
+        });
+    }
+    async fn fetch_url_with_redirects(
+        addr: &str,
+        host: &str,
+        sni: &str,
+        max_redirects: usize,
+        timeout_duration: Duration,
+    ) -> (
+        Option<hyper::Response<Incoming>>,
+        WellKnownResult,
+        Option<String>,
+    ) {
+        let mut redirects = 0;
+        let mut current_addr = addr.to_string();
+        let mut current_host = host.to_string();
+        let mut current_sni = sni.to_string();
+        let mut current_path = "/.well-known/matrix/server".to_string();
+        let mut result = WellKnownResult::default();
+        loop {
             let response = timeout(
                 timeout_duration,
                 fetch_url_custom_sni_host(
-                    "/.well-known/matrix/server",
-                    &addr,
-                    &server_name,
-                    &server_name,
+                    &current_path,
+                    &current_addr,
+                    &current_host,
+                    &current_sni,
                 ),
             )
             .await;
 
-            let mut result = WellKnownResult::default();
-
             match response {
                 Ok(Ok(resp)) => {
                     if let Some(resp) = resp.response {
-                        if resp.status().is_success() {
+                        let status = resp.status();
+                        let headers = resp.headers().clone();
+                        if status.is_success() {
                             // Handle cache headers
-                            if let Some(expires_header) = resp.headers().get("Expires") {
+                            if let Some(expires_header) = headers.get("Expires") {
                                 if let Ok(expires_str) = expires_header.to_str()
                                     && let Ok(expires_time) = time_crate::OffsetDateTime::parse(
                                         expires_str,
@@ -176,7 +201,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                                 {
                                     result.cache_expires_at = expires_time.unix_timestamp();
                                 }
-                            } else if let Some(cache_control) = resp.headers().get("Cache-Control")
+                            } else if let Some(cache_control) = headers.get("Cache-Control")
                                 && let Ok(cache_control_str) = cache_control.to_str()
                                 && let Some(max_age) = cache_control_str
                                     .split(',')
@@ -197,20 +222,65 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                                 {
                                     result.m_server = server_str.to_string();
                                     // Return the server string for validation
-                                    return (addr, result, Some(server_str.to_string()));
+                                    return (None, result, Some(server_str.to_string()));
                                 }
                             }
-                        } else {
+                            // Not a valid body, return as is
+                            return (None, result, None);
+                        } else if status.is_redirection() && redirects < max_redirects {
+                            // Follow redirect
+                            if let Some(location) = headers.get(hyper::header::LOCATION)
+                                && let Ok(location_str) = location.to_str()
+                            {
+                                // Try to parse as absolute or relative URL
+                                let new_url = if let Ok(url) = Url::parse(location_str) {
+                                    url
+                                } else if let Ok(base) =
+                                    Url::parse(&format!("https://{current_host}{current_path}"))
+                                {
+                                    base.join(location_str).unwrap_or(base)
+                                } else {
+                                    // fallback: treat as path
+                                    let mut base = format!("https://{current_host}");
+                                    if !location_str.starts_with('/') {
+                                        base.push('/');
+                                    }
+                                    Url::parse(&(base.clone() + location_str))
+                                        .unwrap_or_else(|_| Url::parse(&base).unwrap())
+                                };
+                                // Update host/addr/port if needed
+                                if let Some(host_str) = new_url.host_str() {
+                                    current_host = host_str.to_string();
+                                    // If port is present, use it, else default to 443
+                                    let port = new_url.port().unwrap_or(443);
+                                    let addr_str = format!("{host_str}:{port}");
+                                    current_addr = addr_str;
+                                    current_sni = host_str.to_string();
+                                }
+                                current_path = new_url.path().to_string();
+                                redirects += 1;
+                                continue;
+                            }
+                            // No valid location header, treat as error
                             result.error = Some(Error {
-                                error: format!("Error fetching well-known URL:  {}", resp.status()),
-                                error_code: ErrorCode::NotOk(resp.status().to_string()),
+                                error: format!("Redirect ({status}) without valid Location header"),
+                                error_code: ErrorCode::NotOk(status.to_string()),
                             });
+                            return (None, result, None);
+                        } else {
+                            // Not success, not redirect, treat as error
+                            result.error = Some(Error {
+                                error: format!("Error fetching well-known URL:  {status}"),
+                                error_code: ErrorCode::NotOk(status.to_string()),
+                            });
+                            return (None, result, None);
                         }
                     } else {
                         result.error = Some(Error {
                             error: "No response received from well-known URL".to_string(),
                             error_code: ErrorCode::NoResponse,
                         });
+                        return (None, result, None);
                     }
                 }
                 Ok(Err(e)) => {
@@ -218,16 +288,17 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
                         error: format!("Error fetching well-known URL: {e:#?}"),
                         error_code: ErrorCode::Unknown,
                     });
+                    return (None, result, None);
                 }
                 Err(e) => {
                     result.error = Some(Error {
                         error: format!("Timeout while fetching well-known URL: {e:#?}"),
                         error_code: ErrorCode::Timeout,
                     });
+                    return (None, result, None);
                 }
             }
-            (addr, result, None::<String>)
-        });
+        }
     }
 
     // Process results as they come in
