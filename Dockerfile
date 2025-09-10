@@ -38,7 +38,7 @@ RUN case \"$TARGETPLATFORM\" in \
     cp /app/target/$TARGET_TRIPLE/release/rust-federation-tester /app/target/dist/rust-federation-tester && \
     cp /app/target/$TARGET_TRIPLE/release/migration /app/target/dist/migration
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 ARG TARGETPLATFORM
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
