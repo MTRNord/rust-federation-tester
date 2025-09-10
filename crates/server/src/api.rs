@@ -452,8 +452,17 @@ The Federation Tester Team"#,
                     "delete" => {
                         // Delete the alert with the given id for this email
                         if let Some(alert_id) = claims.alert_id.clone() {
+                            let alert_id: i32 = match alert_id.parse() {
+                                Ok(id) => id,
+                                Err(_) => {
+                                    return (
+                                        StatusCode::BAD_REQUEST,
+                                        Json(json!({"error": "Invalid alert_id in token"})),
+                                    );
+                                }
+                            };
                             let del = alert::Entity::delete_many()
-                                .filter(alert::Column::Id.eq(alert_id.clone()))
+                                .filter(alert::Column::Id.eq(alert_id))
                                 .filter(alert::Column::Email.eq(claims.email.clone()))
                                 .exec(resources.db.as_ref())
                                 .await;
@@ -563,7 +572,7 @@ The Federation Tester Team"#
         operation_id = "Delete Alert",
         params(
             (
-                "id" = String,
+                "id" = i32,
                 Path,
                 description = "ID of the alert to delete",
                 example = "123e4567-e89b-12d3-a456-426"
@@ -577,10 +586,10 @@ The Federation Tester Team"#
     )]
     async fn delete_alert(
         Extension(resources): Extension<AppResources>,
-        Path(id): Path<String>,
+        Path(id): Path<i32>,
     ) -> impl IntoResponse {
         let found = alert::Entity::find()
-            .filter(alert::Column::Id.eq(id.clone()))
+            .filter(alert::Column::Id.eq(id))
             .one(resources.db.as_ref())
             .await;
         match found {
@@ -592,7 +601,7 @@ The Federation Tester Team"#
                     email: a.email.clone(),
                     server_name: Some(a.server_name.clone()),
                     action: "delete".to_string(),
-                    alert_id: Some(id.clone()),
+                    alert_id: Some(id.to_string()),
                 };
                 let secret = resources.config.magic_token_secret.as_bytes();
                 let token = match encode(
