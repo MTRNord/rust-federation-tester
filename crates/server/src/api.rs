@@ -173,14 +173,14 @@ pub mod alert_api {
         response::IntoResponse,
     };
     use hyper::StatusCode;
-    use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+    use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
     use lettre::AsyncTransport;
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::sync::Arc;
     use time::OffsetDateTime;
-    use tracing::error;
+    use tracing::{error, warn};
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -395,10 +395,12 @@ The Federation Tester Team"#,
         Query(params): Query<VerifyParams>,
     ) -> impl IntoResponse {
         let secret = resources.config.magic_token_secret.as_bytes();
+        let mut validation = Validation::default();
+        validation.validate_exp = true;
         let token_data = decode::<MagicClaims>(
             &params.token,
             &DecodingKey::from_secret(secret),
-            &Validation::new(Algorithm::HS256),
+            &validation,
         );
         match token_data {
             Ok(data) => {
@@ -475,10 +477,13 @@ The Federation Tester Team"#,
                     ),
                 }
             }
-            Err(_) => (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid or expired token"})),
-            ),
+            Err(e) => {
+                warn!("Invalid or expired token used for verification: {e}");
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "Invalid or expired token"})),
+                )
+            }
         }
     }
 
