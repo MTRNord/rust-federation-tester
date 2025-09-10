@@ -1,4 +1,4 @@
-use sea_orm_migration::{prelude::*, schema::*};
+use sea_orm_migration::prelude::*;
 
 use crate::m20250710_185614_add_alert_table::Alert;
 
@@ -38,12 +38,4 @@ impl MigrationTrait for Migration {
             )
             .await
     }
-}
-
-#[derive(DeriveIden)]
-enum Post {
-    Table,
-    Id,
-    Title,
-    Text,
 }
