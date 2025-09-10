@@ -60,7 +60,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(Iden)]
-enum Alert {
+pub enum Alert {
     Table,
     Id,
     Email,
