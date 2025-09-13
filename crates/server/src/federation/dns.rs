@@ -35,6 +35,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
 
     if !server_name.contains(':') {
         let mut found_srv_records = false;
+        let mut srv_errors = vec![];
         for srv_prefix in ["_matrix-fed._tcp", "_matrix._tcp"] {
             let srv_records = match timeout(
                 Duration::from_secs(NETWORK_TIMEOUT_SECS),
@@ -44,7 +45,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
             {
                 Ok(r) => r,
                 Err(e) => {
-                    errors.push(Error {
+                    srv_errors.push(Error {
                         error: format!(
                             "Timeout while looking up SRV records for {server_name}: {e}"
                         ),
@@ -143,7 +144,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     found_srv_records = true;
                 }
                 Err(e) => {
-                    errors.push(Error {
+                    srv_errors.push(Error {
                         error: format!("SRV lookup error for {server_name}: {e}"),
                         error_code: ErrorCode::Unknown,
                     });
@@ -151,7 +152,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 _ => {}
             }
         }
+
+        // Only add SRV errors to the main error list if no SRV records were found at all
+        // Note: Having no SRV records is valid - fallback to direct A/AAAA lookup (spec case 3e)
         if !found_srv_records {
+            // Don't add SRV errors as they're expected when falling back to direct lookup
             srv_targets.insert(
                 server_name.to_string(),
                 vec![SRVData {

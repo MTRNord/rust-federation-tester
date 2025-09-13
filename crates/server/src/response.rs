@@ -254,13 +254,29 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     resp_data.dnsresult.srv_targets = dns_phase.srv_targets.clone();
     resp_data.dnsresult.addrs = dns_phase.addrs.clone();
     resp_data.dnsresult.srvskipped = dns_phase.srvskipped;
-    if !dns_phase.errors.is_empty() {
-        // Only set the first error for backward compatibility
-        resp_data.error = Some(dns_phase.errors[0].clone());
-        resp_data.federation_ok = false;
-    }
+
+    // Only fail federation if we have no addresses AND have critical errors
+    // AAAA lookup failures should not fail federation if IPv4 addresses are available
     if resp_data.dnsresult.addrs.is_empty() {
         resp_data.federation_ok = false;
+        // Set error only if we have DNS errors and no addresses
+        if !dns_phase.errors.is_empty() {
+            resp_data.error = Some(dns_phase.errors[0].clone());
+        }
+    } else if !dns_phase.errors.is_empty() {
+        // We have addresses, so check if all errors are non-critical (like AAAA failures)
+        let critical_errors: Vec<_> = dns_phase
+            .errors
+            .iter()
+            .filter(|err| !err.error.contains("AAAA record lookup error"))
+            .collect();
+
+        if !critical_errors.is_empty() {
+            // We have critical errors, set federation failure and report the first one
+            resp_data.error = Some(critical_errors[0].clone());
+            resp_data.federation_ok = false;
+        }
+        // Non-critical errors (like AAAA failures) are ignored when addresses are available
     }
 
     // Connection phase (pure)
