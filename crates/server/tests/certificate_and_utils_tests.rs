@@ -1,7 +1,7 @@
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+use rust_federation_tester::federation::{absolutize_srv_target, extract_certificate_info};
 use rust_federation_tester::response::Certificate;
 use rust_federation_tester::response::Root;
-use rust_federation_tester::utils::{absolutize_srv_target, extract_certificate_info};
 use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
 
 #[test]

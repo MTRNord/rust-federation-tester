@@ -16,9 +16,9 @@ pub mod config;
 pub mod connection_pool;
 pub mod entity;
 pub mod error;
+pub mod federation;
 pub mod recurring_alerts;
 pub mod response;
-pub mod utils;
 pub mod validation;
 
 use hickory_resolver::{Resolver, name_server::ConnectionProvider};

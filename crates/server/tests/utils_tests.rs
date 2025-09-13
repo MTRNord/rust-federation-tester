@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
+use rust_federation_tester::federation::{extract_certificate_info, test_verify_keys};
 use rust_federation_tester::response::{Certificate, Ed25519VerifyKey, Keys};
-use rust_federation_tester::utils::{extract_certificate_info, test_verify_keys};
 use rustls_pki_types::CertificateDer;
 use std::collections::BTreeMap;
 use time::OffsetDateTime;

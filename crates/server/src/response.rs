@@ -1,6 +1,6 @@
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
-use crate::utils::{connection_check, lookup_server, lookup_server_well_known};
+use crate::federation::{connection_check, lookup_server, lookup_server_well_known};
 use crate::validation::server_name::parse_and_validate_server_name;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -230,24 +230,21 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     let cache_key = server_name_lower.clone();
 
     // Handle well-known lookup with caching
-    let well_known_result = if use_cache {
+    let well_known_result: Result<Option<String>, crate::error::WellKnownError> = if use_cache {
         if let Some(cached_result) = well_known_cache.get(&cache_key) {
-            // Use cached well-known result
             resp_data
                 .well_known_result
                 .insert(server_name_lower.clone(), cached_result.clone());
-            if !cached_result.m_server.is_empty() {
+            Ok(if !cached_result.m_server.is_empty() {
                 Some(cached_result.m_server)
             } else {
                 None
-            }
+            })
         } else {
-            // Fetch well-known
             let result =
                 lookup_server_well_known(&mut resp_data, &server_name_lower, resolver).await;
-            // Cache the well-known result if we have one
-            if let Some(well_known_result) = resp_data.well_known_result.get(&server_name_lower) {
-                well_known_cache.insert(cache_key, well_known_result.clone());
+            if let Some(well_known) = resp_data.well_known_result.get(&server_name_lower) {
+                well_known_cache.insert(cache_key, well_known.clone());
             }
             result
         }
@@ -256,10 +253,9 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     };
 
     // Determine the server to resolve
-    let resolved_server = if let Some(ref new_server) = well_known_result {
-        new_server.clone()
-    } else {
-        server_name_lower.clone()
+    let resolved_server = match &well_known_result {
+        Ok(Some(new_server)) => new_server.clone(),
+        _ => server_name_lower.clone(),
     };
 
     // DNS lookup with caching

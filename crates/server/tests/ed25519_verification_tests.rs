@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
+use rust_federation_tester::federation::test_verify_keys;
 use rust_federation_tester::response::{Ed25519VerifyKey, Keys};
-use rust_federation_tester::utils::test_verify_keys;
 use serde_json::json;
 
 // Helper to build a minimal keys JSON structure with a single ed25519 key & signature.
