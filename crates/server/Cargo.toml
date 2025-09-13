@@ -77,6 +77,8 @@ axum-test = "18.1.0"
 tokio-test = "0.4.4"
 wiremock = "0.6.4"
 criterion = { version = "0.7", features = ["html_reports"] }
+rcgen = "0.14.4"
+serde_urlencoded = "0.7"
 
 [[bench]]
 name = "federation_performance"

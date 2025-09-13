@@ -1,0 +1,70 @@
+# This workflow runs code coverage using cargo-llvm-cov and uploads as GitHub artifact
+# No external services required
+
+name: Coverage
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --workspace --exclude loadtest --exclude migration --lcov --output-path lcov.info
+          cargo llvm-cov --workspace --exclude loadtest --exclude migration --html --output-dir target/coverage/html
+
+      - name: Extract coverage percentage
+        id: coverage
+        run: |
+          COVERAGE=$(cargo llvm-cov --workspace --exclude loadtest --exclude migration --summary-only | grep -oP '\d+\.\d+(?=%)' | tail -1)
+          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "Coverage: $COVERAGE%"
+
+      - name: Upload HTML coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ github.sha }}
+          path: target/coverage/html/
+
+      - name: Upload LCOV coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov-${{ github.sha }}
+          path: lcov.info
+
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = '${{ steps.coverage.outputs.percentage }}';
+            const comment = `## Coverage Report
+            
+            **Current Coverage: ${coverage}%**
+            
+            📊 [View detailed HTML report](../../actions/runs/${{ github.run_id }})
+            
+            Target: 60-80% coverage`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

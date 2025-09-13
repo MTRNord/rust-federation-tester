@@ -3,3 +3,5 @@ report.html
 report*.html
 alerts.db
 config.yaml
+lcov.info
+target/coverage/

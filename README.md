@@ -56,6 +56,23 @@ Requires Rust (edition 2021 or later).
 cargo build --release
 ```
 
+## Test & Coverage
+
+Run all tests:
+
+```sh
+cargo test --workspace
+```
+
+Generate coverage (requires `cargo install cargo-llvm-cov`):
+
+```sh
+chmod +x coverage.sh
+./coverage.sh
+```
+
+Open `target/coverage/html/index.html` in a browser for a detailed report.
+
 ## License
 
 AGPL-3.0-or-later

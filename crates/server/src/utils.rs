@@ -40,7 +40,7 @@ use x509_parser::prelude::*;
 
 const NETWORK_TIMEOUT_SECS: u64 = 3;
 
-fn absolutize_srv_target(target: &str, base: &str) -> String {
+pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     if target.ends_with('.') {
         target.to_string()
     } else {
@@ -1334,7 +1334,7 @@ async fn fetch_url_pooled_simple(
 }
 
 /// Extract certificate information from a CertificateDer for federation reporting
-fn extract_certificate_info(
+pub fn extract_certificate_info(
     cert_der: &rustls_pki_types::CertificateDer<'_>,
 ) -> Option<Certificate> {
     // Parse the certificate using x509-parser
