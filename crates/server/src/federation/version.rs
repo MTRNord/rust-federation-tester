@@ -1,8 +1,7 @@
 use crate::connection_pool::ConnectionPool;
 use crate::error::FetchError;
-use crate::federation::network::fetch_url_custom_sni_host;
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
-use crate::response::{ConnectionReportData, Error, ErrorCode, Version};
+use crate::response::Version;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Empty;
@@ -19,84 +18,6 @@ use tracing::debug;
 #[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VersionResp {
     pub server: Version,
-}
-
-#[tracing::instrument(name = "query_server_version", skip(data))]
-pub async fn query_server_version(
-    data: &mut ConnectionReportData,
-    addr: &str,
-    sni: &str,
-    federation_address: &str,
-) -> Result<(), FetchError> {
-    let response = fetch_url_custom_sni_host(
-        "/_matrix/federation/v1/version",
-        addr,
-        sni,
-        federation_address,
-    )
-    .await?;
-
-    let response = match response.response {
-        Some(r) => r,
-        None => {
-            data.error = Some(Error {
-                error: "No response received from server version endpoint".to_string(),
-                error_code: ErrorCode::NoResponse,
-            });
-            data.checks.server_version_parses = false;
-            return Ok(());
-        }
-    };
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| FetchError::Network(e.to_string()))?
-        .to_bytes();
-
-    if !status.is_success() {
-        data.error = Some(Error {
-            error: format!("Error querying server version: {status}"),
-            error_code: ErrorCode::NotOk(status.to_string()),
-        });
-        data.checks.server_version_parses = false;
-        return Ok(());
-    }
-    if let Some(ct) = headers.get("Content-Type") {
-        let ct_val = ct.to_str().unwrap_or("");
-        if !ct_val.contains("application/json") {
-            data.error = Some(Error {
-                error: "Unexpected Content-Type in server version response".to_string(),
-                error_code: ErrorCode::UnexpectedContentType(ct_val.to_string()),
-            });
-            data.checks.server_version_parses = false;
-            return Ok(());
-        }
-    } else {
-        data.error = Some(Error {
-            error: "No Content-Type header in server version response".to_string(),
-            error_code: ErrorCode::MissingContentType,
-        });
-        data.checks.server_version_parses = false;
-        return Ok(());
-    }
-
-    match serde_json::from_slice::<VersionResp>(&body) {
-        Ok(json) => {
-            data.version = json.server;
-            data.checks.server_version_parses = true;
-        }
-        Err(e) => {
-            data.error = Some(Error {
-                error: "Failed to parse server version response".to_string(),
-                error_code: ErrorCode::InvalidJson(e.to_string()),
-            });
-            data.checks.server_version_parses = false;
-        }
-    }
-    Ok(())
 }
 
 #[tracing::instrument(name = "query_server_version_pooled", skip(connection_pool))]

@@ -24,9 +24,7 @@ pub use network::{FullResponse, fetch_url_custom_sni_host};
 
 pub use certificate::extract_certificate_info;
 
-pub use version::{
-    VersionResp, fetch_url_pooled_simple, query_server_version, query_server_version_pooled,
-};
+pub use version::{VersionResp, fetch_url_pooled_simple, query_server_version_pooled};
 
 pub use keys::{FullKeysResponse, fetch_keys, verify_keys};
 
