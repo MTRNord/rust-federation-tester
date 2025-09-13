@@ -163,20 +163,40 @@ mod federation_tests {
             "continuwuity.codestorm.net",
             "continuwuity.org",
         ];
+        let is_github_actions =
+            std::env::var("CI").is_ok() && std::env::var("GITHUB_RUN_ID").is_ok();
         for server in servers {
-            // Skip matrix.org in CI environments as it may be blocked by Cloudflare
-            if server == "matrix.org" && std::env::var("CI").is_ok() {
-                println!(
-                    "WARNING: Skipping matrix.org in CI environment (likely blocked by Cloudflare)"
-                );
-                continue;
-            }
-
             let result = generate_json_report(server, &resolver, &pool)
                 .await
                 .unwrap();
 
-            if !result.federation_ok || result.dnsresult.addrs.is_empty() {
+            let (federation_ok_for_test, filtered_connection_errors) = if is_github_actions {
+                // Filter out IPv6 os error 101 (network unreachable) connection errors for GitHub Actions only
+                let filtered: std::collections::BTreeMap<_, _> = result
+                    .connection_errors
+                    .iter()
+                    .filter(|(addr, err)| {
+                        // Only filter IPv6 addresses with os error 101
+                        if addr.starts_with('[') {
+                            if err.error.to_lowercase().contains("os error 101") {
+                                return false; // ignore this error in test
+                            }
+                            if err.error.to_lowercase().contains("network is unreachable") {
+                                return false; // ignore this error in test
+                            }
+                        }
+                        true
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let ok = result.federation_ok
+                    || (!result.connection_reports.is_empty() && filtered.is_empty());
+                (ok, filtered)
+            } else {
+                (result.federation_ok, result.connection_errors.clone())
+            };
+
+            if !federation_ok_for_test || result.dnsresult.addrs.is_empty() {
                 println!("FAILED KNOWN GOOD SERVER: {}", server);
                 println!("  FederationOK: {}", result.federation_ok);
                 println!("  Error: {:?}", result.error);
@@ -189,20 +209,17 @@ mod federation_tests {
                     );
                 }
                 println!("  Connection Errors: {:?}", result.connection_errors);
-
-                // Special handling for matrix.org - show warning but don't fail test
-                if server == "matrix.org" {
-                    println!(
-                        "WARNING: matrix.org federation failed (possibly blocked by Cloudflare) - continuing test"
-                    );
-                    continue;
-                }
             }
 
             assert!(
-                result.federation_ok,
-                "Federation should succeed for {} - see printed details above",
-                server
+                federation_ok_for_test,
+                "Federation should succeed for {}{} - see printed details above",
+                server,
+                if is_github_actions {
+                    " (ignoring IPv6 unreachable errors on GitHub Actions)"
+                } else {
+                    ""
+                }
             );
             assert!(
                 !result.dnsresult.addrs.is_empty(),
