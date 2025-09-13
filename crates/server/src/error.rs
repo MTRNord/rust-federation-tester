@@ -1,10 +1,24 @@
 use hyper::StatusCode;
+use std::time::Duration;
 use thiserror::Error;
 
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum Phase {
+    WellKnown,
+    Dns,
+    HttpRequest,
+    Tls,
+    JsonDecode,
+    Signature,
+    Connection,
+}
+
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WellKnownError {
     #[error("Timeout after {0:?} while fetching well-known")]
-    Timeout(std::time::Duration),
+    Timeout(Duration),
     #[error("HTTP {status} while fetching well-known: {context}")]
     Http { status: StatusCode, context: String },
     #[error("Redirect loop or too many redirects (limit {0})")]
@@ -18,13 +32,14 @@ pub enum WellKnownError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FetchError {
     #[error(transparent)]
     WellKnown(#[from] WellKnownError),
     #[error("TLS error: {0}")]
     Tls(String),
     #[error("Network timeout after {0:?}")]
-    Timeout(std::time::Duration),
+    Timeout(Duration),
     #[error("Network error: {0}")]
     Network(String),
     #[error("HTTP status {status}: {context}")]
@@ -38,6 +53,7 @@ pub enum FetchError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FederationError {
     #[error(transparent)]
     Fetch(#[from] FetchError),
@@ -59,5 +75,24 @@ impl FederationError {
                 | FederationError::Fetch(FetchError::Network(_))
                 | FederationError::Dns(_)
         )
+    }
+
+    pub fn phase(&self) -> Option<Phase> {
+        match self {
+            FederationError::Fetch(FetchError::WellKnown(_)) => Some(Phase::WellKnown),
+            FederationError::Fetch(FetchError::Tls(_)) => Some(Phase::Tls),
+            FederationError::Fetch(FetchError::Timeout(_)) => Some(Phase::HttpRequest),
+            FederationError::Fetch(FetchError::Network(_)) => Some(Phase::Connection),
+            FederationError::Fetch(FetchError::Http { .. }) => Some(Phase::HttpRequest),
+            FederationError::Fetch(FetchError::Json(_)) => Some(Phase::JsonDecode),
+            FederationError::Fetch(FetchError::InvalidDomain(_)) => Some(Phase::Dns),
+            FederationError::Fetch(FetchError::UnexpectedContentType(_)) => {
+                Some(Phase::HttpRequest)
+            }
+            FederationError::Dns(_) => Some(Phase::Dns),
+            FederationError::Ed25519(_) => Some(Phase::Signature),
+            FederationError::InvalidServerName(_) => Some(Phase::Dns),
+            FederationError::Internal(_) => None,
+        }
     }
 }

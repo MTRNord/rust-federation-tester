@@ -200,6 +200,11 @@ pub struct Error {
     pub error_code: ErrorCode,
 }
 
+#[tracing::instrument(
+    name = "generate_json_report",
+    skip(resolver, connection_pool, dns_cache, well_known_cache, version_cache),
+    fields(server_name = %server_name, use_cache = use_cache)
+)]
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,

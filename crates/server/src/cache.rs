@@ -35,6 +35,24 @@ where
     cache: Arc<DashMap<K, CacheEntry<V>>>,
     default_ttl: Duration,
     last_cleanup: Arc<std::sync::Mutex<Instant>>,
+    stats: Arc<CacheStatsInner>,
+}
+
+#[derive(Default, Debug)]
+struct CacheStatsInner {
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
+    insertions: std::sync::atomic::AtomicU64,
+    evictions: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub insertions: u64,
+    pub evictions: u64,
+    pub len: usize,
 }
 
 impl<K, V> ResponseCache<K, V>
@@ -47,6 +65,7 @@ where
             cache: Arc::new(DashMap::new()),
             default_ttl,
             last_cleanup: Arc::new(std::sync::Mutex::new(Instant::now())),
+            stats: Arc::new(CacheStatsInner::default()),
         }
     }
 
@@ -62,7 +81,19 @@ where
             drop(last_cleanup); // Release lock before cleanup
 
             // Perform cleanup
-            self.cache.retain(|_, entry| !entry.is_expired());
+            let mut evicted = 0u64;
+            self.cache.retain(|_, entry| {
+                let keep = !entry.is_expired();
+                if !keep {
+                    evicted += 1;
+                }
+                keep
+            });
+            if evicted > 0 {
+                self.stats
+                    .evictions
+                    .fetch_add(evicted, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -70,13 +101,23 @@ where
         // Perform lazy cleanup on get operations
         self.maybe_cleanup();
 
-        self.cache.get(key).and_then(|entry| {
+        let result = self.cache.get(key).and_then(|entry| {
             if entry.is_expired() {
                 None
             } else {
                 Some(entry.data().clone())
             }
-        })
+        });
+        if result.is_some() {
+            self.stats
+                .hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.stats
+                .misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        result
     }
 
     /// Get cached value only if explicitly requested and not expired
@@ -93,10 +134,16 @@ where
 
         self.cache
             .insert(key, CacheEntry::new(value, self.default_ttl));
+        self.stats
+            .insertions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn insert_with_ttl(&self, key: K, value: V, ttl: Duration) {
         self.cache.insert(key, CacheEntry::new(value, ttl));
+        self.stats
+            .insertions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn invalidate(&self, key: &K) {
@@ -113,6 +160,28 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+}
+
+impl<K, V> ResponseCache<K, V>
+where
+    K: Clone + Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.stats.hits.load(std::sync::atomic::Ordering::Relaxed),
+            misses: self.stats.misses.load(std::sync::atomic::Ordering::Relaxed),
+            insertions: self
+                .stats
+                .insertions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            evictions: self
+                .stats
+                .evictions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            len: self.cache.len(),
+        }
     }
 }
 

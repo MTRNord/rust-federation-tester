@@ -54,11 +54,21 @@ pub mod federation_tester_api {
         pub version_cache: VersionCache,
     }
 
-    pub(crate) fn router<P: ConnectionProvider>(state: AppState<P>) -> OpenApiRouter {
-        OpenApiRouter::new()
+    pub(crate) fn router<P: ConnectionProvider>(
+        state: AppState<P>,
+        debug_mode: bool,
+    ) -> OpenApiRouter {
+        use axum::routing::get;
+        let mut r = OpenApiRouter::new()
             .routes(routes!(get_report))
-            .routes(routes!(get_fed_ok))
-            .with_state(state)
+            .routes(routes!(get_fed_ok));
+
+        if debug_mode {
+            // Add non-documented debug route manually (not part of OpenAPI spec)
+            r = r.route("/debug/cache-stats", get(cache_stats));
+        }
+
+        r.with_state(state)
     }
 
     #[utoipa::path(
@@ -163,6 +173,44 @@ pub mod federation_tester_api {
                 )
             }
         }
+    }
+
+    // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
+    async fn cache_stats<P: ConnectionProvider>(
+        State(state): State<AppState<P>>,
+        axum::Extension(resources): axum::Extension<crate::AppResources>,
+        axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    ) -> impl IntoResponse {
+        use serde::Serialize;
+        if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
+            return (
+                hyper::StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({"error": "forbidden"})),
+            );
+        }
+
+        use crate::cache::CacheStats;
+        #[derive(Serialize)]
+        struct CombinedStats {
+            dns: CacheStats,
+            well_known: CacheStats,
+            version: CacheStats,
+            connection_pools: usize,
+        }
+        let body = CombinedStats {
+            dns: state.dns_cache.stats(),
+            well_known: state.well_known_cache.stats(),
+            version: state.version_cache.stats(),
+            connection_pools: state.connection_pool.len(),
+        };
+        let value = serde_json::to_value(body)
+            .unwrap_or_else(|_| serde_json::json!({"error": "serialization failure"}));
+        (hyper::StatusCode::OK, axum::Json(value))
+    }
+
+    fn is_allowed_ip(addr: &std::net::SocketAddr, nets: &[crate::config::IpNet]) -> bool {
+        let ip = addr.ip();
+        nets.iter().any(|net| net.contains(&ip))
     }
 }
 pub mod alert_api {
@@ -683,11 +731,12 @@ pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
     alert_state: AlertAppState,
     app_resources: AppResources,
+    debug_mode: bool,
 ) -> color_eyre::Result<()> {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest(
             "/api/federation",
-            federation_tester_api::router::<P>(app_state),
+            federation_tester_api::router::<P>(app_state, debug_mode),
         )
         .nest("/api/alerts", alert_api::router(alert_state))
         .layer(axum::Extension(app_resources))
@@ -700,9 +749,12 @@ pub async fn start_webserver<P: ConnectionProvider>(
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     info!("Server running on http://0.0.0.0:8080");
-    axum::serve(listener, router.into_make_service())
-        .await
-        .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?;
 
     Ok(())
 }

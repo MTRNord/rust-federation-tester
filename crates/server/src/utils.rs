@@ -62,6 +62,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
 }
 
 /// New typed version returning Result<Option<String>, WellKnownError>
+#[tracing::instrument(name = "lookup_server_well_known_typed", skip(data, resolver), fields(server_name = %server_name))]
 pub async fn lookup_server_well_known_typed<P: ConnectionProvider>(
     data: &mut Root,
     server_name: &str,
@@ -395,6 +396,7 @@ pub async fn query_server_version(
     Ok(())
 }
 
+#[tracing::instrument(name = "lookup_server", skip(data, resolver), fields(server_name = %server_name))]
 pub async fn lookup_server<P: ConnectionProvider>(
     data: &mut Root,
     server_name: &str,
@@ -1084,6 +1086,7 @@ pub async fn lookup_server_cached<P: ConnectionProvider>(
     Ok(())
 }
 
+#[tracing::instrument(name = "connection_check", skip(connection_pool, version_cache), fields(addr = %addr, server_name = %server_name, sni = %sni, use_cache = use_cache))]
 pub async fn connection_check(
     addr: &str,
     server_name: &str,

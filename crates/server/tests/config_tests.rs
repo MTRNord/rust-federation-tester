@@ -1,5 +1,5 @@
 use config::Config;
-use rust_federation_tester::config::{AppConfig, SmtpConfig, load_config};
+use rust_federation_tester::config::{AppConfig, ConfigError, SmtpConfig, load_config};
 use std::env;
 use std::fs;
 
@@ -108,7 +108,6 @@ smtp:
 }
 
 #[test]
-#[should_panic(expected = "configuration file")]
 fn test_load_config_missing_file() {
     // Save current directory and change to temp location to ensure config.yaml doesn't exist
     let original_dir = env::current_dir().unwrap();
@@ -121,10 +120,11 @@ fn test_load_config_missing_file() {
         fs::remove_file(&config_path).unwrap();
     }
 
-    // This should panic when config.yaml is not found
-    let _ = load_config();
+    // This should return an error when config.yaml is not found
+    let res = load_config();
+    assert!(matches!(res, Err(ConfigError::Build(_))));
 
-    // Restore original directory (won't reach here due to panic)
+    // Restore original directory
     env::set_current_dir(original_dir).unwrap();
 }
 
