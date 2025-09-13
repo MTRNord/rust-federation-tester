@@ -1,6 +1,6 @@
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
-use crate::error::WellKnownError;
+use crate::error::{FetchError, WellKnownError};
 use crate::response::{
     Certificate, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root, SRVData,
     Version, WellKnownResult,
@@ -305,94 +305,76 @@ pub async fn query_server_version(
     addr: &str,
     sni: &str,
     federation_address: &str,
-) -> color_eyre::eyre::Result<()> {
-    match fetch_url_custom_sni_host(
+) -> Result<(), FetchError> {
+    let response = fetch_url_custom_sni_host(
         "/_matrix/federation/v1/version",
         addr,
         sni,
         federation_address,
     )
-    .await
-    {
-        Ok(response) => {
-            let response = response.response.unwrap();
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response.into_body().collect().await?.to_bytes();
-            if status.is_success() {
-                if let Some(response_type) = headers.get("Content-Type") {
-                    if !response_type
-                        .to_str()
-                        .unwrap_or("")
-                        .contains("application/json")
-                    {
-                        error!(
-                            "Unexpected Content-Type: {}. Expected application/json",
-                            response_type.to_str().unwrap_or("")
-                        );
-                        data.error = Some(Error {
-                            error: "Unexpected Content-Type in server version response".to_string(),
-                            error_code: ErrorCode::UnexpectedContentType(
-                                response_type.to_str().unwrap_or("Unknown").to_string(),
-                            ),
-                        });
-                        data.checks.server_version_parses = false;
-                        return Ok(());
-                    }
-                } else {
-                    error!(
-                        "No Content-Type header in server version response: {:#?}\nBody: {}",
-                        headers,
-                        String::from_utf8_lossy(&body).to_string()
-                    );
-                    data.error = Some(Error {
-                        error: "No Content-Type header in server version response".to_string(),
-                        error_code: ErrorCode::MissingContentType,
-                    });
-                    data.checks.server_version_parses = false;
-                    return Ok(());
-                }
+    .await?;
 
-                match serde_json::from_slice::<VersionResp>(&body) {
-                    Ok(json) => {
-                        data.version = json.server;
-                    }
-                    Err(e) => {
-                        error!(
-                            "Error parsing server version response: {e:#?}\nBody: {}",
-                            String::from_utf8_lossy(&body)
-                        );
-                        data.error = Some(Error {
-                            error: "Failed to parse server version response".to_string(),
-                            error_code: ErrorCode::InvalidJson(e.to_string()),
-                        });
-                        data.checks.server_version_parses = false;
-                        return Ok(());
-                    }
-                }
-            } else {
-                error!("Error querying server version: {}", status);
-                data.error = Some(Error {
-                    error: format!("Error querying server version: {status}"),
-                    error_code: ErrorCode::NotOk(status.to_string()),
-                });
-                data.checks.server_version_parses = false;
-                return Ok(());
-            }
-        }
-        Err(e) => {
-            error!("Error fetching server version: {e:#?}");
+    let response = match response.response {
+        Some(r) => r,
+        None => {
             data.error = Some(Error {
-                error: format!("Error fetching server version: {e:#?}"),
-                error_code: ErrorCode::Unknown,
+                error: "No response received from server version endpoint".to_string(),
+                error_code: ErrorCode::NoResponse,
             });
             data.checks.server_version_parses = false;
             return Ok(());
         }
+    };
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| FetchError::Network(e.to_string()))?
+        .to_bytes();
+
+    if !status.is_success() {
+        data.error = Some(Error {
+            error: format!("Error querying server version: {status}"),
+            error_code: ErrorCode::NotOk(status.to_string()),
+        });
+        data.checks.server_version_parses = false;
+        return Ok(());
     }
 
-    data.checks.server_version_parses = true;
+    if let Some(ct) = headers.get("Content-Type") {
+        let ct_val = ct.to_str().unwrap_or("");
+        if !ct_val.contains("application/json") {
+            data.error = Some(Error {
+                error: "Unexpected Content-Type in server version response".to_string(),
+                error_code: ErrorCode::UnexpectedContentType(ct_val.to_string()),
+            });
+            data.checks.server_version_parses = false;
+            return Ok(());
+        }
+    } else {
+        data.error = Some(Error {
+            error: "No Content-Type header in server version response".to_string(),
+            error_code: ErrorCode::MissingContentType,
+        });
+        data.checks.server_version_parses = false;
+        return Ok(());
+    }
 
+    match serde_json::from_slice::<VersionResp>(&body) {
+        Ok(json) => {
+            data.version = json.server;
+            data.checks.server_version_parses = true;
+        }
+        Err(e) => {
+            data.error = Some(Error {
+                error: "Failed to parse server version response".to_string(),
+                error_code: ErrorCode::InvalidJson(e.to_string()),
+            });
+            data.checks.server_version_parses = false;
+        }
+    }
     Ok(())
 }
 
@@ -750,12 +732,13 @@ struct FullResponse {
     certificates: Vec<Certificate>,
 }
 
+#[tracing::instrument(name = "fetch_url_custom_sni_host", level = "debug", skip(path))]
 async fn fetch_url_custom_sni_host(
     path: &str,
     addr: &str,
     host: &str,
     sni: &str,
-) -> color_eyre::eyre::Result<FullResponse> {
+) -> Result<FullResponse, FetchError> {
     let sni_host = sni.split(':').next().unwrap();
     let host_host = host.split(':').next().unwrap();
     debug!(
@@ -765,7 +748,9 @@ async fn fetch_url_custom_sni_host(
         Duration::from_secs(NETWORK_TIMEOUT_SECS),
         TcpStream::connect(addr),
     )
-    .await??;
+    .await
+    .map_err(|_| FetchError::Timeout(Duration::from_secs(NETWORK_TIMEOUT_SECS)))
+    .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
     // Create TLS configuration
     let mut root_cert_store = RootCertStore::empty();
@@ -777,9 +762,12 @@ async fn fetch_url_custom_sni_host(
 
     let connector = TlsConnector::from(std::sync::Arc::new(config));
     let domain = ServerName::try_from(sni_host.to_string())
-        .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
+        .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
 
-    let tls_stream = connector.connect(domain, stream).await?;
+    let tls_stream = connector
+        .connect(domain, stream)
+        .await
+        .map_err(|e| FetchError::Tls(e.to_string()))?;
 
     // Extract connection info from the TLS stream
     let (_io, connection_info) = tls_stream.get_ref();
@@ -811,7 +799,9 @@ async fn fetch_url_custom_sni_host(
         certificates,
     };
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(stream)
+        .await
+        .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
             error!("Connection failed: {err:#?}");
@@ -822,11 +812,14 @@ async fn fetch_url_custom_sni_host(
         .uri(path)
         .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
         .header(hyper::header::HOST, host_host)
-        .body(Empty::<Bytes>::new())?;
+        .body(Empty::<Bytes>::new())
+        .map_err(|e| FetchError::Network(e.to_string()))?;
 
-    let res = sender.send_request(req).await?;
+    let res = sender
+        .send_request(req)
+        .await
+        .map_err(|e| FetchError::Network(e.to_string()))?;
     response.response = Some(res);
-
     Ok(response)
 }
 
@@ -848,21 +841,32 @@ async fn fetch_keys(
         timeout_duration,
         fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni),
     )
-    .await??;
+    .await
+    .map_err(|_| color_eyre::eyre::eyre!("Timeout while fetching keys"))?
+    .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
 
     let http_response = response.response.unwrap();
 
     if !http_response.status().is_success() {
         return Err(color_eyre::eyre::eyre!(
-            "Non-200 response {} from remote server",
-            http_response.status()
+            FetchError::Http {
+                status: http_response.status(),
+                context: "fetch_keys".into()
+            }
+            .to_string()
         ));
     }
-    let body = http_response.into_body().collect().await?.to_bytes();
-    let keys_string = String::from_utf8(body.to_vec())
-        .map_err(|_| color_eyre::eyre::eyre!("Failed to parse response body as UTF-8"))?;
+    let body = http_response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!(FetchError::Network(e.to_string()).to_string()))?
+        .to_bytes();
+    let keys_string = String::from_utf8(body.to_vec()).map_err(|_| {
+        color_eyre::eyre::eyre!(FetchError::UnexpectedContentType("non-utf8".into()).to_string())
+    })?;
     let keys: Keys = serde_json::from_str(&keys_string)
-        .map_err(|_| color_eyre::eyre::eyre!("Failed to parse keys response as JSON"))?;
+        .map_err(|_| color_eyre::eyre::eyre!(FetchError::Json("keys parse".into()).to_string()))?;
 
     Ok(FullKeysResponse {
         keys,
@@ -1207,8 +1211,7 @@ async fn query_server_version_pooled(
     connection_pool: &ConnectionPool,
 ) -> color_eyre::eyre::Result<Option<(Version, bool)>> {
     let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
-
-    let response = timeout(
+    let response_result = timeout(
         timeout_duration,
         fetch_url_pooled_simple(
             "/_matrix/federation/v1/version",
@@ -1218,32 +1221,36 @@ async fn query_server_version_pooled(
             connection_pool,
         ),
     )
-    .await??;
+    .await
+    .map_err(|_| color_eyre::eyre::eyre!(FetchError::Timeout(timeout_duration).to_string()))?; // timeout layer
 
-    let http_response = response.unwrap();
+    let response_option = response_result.map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?; // FetchError -> eyre
+    let http_response = match response_option {
+        Some(r) => r,
+        None => return Ok(Some((Version::default(), false))),
+    };
     let status = http_response.status();
     let headers = http_response.headers().clone();
-    let body = http_response.into_body().collect().await?.to_bytes();
+    let body = http_response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!(FetchError::Network(e.to_string()).to_string()))?
+        .to_bytes();
 
-    if status.is_success() {
-        if let Some(response_type) = headers.get("Content-Type") {
-            if !response_type
-                .to_str()
-                .unwrap_or("")
-                .contains("application/json")
-            {
-                return Ok(Some((Version::default(), false)));
-            }
-        } else {
+    if !status.is_success() {
+        return Ok(Some((Version::default(), false)));
+    }
+    if let Some(ct) = headers.get("Content-Type") {
+        if !ct.to_str().unwrap_or("").contains("application/json") {
             return Ok(Some((Version::default(), false)));
         }
-
-        match serde_json::from_slice::<VersionResp>(&body) {
-            Ok(json) => Ok(Some((json.server, true))),
-            Err(_) => Ok(Some((Version::default(), false))),
-        }
     } else {
-        Ok(Some((Version::default(), false)))
+        return Ok(Some((Version::default(), false)));
+    }
+    match serde_json::from_slice::<VersionResp>(&body) {
+        Ok(v) => Ok(Some((v.server, true))),
+        Err(_) => Ok(Some((Version::default(), false))),
     }
 }
 
@@ -1254,7 +1261,7 @@ async fn fetch_url_pooled_simple(
     host: &str,
     sni: &str,
     connection_pool: &ConnectionPool,
-) -> color_eyre::eyre::Result<Option<hyper::Response<Incoming>>> {
+) -> Result<Option<hyper::Response<Incoming>>, FetchError> {
     let sni_host = sni.split(':').next().unwrap();
     let host_host = host.split(':').next().unwrap();
 
@@ -1269,23 +1276,20 @@ async fn fetch_url_pooled_simple(
                 .uri(path)
                 .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
                 .header(hyper::header::HOST, host_host)
-                .body(Empty::<Bytes>::new())?;
-
+                .body(Empty::<Bytes>::new())
+                .map_err(|e| FetchError::Network(e.to_string()))?;
             match sender.send_request(req).await {
                 Ok(response) => {
-                    debug!("Successfully used pooled connection for {path}");
-                    // Return the connection to the pool
                     connection_pool.return_connection(addr, sni, sender).await;
                     return Ok(Some(response));
                 }
                 Err(e) => {
-                    debug!("Pooled connection failed for {path}: {e}, creating fresh connection");
-                    // Don't return the failed connection to the pool
+                    debug!("Pooled connection send failed, fallback: {e:#?}");
                 }
             }
         }
         Err(e) => {
-            debug!("Failed to get pooled connection for {path}: {e}, creating fresh connection");
+            debug!("Pool get_connection error ({e:#?}), falling back to fresh connection");
         }
     }
 
@@ -1295,7 +1299,9 @@ async fn fetch_url_pooled_simple(
         Duration::from_secs(NETWORK_TIMEOUT_SECS),
         TcpStream::connect(addr),
     )
-    .await??;
+    .await
+    .map_err(|_| FetchError::Timeout(Duration::from_secs(NETWORK_TIMEOUT_SECS)))
+    .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
     // Create TLS configuration
     let mut root_cert_store = RootCertStore::empty();
@@ -1307,12 +1313,17 @@ async fn fetch_url_pooled_simple(
 
     let connector = TlsConnector::from(std::sync::Arc::new(config));
     let domain = ServerName::try_from(sni_host.to_string())
-        .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
+        .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
 
-    let tls_stream = connector.connect(domain, stream).await?;
+    let tls_stream = connector
+        .connect(domain, stream)
+        .await
+        .map_err(|e| FetchError::Tls(e.to_string()))?;
     let io = TokioIo::new(tls_stream);
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| FetchError::Network(e.to_string()))?;
 
     // Spawn connection handler
     tokio::task::spawn(async move {
@@ -1326,9 +1337,13 @@ async fn fetch_url_pooled_simple(
         .uri(path)
         .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
         .header(hyper::header::HOST, host_host)
-        .body(Empty::<Bytes>::new())?;
+        .body(Empty::<Bytes>::new())
+        .map_err(|e| FetchError::Network(e.to_string()))?;
 
-    let response = sender.send_request(req).await?;
+    let response = sender
+        .send_request(req)
+        .await
+        .map_err(|e| FetchError::Network(e.to_string()))?;
 
     // Store the connection in the pool for reuse
     connection_pool.return_connection(addr, sni, sender).await;

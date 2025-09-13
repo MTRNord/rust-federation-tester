@@ -1,3 +1,4 @@
+use crate::response::{Error as ApiError, ErrorCode};
 use hyper::StatusCode;
 use std::time::Duration;
 use thiserror::Error;
@@ -93,6 +94,49 @@ impl FederationError {
             FederationError::Ed25519(_) => Some(Phase::Signature),
             FederationError::InvalidServerName(_) => Some(Phase::Dns),
             FederationError::Internal(_) => None,
+        }
+    }
+}
+
+// Adapter: map internal FetchError variants to existing outward-facing API Error struct.
+// This is not yet wired globally; call sites can opt-in for late conversion.
+impl From<FetchError> for ApiError {
+    fn from(fe: FetchError) -> Self {
+        match &fe {
+            FetchError::Timeout(_) => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::Timeout,
+            },
+            FetchError::Network(_) => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::Unknown,
+            },
+            FetchError::Tls(_) => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::UnexpectedContentType("tls".into()),
+            },
+            FetchError::Http { status, .. } => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::NotOk(status.to_string()),
+            },
+            FetchError::Json(e) => ApiError {
+                error: e.clone(),
+                error_code: ErrorCode::InvalidJson("json".into()),
+            },
+            FetchError::InvalidDomain(_) => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::InvalidServerName(
+                    crate::response::InvalidServerNameErrorCode::NotValidDNS,
+                ),
+            },
+            FetchError::UnexpectedContentType(ct) => ApiError {
+                error: fe.to_string(),
+                error_code: ErrorCode::UnexpectedContentType(ct.clone()),
+            },
+            FetchError::WellKnown(wke) => ApiError {
+                error: wke.to_string(),
+                error_code: ErrorCode::Unknown,
+            },
         }
     }
 }
