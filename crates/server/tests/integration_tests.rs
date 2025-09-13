@@ -2,7 +2,7 @@ use hickory_resolver::Resolver;
 use rust_federation_tester::cache::{DnsCache, VersionCache, WellKnownCache};
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::response::generate_json_report;
-use rust_federation_tester::utils::parse_and_validate_server_name;
+use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
 
 #[tokio::test]
 async fn test_parse_and_validate_server_name() {

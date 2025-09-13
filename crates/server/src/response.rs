@@ -1,8 +1,7 @@
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
-use crate::utils::{
-    connection_check, lookup_server, lookup_server_well_known, parse_and_validate_server_name,
-};
+use crate::utils::{connection_check, lookup_server, lookup_server_well_known};
+use crate::validation::server_name::parse_and_validate_server_name;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use hickory_resolver::Resolver;

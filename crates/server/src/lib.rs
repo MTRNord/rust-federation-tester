@@ -18,6 +18,7 @@ pub mod entity;
 pub mod recurring_alerts;
 pub mod response;
 pub mod utils;
+pub mod validation;
 
 #[derive(Clone)]
 pub struct AppResources {
