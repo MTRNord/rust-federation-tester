@@ -149,6 +149,7 @@ The Federation Tester Team"#
                                             .to(email.parse().unwrap())
                                             .subject(subject)
                                             .header(ContentType::TEXT_PLAIN)
+                                            .header(lettre::message::header::MIME_VERSION_1_0)
                                             .header(UnsubscribeHeader::from(unsubscribe_url))
                                             .message_id(None)
                                             .body(body)

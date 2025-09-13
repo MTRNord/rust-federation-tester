@@ -341,6 +341,7 @@ The Federation Tester Team"#,
             .to(payload.email.parse().unwrap())
             .subject("Please verify your email for Federation Alerts")
             .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .header(lettre::message::header::MIME_VERSION_1_0)
             .message_id(None)
             .body(email_body)
             .unwrap();
@@ -549,6 +550,7 @@ The Federation Tester Team"#
             .to(payload.email.parse().unwrap())
             .subject("Verify to view your Federation Alerts")
             .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .header(lettre::message::header::MIME_VERSION_1_0)
             .message_id(None)
             .body(email_body)
             .unwrap();
@@ -636,6 +638,8 @@ The Federation Tester Team"#,
                     .to(a.email.parse().unwrap())
                     .subject("Verify to delete your Federation Alert")
                     .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                    .header(lettre::message::header::MIME_VERSION_1_0)
+                    .message_id(None)
                     .body(email_body)
                     .unwrap();
                 if let Err(e) = resources.mailer.send(email).await {
