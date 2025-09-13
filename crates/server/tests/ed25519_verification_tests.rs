@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
-use rust_federation_tester::federation::test_verify_keys;
+use rust_federation_tester::federation::verify_keys;
 use rust_federation_tester::response::{Ed25519VerifyKey, Keys};
 use serde_json::json;
 
@@ -63,7 +63,7 @@ fn test_ed25519_verification_invalid_signature() {
     };
 
     let (_future_valid, has_ed25519, all_ok, ed_checks, _verify_keys, matching_server) =
-        test_verify_keys(server_name, &keys, &keys_json);
+        verify_keys(server_name, &keys, &keys_json);
 
     assert!(has_ed25519, "Should detect ed25519 key present");
     assert!(!all_ok, "Random signature must NOT verify");

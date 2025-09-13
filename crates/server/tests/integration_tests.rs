@@ -1,5 +1,4 @@
 use hickory_resolver::Resolver;
-use rust_federation_tester::cache::{DnsCache, VersionCache, WellKnownCache};
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::response::generate_json_report;
 use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
@@ -29,30 +28,6 @@ async fn test_parse_and_validate_server_name() {
 }
 
 #[tokio::test]
-async fn test_cache_functionality() {
-    let dns_cache = DnsCache::default();
-    let version_cache = VersionCache::default();
-
-    // Test DNS cache
-    let test_addrs = vec!["192.168.1.1:8448".to_string()];
-    dns_cache.insert("test.example.com".to_string(), test_addrs.clone());
-
-    let cached = dns_cache.get(&"test.example.com".to_string());
-    assert_eq!(cached, Some(test_addrs));
-
-    // Test cache miss
-    let cached = dns_cache.get(&"nonexistent.example.com".to_string());
-    assert_eq!(cached, None);
-
-    // Test version cache
-    let test_version = "{\"name\":\"test\",\"version\":\"1.0\"}".to_string();
-    version_cache.insert("192.168.1.1:8448".to_string(), test_version.clone());
-
-    let cached_version = version_cache.get(&"192.168.1.1:8448".to_string());
-    assert_eq!(cached_version, Some(test_version));
-}
-
-#[tokio::test]
 async fn test_connection_pool() {
     let pool = ConnectionPool::new(2, 5);
 
@@ -64,25 +39,13 @@ async fn test_connection_pool() {
 }
 
 #[tokio::test]
-async fn test_generate_report_with_caching() {
+async fn test_generate_report() {
     let resolver = Resolver::builder_tokio().unwrap().build();
     let connection_pool = ConnectionPool::default();
-    let dns_cache = DnsCache::default();
-    let well_known_cache = WellKnownCache::default();
-    let version_cache = VersionCache::default();
 
     // This test would ideally test against a known working Matrix server
     // For now, we just verify the function can be called without panicking
-    let result = generate_json_report(
-        "invalid.example.com",
-        &resolver,
-        &connection_pool,
-        &dns_cache,
-        &well_known_cache,
-        &version_cache,
-        false, // don't use cache for this test
-    )
-    .await;
+    let result = generate_json_report("invalid.example.com", &resolver, &connection_pool).await;
 
     // Function should complete but report federation failure
     assert!(result.is_ok());
@@ -97,58 +60,12 @@ async fn test_generate_report_with_caching() {
 }
 
 #[tokio::test]
-async fn test_no_cache_parameter() {
-    let resolver = Resolver::builder_tokio().unwrap().build();
-    let connection_pool = ConnectionPool::default();
-    let dns_cache = DnsCache::default();
-    let well_known_cache = WellKnownCache::default();
-    let version_cache = VersionCache::default();
-
-    // Test with cache disabled
-    let result1 = generate_json_report(
-        "invalid.example.com",
-        &resolver,
-        &connection_pool,
-        &dns_cache,
-        &well_known_cache,
-        &version_cache,
-        false, // no cache
-    )
-    .await;
-
-    // Test with cache enabled
-    let result2 = generate_json_report(
-        "invalid.example.com",
-        &resolver,
-        &connection_pool,
-        &dns_cache,
-        &well_known_cache,
-        &version_cache,
-        true, // use cache
-    )
-    .await;
-
-    // Both should complete but fail federation check
-    assert!(result1.is_ok());
-    assert!(result2.is_ok());
-
-    // For now, just verify they complete successfully - federation logic needs investigation
-    // if let (Ok(report1), Ok(report2)) = (result1, result2) {
-    //     assert!(!report1.federation_ok);
-    //     assert!(!report2.federation_ok);
-    // }
-}
-
-#[tokio::test]
 async fn test_concurrent_requests() {
     use std::sync::Arc;
     use tokio::task::JoinSet;
 
     let resolver = Arc::new(Resolver::builder_tokio().unwrap().build());
     let connection_pool = Arc::new(ConnectionPool::default());
-    let dns_cache = Arc::new(DnsCache::default());
-    let well_known_cache = Arc::new(WellKnownCache::default());
-    let version_cache = Arc::new(VersionCache::default());
 
     let mut join_set = JoinSet::new();
 
@@ -156,22 +73,10 @@ async fn test_concurrent_requests() {
     for i in 0..5 {
         let resolver = resolver.clone();
         let connection_pool = connection_pool.clone();
-        let dns_cache = dns_cache.clone();
-        let well_known_cache = well_known_cache.clone();
-        let version_cache = version_cache.clone();
 
         join_set.spawn(async move {
             let server_name = format!("invalid{}.example.com", i);
-            let result = generate_json_report(
-                &server_name,
-                &*resolver,
-                &*connection_pool,
-                &*dns_cache,
-                &*well_known_cache,
-                &*version_cache,
-                true,
-            )
-            .await;
+            let result = generate_json_report(&server_name, &*resolver, &*connection_pool).await;
 
             // Just verify the function completes
             result.is_ok()

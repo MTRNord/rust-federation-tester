@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
-use rust_federation_tester::federation::{extract_certificate_info, test_verify_keys};
+use rust_federation_tester::federation::{extract_certificate_info, verify_keys};
 use rust_federation_tester::response::{Certificate, Ed25519VerifyKey, Keys};
 use rustls_pki_types::CertificateDer;
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ fn test_verify_keys_server_name_mismatch() {
 
     let keys_json = serde_json::to_string(&keys).unwrap();
     let (future_valid, has_ed25519, all_ok, ed_checks, verify_keys, matching_server) =
-        test_verify_keys("example.org", &keys, &keys_json);
+        verify_keys("example.org", &keys, &keys_json);
 
     assert!(future_valid);
     assert!(!has_ed25519);
@@ -40,7 +40,7 @@ fn test_verify_keys_expired_timestamp() {
 
     let keys_json = serde_json::to_string(&keys).unwrap();
     let (future_valid, has_ed25519, all_ok, ed_checks, verify_keys, matching_server) =
-        test_verify_keys("example.org", &keys, &keys_json);
+        verify_keys("example.org", &keys, &keys_json);
 
     assert!(!future_valid); // Expired timestamp
     assert!(!has_ed25519);
@@ -52,8 +52,8 @@ fn test_verify_keys_expired_timestamp() {
 
 #[test]
 fn test_verify_keys_invalid_key_length() {
-    let mut verify_keys = BTreeMap::new();
-    verify_keys.insert(
+    let mut verify_keys_map = BTreeMap::new();
+    verify_keys_map.insert(
         "ed25519:short".to_string(),
         Ed25519VerifyKey {
             key: BASE64_STANDARD_NO_PAD.encode(b"short"), // Too short for ed25519
@@ -64,14 +64,14 @@ fn test_verify_keys_invalid_key_length() {
     let keys = Keys {
         server_name: "example.org".to_string(),
         valid_until_ts: OffsetDateTime::now_utc().unix_timestamp() + 3600,
-        verify_keys,
+        verify_keys: verify_keys_map,
         signatures: BTreeMap::new(),
         old_verify_keys: None,
     };
 
     let keys_json = serde_json::to_string(&keys).unwrap();
     let (future_valid, has_ed25519, all_ok, ed_checks, verify_keys_out, matching_server) =
-        test_verify_keys("example.org", &keys, &keys_json);
+        verify_keys("example.org", &keys, &keys_json);
 
     assert!(future_valid);
     assert!(has_ed25519); // Has ed25519 key (even if invalid)
@@ -85,8 +85,8 @@ fn test_verify_keys_invalid_key_length() {
 
 #[test]
 fn test_verify_keys_non_ed25519_algorithm() {
-    let mut verify_keys = BTreeMap::new();
-    verify_keys.insert(
+    let mut verify_keys_map = BTreeMap::new();
+    verify_keys_map.insert(
         "rsa:key1".to_string(),
         Ed25519VerifyKey {
             key: "some_key".to_string(),
@@ -97,14 +97,14 @@ fn test_verify_keys_non_ed25519_algorithm() {
     let keys = Keys {
         server_name: "example.org".to_string(),
         valid_until_ts: OffsetDateTime::now_utc().unix_timestamp() + 3600,
-        verify_keys,
+        verify_keys: verify_keys_map,
         signatures: BTreeMap::new(),
         old_verify_keys: None,
     };
 
     let keys_json = serde_json::to_string(&keys).unwrap();
     let (future_valid, has_ed25519, all_ok, ed_checks, verify_keys_out, matching_server) =
-        test_verify_keys("example.org", &keys, &keys_json);
+        verify_keys("example.org", &keys, &keys_json);
 
     assert!(future_valid);
     assert!(!has_ed25519); // No ed25519 keys
@@ -116,8 +116,8 @@ fn test_verify_keys_non_ed25519_algorithm() {
 
 #[test]
 fn test_verify_keys_malformed_base64() {
-    let mut verify_keys = BTreeMap::new();
-    verify_keys.insert(
+    let mut verify_keys_map = BTreeMap::new();
+    verify_keys_map.insert(
         "ed25519:malformed".to_string(),
         Ed25519VerifyKey {
             key: "invalid_base64!".to_string(), // Malformed base64
@@ -128,14 +128,14 @@ fn test_verify_keys_malformed_base64() {
     let keys = Keys {
         server_name: "example.org".to_string(),
         valid_until_ts: OffsetDateTime::now_utc().unix_timestamp() + 3600,
-        verify_keys,
+        verify_keys: verify_keys_map,
         signatures: BTreeMap::new(),
         old_verify_keys: None,
     };
 
     let keys_json = serde_json::to_string(&keys).unwrap();
     let (future_valid, has_ed25519, all_ok, ed_checks, verify_keys_out, matching_server) =
-        test_verify_keys("example.org", &keys, &keys_json);
+        verify_keys("example.org", &keys, &keys_json);
 
     assert!(future_valid);
     assert!(!has_ed25519); // Base64 decode fails, so no ed25519 key detected

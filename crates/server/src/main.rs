@@ -4,7 +4,6 @@ use rust_federation_tester::AppResources;
 use rust_federation_tester::api::alert_api::AlertAppState;
 use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
-use rust_federation_tester::cache::{DnsCache, VersionCache, WellKnownCache};
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::recurring_alerts::AlertTaskManager;
@@ -108,17 +107,11 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Set up resolver and caches
     let resolver = Arc::new(Resolver::builder_tokio()?.build());
     let connection_pool = ConnectionPool::default();
-    let dns_cache = DnsCache::default();
-    let well_known_cache = WellKnownCache::default();
-    let version_cache = VersionCache::default();
     let task_manager = Arc::new(AlertTaskManager::new());
 
     let state = AppState {
         resolver,
         connection_pool: connection_pool.clone(),
-        dns_cache,
-        well_known_cache,
-        version_cache,
     };
 
     let alert_state = AlertAppState {
@@ -144,46 +137,27 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let task_manager_for_checks = task_manager.clone();
     let resolver_for_checks = state.resolver.clone();
     let connection_pool_for_checks = state.connection_pool.clone();
-    let dns_cache_for_checks = state.dns_cache.clone();
-    let well_known_cache_for_checks = state.well_known_cache.clone();
-    let version_cache_for_checks = state.version_cache.clone();
     tokio::spawn(async move {
         recurring_alert_checks(
             resources_for_checks.into(),
             task_manager_for_checks,
             resolver_for_checks,
             connection_pool_for_checks,
-            dns_cache_for_checks,
-            well_known_cache_for_checks,
-            version_cache_for_checks,
         )
         .await;
     });
 
     // If debug mode, spawn periodic cache stats logging task
     if debug_mode {
-        let dns_l = state.dns_cache.clone();
-        let wk_l = state.well_known_cache.clone();
-        let ver_l = state.version_cache.clone();
         let pool_l = state.connection_pool.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                let d = dns_l.stats();
-                let w = wk_l.stats();
-                let v = ver_l.stats();
                 tracing::debug!(
-                    target = "cache_stats",
-                    dns_hits = d.hits,
-                    dns_misses = d.misses,
-                    dns_evictions = d.evictions,
-                    wk_hits = w.hits,
-                    wk_misses = w.misses,
-                    ver_hits = v.hits,
-                    ver_misses = v.misses,
+                    target = "stats",
                     connection_pools = pool_l.len(),
-                    "Periodic cache stats"
+                    "Periodic stats"
                 );
             }
         });

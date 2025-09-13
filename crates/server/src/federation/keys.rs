@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use serde_json;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, timeout};
-use tracing::{debug, error}; // needed for collect()
+use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
 pub struct FullKeysResponse {
@@ -69,7 +69,7 @@ pub async fn fetch_keys(
     })
 }
 
-pub(crate) fn verify_keys(
+pub fn verify_keys(
     server_name: &str,
     keys: &Keys,
     keys_string: &str,
@@ -200,20 +200,4 @@ fn check_verify_keys(
         all_ed25519checks_ok,
         ed25519_verify_keys,
     )
-}
-
-/// Public thin wrapper retained for tests.
-pub fn test_verify_keys(
-    server_name: &str,
-    keys: &Keys,
-    keys_string: &str,
-) -> (
-    bool,
-    bool,
-    bool,
-    BTreeMap<String, Ed25519Check>,
-    BTreeMap<String, String>,
-    bool,
-) {
-    verify_keys(server_name, keys, keys_string)
 }

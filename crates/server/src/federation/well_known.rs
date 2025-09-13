@@ -1,6 +1,5 @@
-use crate::error::WellKnownError;
 use crate::federation::network::fetch_url_custom_sni_host;
-use crate::response::{Error, ErrorCode, Root, WellKnownResult};
+use crate::response::{Error, ErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;
 use ::time as time_crate;
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -12,17 +11,27 @@ use url::Url;
 
 pub const NETWORK_TIMEOUT_SECS: u64 = 3;
 
-#[tracing::instrument(name = "lookup_server_well_known", skip(data, resolver), fields(server_name = %server_name))]
+#[derive(Debug, Clone)]
+pub struct WellKnownPhaseResult {
+    pub well_known_result: Vec<(String, WellKnownResult)>,
+    pub found_server: Option<String>,
+    pub error: Option<Error>,
+}
+
+#[tracing::instrument(name = "lookup_server_well_known", skip(resolver), fields(server_name = %server_name))]
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
-    data: &mut Root,
     server_name: &str,
     resolver: &Resolver<P>,
-) -> Result<Option<String>, WellKnownError> {
+) -> WellKnownPhaseResult {
     if server_name.contains(':') {
         info!(
-            "[lookup_server_well_known] Skipping well-known lookup for {server_name} as it contains a port"
+            "[check_well_known_pure] Skipping well-known lookup for {server_name} as it contains a port"
         );
-        return Ok(None);
+        return WellKnownPhaseResult {
+            well_known_result: vec![],
+            found_server: None,
+            error: None,
+        };
     }
 
     let server_lookup = format!("{server_name}.");
@@ -48,14 +57,18 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 
     if addrs.is_empty() {
-        data.error = Some(Error {
-            error: format!("No A/AAAA-Records for {server_name} found"),
-            error_code: ErrorCode::NoRecordsFound,
-        });
-        return Err(WellKnownError::NoAddresses);
+        return WellKnownPhaseResult {
+            well_known_result: vec![],
+            found_server: None,
+            error: Some(Error {
+                error: format!("No A/AAAA-Records for {server_name} found"),
+                error_code: ErrorCode::NoRecordsFound,
+            }),
+        };
     }
 
     let mut found_server: Option<String> = None;
+    let mut well_known_result: Vec<(String, WellKnownResult)> = vec![];
     let mut futures = FuturesUnordered::new();
     for addr in &addrs {
         let addr = addr.clone();
@@ -70,11 +83,12 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 
     while let Some((addr, result, server_candidate)) = futures.next().await {
-        data.well_known_result.insert(addr, result);
+        well_known_result.push((addr.clone(), result.clone()));
         if let Some(server_str) = server_candidate
             && found_server.is_none()
         {
-            let mut temp_data = Root::default();
+            // Only accept if parse_and_validate_server_name would not set error
+            let mut temp_data = crate::response::Root::default();
             parse_and_validate_server_name(&mut temp_data, &server_str);
             if temp_data.error.is_none() {
                 found_server = Some(server_str);
@@ -83,9 +97,13 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         }
     }
     while let Some((addr, result, _)) = futures.next().await {
-        data.well_known_result.insert(addr, result);
+        well_known_result.push((addr, result));
     }
-    Ok(found_server)
+    WellKnownPhaseResult {
+        well_known_result,
+        found_server,
+        error: None,
+    }
 }
 
 async fn fetch_url_with_redirects(
@@ -99,7 +117,8 @@ async fn fetch_url_with_redirects(
     WellKnownResult,
     Option<String>,
 ) {
-    use http_body_util::BodyExt; // for collect
+    use http_body_util::BodyExt;
+
     let mut redirects = 0;
     let mut current_addr = addr.to_string();
     let mut current_host = host.to_string();
@@ -206,7 +225,7 @@ async fn fetch_url_with_redirects(
             }
             Err(e) => {
                 result.error = Some(Error {
-                    error: format!("Timeout while fetching well-known URL: {e:#?}"),
+                    error: format!("Timeout while fetching well-known URL: {e:?}"),
                     error_code: ErrorCode::Timeout,
                 });
                 return (None, result, None);

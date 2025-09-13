@@ -19,7 +19,6 @@ const ALERTS_TAG: &str = "Alerts API";
 pub mod federation_tester_api {
     use crate::{
         api::FEDERATION_TAG,
-        cache::{DnsCache, VersionCache, WellKnownCache},
         connection_pool::ConnectionPool,
         response::{Root, generate_json_report},
     };
@@ -40,18 +39,12 @@ pub mod federation_tester_api {
     #[derive(Deserialize, IntoParams)]
     pub struct ApiParams {
         pub server_name: String,
-        /// Skip cache and force fresh requests - useful for debugging
-        #[serde(default)]
-        pub no_cache: bool,
     }
 
     #[derive(Clone)]
     pub struct AppState<P: ConnectionProvider> {
         pub resolver: Arc<Resolver<P>>,
         pub connection_pool: ConnectionPool,
-        pub dns_cache: DnsCache,
-        pub well_known_cache: WellKnownCache,
-        pub version_cache: VersionCache,
     }
 
     pub(crate) fn router<P: ConnectionProvider>(
@@ -98,10 +91,6 @@ pub mod federation_tester_api {
             &params.server_name.to_lowercase(),
             state.resolver.as_ref(),
             &state.connection_pool,
-            &state.dns_cache,
-            &state.well_known_cache,
-            &state.version_cache,
-            !params.no_cache,
         )
         .await
         {
@@ -150,10 +139,6 @@ pub mod federation_tester_api {
             &params.server_name.to_lowercase(),
             state.resolver.as_ref(),
             &state.connection_pool,
-            &state.dns_cache,
-            &state.well_known_cache,
-            &state.version_cache,
-            !params.no_cache,
         )
         .await
         {
@@ -189,18 +174,11 @@ pub mod federation_tester_api {
             );
         }
 
-        use crate::cache::CacheStats;
         #[derive(Serialize)]
         struct CombinedStats {
-            dns: CacheStats,
-            well_known: CacheStats,
-            version: CacheStats,
             connection_pools: usize,
         }
         let body = CombinedStats {
-            dns: state.dns_cache.stats(),
-            well_known: state.well_known_cache.stats(),
-            version: state.version_cache.stats(),
             connection_pools: state.connection_pool.len(),
         };
         let value = serde_json::to_value(body)

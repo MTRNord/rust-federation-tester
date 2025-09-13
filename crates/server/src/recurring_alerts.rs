@@ -1,6 +1,5 @@
 use crate::AppResources;
 use crate::api::alert_api::MagicClaims;
-use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
 use crate::entity::alert;
 use crate::response::generate_json_report;
@@ -74,9 +73,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
     task_manager: Arc<AlertTaskManager>,
     resolver: Arc<Resolver<P>>,
     connection_pool: ConnectionPool,
-    dns_cache: DnsCache,
-    well_known_cache: WellKnownCache,
-    version_cache: VersionCache,
 ) {
     loop {
         // 1. Load all verified alerts
@@ -93,9 +89,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
             let server_name = a.server_name.clone();
             let resolver = resolver.clone();
             let connection_pool = connection_pool.clone();
-            let dns_cache = dns_cache.clone();
-            let well_known_cache = well_known_cache.clone();
-            let version_cache = version_cache.clone();
             let mailer = resources.mailer.clone();
             let config = resources.config.clone();
             task_manager
@@ -103,16 +96,9 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                     Box::pin(async move {
                         while flag.load(Ordering::SeqCst) {
                             info!("Running recurring check for {} ({})", server_name, email);
-                            let report = generate_json_report(
-                                &server_name,
-                                &resolver,
-                                &connection_pool,
-                                &dns_cache,
-                                &well_known_cache,
-                                &version_cache,
-                                true,
-                            )
-                            .await;
+                            let report =
+                                generate_json_report(&server_name, &resolver, &connection_pool)
+                                    .await;
                             match report {
                                 Ok(report) => {
                                     if !report.federation_ok {

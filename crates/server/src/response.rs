@@ -1,4 +1,3 @@
-use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
 use crate::federation::{connection_check, lookup_server, lookup_server_well_known};
 use crate::validation::server_name::parse_and_validate_server_name;
@@ -202,24 +201,19 @@ pub struct Error {
 
 #[tracing::instrument(
     name = "generate_json_report",
-    skip(resolver, connection_pool, dns_cache, well_known_cache, version_cache),
-    fields(server_name = %server_name, use_cache = use_cache)
+    skip(resolver, connection_pool,),
+    fields(server_name = %server_name)
 )]
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
     connection_pool: &ConnectionPool,
-    dns_cache: &DnsCache,
-    well_known_cache: &WellKnownCache,
-    version_cache: &VersionCache,
-    use_cache: bool,
 ) -> color_eyre::eyre::Result<Root> {
+    // Validate server name
     let mut resp_data = Root {
         federation_ok: true,
         ..Default::default()
     };
-
-    // Validate server name
     parse_and_validate_server_name(&mut resp_data, server_name);
     if resp_data.error.is_some() {
         resp_data.federation_ok = false;
@@ -227,84 +221,60 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     }
 
     let server_name_lower = server_name.to_lowercase();
-    let cache_key = server_name_lower.clone();
 
-    // Handle well-known lookup with caching
-    let well_known_result: Result<Option<String>, crate::error::WellKnownError> = if use_cache {
-        if let Some(cached_result) = well_known_cache.get(&cache_key) {
-            resp_data
-                .well_known_result
-                .insert(server_name_lower.clone(), cached_result.clone());
-            Ok(if !cached_result.m_server.is_empty() {
-                Some(cached_result.m_server)
-            } else {
-                None
-            })
-        } else {
-            let result =
-                lookup_server_well_known(&mut resp_data, &server_name_lower, resolver).await;
-            if let Some(well_known) = resp_data.well_known_result.get(&server_name_lower) {
-                well_known_cache.insert(cache_key, well_known.clone());
-            }
-            result
-        }
-    } else {
-        lookup_server_well_known(&mut resp_data, &server_name_lower, resolver).await
-    };
-
-    // Determine the server to resolve
-    let resolved_server = match &well_known_result {
-        Ok(Some(new_server)) => new_server.clone(),
-        _ => server_name_lower.clone(),
-    };
-
-    // DNS lookup with caching
-    let dns_cache_key = resolved_server.clone();
-    let lookup_error = if use_cache {
-        if let Some(cached_addrs) = dns_cache.get(&dns_cache_key) {
-            // Use cached DNS results
-            resp_data.dnsresult.addrs = cached_addrs;
-            tracing::debug!(
-                "Using cached DNS results for {}: {:?}",
-                dns_cache_key,
-                resp_data.dnsresult.addrs
-            );
-            Ok(())
-        } else {
-            let error = lookup_server(&mut resp_data, &resolved_server, resolver).await;
-            tracing::debug!(
-                "After federation lookup, addrs: {:?}",
-                resp_data.dnsresult.addrs
-            );
-            if error.is_ok() && !resp_data.dnsresult.addrs.is_empty() {
-                dns_cache.insert(dns_cache_key, resp_data.dnsresult.addrs.clone());
-            }
-            error
-        }
-    } else {
-        lookup_server(&mut resp_data, &resolved_server, resolver).await
-    };
-
-    // Mark federation as not ok if there are DNS errors or no addresses
-    if lookup_error.is_err() || resp_data.dnsresult.addrs.is_empty() {
+    // Well-known phase (pure)
+    let well_known_phase = lookup_server_well_known(&server_name_lower, resolver).await;
+    for (addr, wk_result) in well_known_phase.well_known_result.iter() {
+        resp_data
+            .well_known_result
+            .insert(addr.clone(), wk_result.clone());
+    }
+    if let Some(found_server) = &well_known_phase.found_server {
+        // Use the found server for DNS phase
+        resp_data
+            .well_known_result
+            .entry(server_name_lower.clone())
+            .or_insert_with(|| WellKnownResult {
+                m_server: found_server.clone(),
+                ..Default::default()
+            });
+    }
+    if let Some(err) = &well_known_phase.error {
+        resp_data.error = Some(err.clone());
         resp_data.federation_ok = false;
     }
 
-    // If we have addresses, run connection checks in parallel
+    let resolved_server = well_known_phase
+        .found_server
+        .clone()
+        .unwrap_or(server_name_lower.clone());
+
+    // DNS phase (pure)
+    let dns_phase = lookup_server(&resolved_server, resolver).await;
+    resp_data.dnsresult.srv_targets = dns_phase.srv_targets.clone();
+    resp_data.dnsresult.addrs = dns_phase.addrs.clone();
+    resp_data.dnsresult.srvskipped = dns_phase.srvskipped;
+    if !dns_phase.errors.is_empty() {
+        // Only set the first error for backward compatibility
+        resp_data.error = Some(dns_phase.errors[0].clone());
+        resp_data.federation_ok = false;
+    }
+    if resp_data.dnsresult.addrs.is_empty() {
+        resp_data.federation_ok = false;
+    }
+
+    // Connection phase (pure)
     if !resp_data.dnsresult.addrs.is_empty() {
         tracing::debug!(
             "Starting connection checks for addresses: {:?}",
             resp_data.dnsresult.addrs
         );
         let mut futures = FuturesUnordered::new();
-
         for addr in &resp_data.dnsresult.addrs {
             let addr = addr.clone();
             let server_name = server_name_lower.clone();
             let resolved_server = resolved_server.clone();
             let pool = connection_pool.clone();
-            let version_cache = version_cache.clone();
-
             futures.push(async move {
                 let result = connection_check(
                     &addr,
@@ -312,19 +282,14 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                     &resolved_server,
                     &resolved_server,
                     &pool,
-                    &version_cache,
-                    use_cache,
                 )
                 .await;
                 (addr, result)
             });
         }
-
-        // Process all connection checks concurrently
         while let Some((addr, result)) = futures.next().await {
             match result {
                 Ok(report) => {
-                    // Update global checks
                     resp_data.federation_ok =
                         resp_data.federation_ok && report.checks.all_checks_ok;
                     resp_data.version = report.version.clone();
@@ -337,6 +302,5 @@ pub async fn generate_json_report<P: ConnectionProvider>(
             }
         }
     }
-
     Ok(resp_data)
 }

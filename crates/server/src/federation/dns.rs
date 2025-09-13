@@ -1,12 +1,18 @@
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
-use crate::response::{Error, ErrorCode, Root, SRVData};
-use futures::{StreamExt, stream::FuturesUnordered};
-use hickory_resolver::ResolveErrorKind::Proto;
-use hickory_resolver::proto::ProtoErrorKind;
+use crate::response::{Error, ErrorCode, SRVData};
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+
+#[derive(Debug, Clone)]
+pub struct DnsPhaseResult {
+    pub srv_targets: std::collections::BTreeMap<String, Vec<SRVData>>,
+    pub addrs: Vec<String>,
+    pub srvskipped: bool,
+    pub errors: Vec<Error>,
+}
 use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{ResolveErrorKind, Resolver, name_server::ConnectionProvider};
 use tokio::time::{Duration, timeout};
-use tracing::{debug, error, info, warn}; // reuse constant
 
 pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     if target.ends_with('.') {
@@ -16,38 +22,49 @@ pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     }
 }
 
-#[tracing::instrument(name = "lookup_server", skip(data, resolver), fields(server_name = %server_name))]
+#[tracing::instrument(name = "lookup_server", skip(resolver), fields(server_name = %server_name))]
 pub async fn lookup_server<P: ConnectionProvider>(
-    data: &mut Root,
     server_name: &str,
     resolver: &Resolver<P>,
-) -> color_eyre::eyre::Result<()> {
-    info!("[lookup_server] Looking up server {server_name}");
+) -> DnsPhaseResult {
+    use std::collections::BTreeMap;
+    let mut srv_targets: BTreeMap<String, Vec<SRVData>> = BTreeMap::new();
+    let mut addrs: Vec<String> = vec![];
+    let mut srvskipped = false;
+    let mut errors: Vec<Error> = vec![];
+
     if !server_name.contains(':') {
         let mut found_srv_records = false;
         for srv_prefix in ["_matrix-fed._tcp", "_matrix._tcp"] {
-            info!(
-                "[lookup_server] Looking up srv {}",
-                format!("{srv_prefix}.{server_name}.")
-            );
-            let srv_records = timeout(
+            let srv_records = match timeout(
                 Duration::from_secs(NETWORK_TIMEOUT_SECS),
                 resolver.srv_lookup(&format!("{srv_prefix}.{server_name}.")),
             )
-            .await?;
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(Error {
+                        error: format!(
+                            "Timeout while looking up SRV records for {server_name}: {e}"
+                        ),
+                        error_code: ErrorCode::Timeout,
+                    });
+                    continue;
+                }
+            };
             match srv_records {
                 Ok(records) if !records.as_lookup().is_empty() => {
                     for record in records.iter() {
                         let srv = record.clone();
                         let target = absolutize_srv_target(&srv.target().to_utf8(), server_name);
-                        info!("[lookup_server] Looking up {target}");
                         match timeout(
                             Duration::from_secs(NETWORK_TIMEOUT_SECS),
                             resolver.lookup(&target, RecordType::CNAME),
                         )
-                        .await?
+                        .await
                         {
-                            Ok(cname) => {
+                            Ok(Ok(cname)) => {
                                 let cname_target = cname.record_iter().next().map(|c| {
                                     c.data()
                                         .as_cname()
@@ -69,22 +86,15 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                         priority: Some(srv.priority()),
                                         weight: Some(srv.weight()),
                                     };
-                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                    if let Some(existing) = existing {
-                                        existing.push(srv_data);
-                                    } else {
-                                        data.dnsresult
-                                            .srv_targets
-                                            .insert(target.clone(), vec![srv_data]);
-                                    }
+                                    srv_targets
+                                        .entry(target.clone())
+                                        .or_default()
+                                        .push(srv_data);
                                     continue;
                                 }
                             }
-                            Err(e) => {
-                                if let ResolveErrorKind::Proto(proto_error) = e.kind()
-                                    && let ProtoErrorKind::NoRecordsFound { .. } =
-                                        proto_error.kind()
-                                {
+                            Ok(Err(e)) => {
+                                if let ResolveErrorKind::Proto(_proto_error) = e.kind() {
                                     let cname_target = target.clone();
                                     let srv_data = SRVData {
                                         target: cname_target,
@@ -95,57 +105,54 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                         priority: Some(srv.priority()),
                                         weight: Some(srv.weight()),
                                     };
-                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                    if let Some(existing) = existing {
-                                        existing.push(srv_data);
-                                    } else {
-                                        data.dnsresult
-                                            .srv_targets
-                                            .insert(target.clone(), vec![srv_data]);
-                                    }
+                                    srv_targets
+                                        .entry(target.clone())
+                                        .or_default()
+                                        .push(srv_data);
                                 } else {
+                                    let err = Error {
+                                        error: format!(
+                                            "Unknown error during CNAME lookup for {target}: {e}"
+                                        ),
+                                        error_code: ErrorCode::Unknown,
+                                    };
                                     let srv_data = SRVData {
                                         target: target.clone(),
                                         srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
-                                        error: Some(Error {
-                                            error_code: ErrorCode::Unknown,
-                                            error: format!(
-                                                "Unknown error during CNAME lookup for {target}"
-                                            ),
-                                        }),
+                                        error: Some(err.clone()),
                                         port: srv.port(),
                                         priority: Some(srv.priority()),
                                         weight: Some(srv.weight()),
                                     };
-                                    let existing = data.dnsresult.srv_targets.get_mut(&target);
-                                    if let Some(existing) = existing {
-                                        existing.push(srv_data);
-                                    } else {
-                                        data.dnsresult
-                                            .srv_targets
-                                            .insert(target.clone(), vec![srv_data]);
-                                    }
+                                    srv_targets
+                                        .entry(target.clone())
+                                        .or_default()
+                                        .push(srv_data);
+                                    errors.push(err);
                                 }
+                            }
+                            Err(e) => {
+                                errors.push(Error {
+                                    error: format!("Error during CNAME lookup for {target}: {e}"),
+                                    error_code: ErrorCode::Unknown,
+                                });
                             }
                         }
                     }
                     found_srv_records = true;
                 }
                 Err(e) => {
-                    if let Proto(proto_error) = e.kind()
-                        && let ProtoErrorKind::Timeout = proto_error.kind()
-                    {
-                        return Err(color_eyre::eyre::eyre!(
-                            "Timeout while looking up SRV records for {server_name}: {e}"
-                        ));
-                    }
+                    errors.push(Error {
+                        error: format!("SRV lookup error for {server_name}: {e}"),
+                        error_code: ErrorCode::Unknown,
+                    });
                 }
                 _ => {}
             }
         }
         if !found_srv_records {
-            data.dnsresult.srv_targets.insert(
+            srv_targets.insert(
                 server_name.to_string(),
                 vec![SRVData {
                     target: server_name.to_string(),
@@ -159,12 +166,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
             );
         }
     } else {
-        info!("[lookup_server] No SRV lookup for {server_name} as it contains a port");
-        data.dnsresult.srvskipped = true;
+        srvskipped = true;
     }
 
     let mut lookup_tasks = FuturesUnordered::new();
-    for (host, records) in data.dnsresult.srv_targets.clone() {
+    for (host, records) in srv_targets.clone() {
         let resolver = resolver.clone();
         let host = if host.ends_with('.') {
             host
@@ -214,39 +220,38 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 for record in records.iter_mut() {
                     let target = record.target.clone();
                     let port = record.port;
-                    debug!(
-                        "Found SRV record for {host} -> {target}:{port} (priority: {:?}, weight: {:?})",
-                        record.priority, record.weight
-                    );
-                    let mut addrs: Vec<String> = vec![];
                     let mut addrs_with_port: Vec<String> = vec![];
                     match ipv4_records {
                         Ok(ref ipv4) => {
                             for addr in ipv4.record_iter() {
                                 if let Some(ip) = addr.data().as_a() {
-                                    addrs.push(ip.0.to_string());
                                     addrs_with_port.push(format!("{}:{port}", ip.0));
                                 }
                             }
                         }
                         Err(ref e) => {
-                            warn!("Error looking up A records for {host}: {e:#?}");
+                            errors.push(Error {
+                                error: format!("A record lookup error for {host}: {e}"),
+                                error_code: ErrorCode::Unknown,
+                            });
                         }
                     }
                     match ipv6_records {
                         Ok(ref ipv6) => {
                             for addr in ipv6.record_iter() {
                                 if let Some(ip) = addr.data().as_aaaa() {
-                                    addrs.push(ip.0.to_string());
                                     addrs_with_port.push(format!("[{}]:{port}", ip.0));
                                 }
                             }
                         }
                         Err(ref e) => {
-                            warn!("Error looking up AAAA records for {host}: {e:#?}");
+                            errors.push(Error {
+                                error: format!("AAAA record lookup error for {host}: {e}"),
+                                error_code: ErrorCode::Unknown,
+                            });
                         }
                     }
-                    if addrs.is_empty() {
+                    if addrs_with_port.is_empty() {
                         continue;
                     }
                     let canonical_target = cname_target.clone().unwrap_or(target.clone());
@@ -255,31 +260,31 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     } else {
                         format!("{canonical_target}.")
                     };
-                    info!(
+                    tracing::info!(
                         "Resolved {host} to {dns_formatted_target} with {} addresses and server_name {server_name}",
-                        addrs.len()
+                        addrs_with_port.len()
                     );
                     record.addrs.extend(addrs_with_port.clone());
-                    data.dnsresult.addrs.extend(addrs_with_port.clone());
+                    addrs.extend(addrs_with_port);
                 }
-                data.dnsresult.srv_targets.insert(host, records);
+                srv_targets.insert(host, records);
             }
             Err(e) => {
-                error!("DNS lookup error: {e:#?}");
+                errors.push(Error {
+                    error: format!("DNS lookup error: {e}"),
+                    error_code: ErrorCode::Unknown,
+                });
             }
         }
     }
 
-    if data.dnsresult.srvskipped {
+    if srvskipped {
         let server_part = server_name.split(':').next().unwrap();
         let port = if server_name.contains(':') {
             server_name.split(':').nth(1).unwrap_or("8448")
         } else {
             "8448"
         };
-        info!(
-            "[lookup_server] Looking up A/AAAA records for {server_part} as SRV lookup was skipped"
-        );
         let host_server_name = format!("{server_part}.");
         let a_lookup = timeout(
             Duration::from_secs(NETWORK_TIMEOUT_SECS),
@@ -289,44 +294,59 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Duration::from_secs(NETWORK_TIMEOUT_SECS),
             resolver.lookup(&host_server_name, RecordType::AAAA),
         );
-        let (ipv4_records, ipv6_records) = tokio::try_join!(a_lookup, aaaa_lookup)?;
-        let mut addrs: Vec<String> = vec![];
+        let (ipv4_records, ipv6_records) = match tokio::try_join!(a_lookup, aaaa_lookup) {
+            Ok(res) => res,
+            Err(e) => {
+                errors.push(Error {
+                    error: format!("A/AAAA lookup error for {server_part}: {e}"),
+                    error_code: ErrorCode::Unknown,
+                });
+                (
+                    Err(hickory_resolver::ResolveErrorKind::Message("A lookup failed").into()),
+                    Err(hickory_resolver::ResolveErrorKind::Message("AAAA lookup failed").into()),
+                )
+            }
+        };
         let mut addrs_with_port: Vec<String> = vec![];
         match ipv4_records {
             Ok(ref ipv4) => {
                 for addr in ipv4.record_iter() {
                     if let Some(ip) = addr.data().as_a() {
-                        addrs.push(ip.0.to_string());
                         addrs_with_port.push(format!("{}:{port}", ip.0));
                     }
                 }
             }
-            Err(ref e) => {
-                warn!("Error looking up A records for {server_part}: {e:#?}");
+            Err(e) => {
+                errors.push(Error {
+                    error: format!("A record lookup error for {server_part}: {e}"),
+                    error_code: ErrorCode::Unknown,
+                });
             }
         }
         match ipv6_records {
             Ok(ref ipv6) => {
                 for addr in ipv6.record_iter() {
                     if let Some(ip) = addr.data().as_aaaa() {
-                        addrs.push(ip.0.to_string());
                         addrs_with_port.push(format!("[{}]:{port}", ip.0));
                     }
                 }
             }
-            Err(ref e) => {
-                warn!("Error looking up AAAA records for {server_part}: {e:#?}");
+            Err(e) => {
+                errors.push(Error {
+                    error: format!("AAAA record lookup error for {server_part}: {e}"),
+                    error_code: ErrorCode::Unknown,
+                });
             }
         }
-        if !addrs.is_empty() {
-            info!(
-                "Resolved {server_part} to {} addresses with server_name {server_name}",
-                addrs.len()
-            );
-            data.dnsresult.addrs.extend(addrs_with_port);
-        } else {
-            warn!("No A/AAAA records found for {server_part}");
+        if !addrs_with_port.is_empty() {
+            addrs.extend(addrs_with_port);
         }
     }
-    Ok(())
+
+    DnsPhaseResult {
+        srv_targets,
+        addrs,
+        srvskipped,
+        errors,
+    }
 }

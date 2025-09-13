@@ -99,7 +99,6 @@ pub async fn query_server_version(
     Ok(())
 }
 
-// Version query using connection pool (no certificates needed)
 #[tracing::instrument(name = "query_server_version_pooled", skip(connection_pool))]
 pub async fn query_server_version_pooled(
     addr: &str,
@@ -149,7 +148,6 @@ pub async fn query_server_version_pooled(
     }
 }
 
-// Simple pooled HTTP client for requests that don't need certificate info
 #[tracing::instrument(
     name = "fetch_url_pooled_simple",
     level = "debug",

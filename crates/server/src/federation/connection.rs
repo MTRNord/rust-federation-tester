@@ -1,58 +1,32 @@
-use crate::cache::VersionCache;
 use crate::connection_pool::ConnectionPool;
 use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
-use crate::response::{ConnectionReportData, Error, ErrorCode, Version}; // internal helper
-// Removed unused imports after refactor
+use crate::response::{ConnectionReportData, Error, ErrorCode};
 use tracing::error;
 
-#[tracing::instrument(name = "connection_check", skip(connection_pool, version_cache), fields(addr = %addr, server_name = %server_name, sni = %sni, use_cache = use_cache))]
+#[tracing::instrument(name = "connection_check", skip(connection_pool), fields(addr = %addr, server_name = %server_name, sni = %sni))]
 pub async fn connection_check(
     addr: &str,
     server_name: &str,
     server_host: &str,
     sni: &str,
     connection_pool: &ConnectionPool,
-    version_cache: &VersionCache,
-    use_cache: bool,
 ) -> Result<ConnectionReportData, Error> {
     let mut report = ConnectionReportData::default();
-    let version_cache_key = format!("{addr}:{server_host}");
-    let cached_version = if use_cache {
-        version_cache
-            .get_cached(&version_cache_key, use_cache)
-            .and_then(|s| serde_json::from_str::<Version>(&s).ok())
-    } else {
-        None
-    };
-
-    let (version_result, key_result) = if let Some(cached_version) = cached_version {
-        report.version = cached_version;
-        report.checks.server_version_parses = true;
-        let key_resp = fetch_keys(addr, server_host, sni).await;
-        (Ok(None), key_resp)
-    } else {
-        let addr_c = addr.to_string();
-        let server_host_c = server_host.to_string();
-        let sni_c = sni.to_string();
-        let pool_c = connection_pool.clone();
-        tokio::join!(
-            query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c),
-            fetch_keys(&addr_c, &server_host_c, &sni_c)
-        )
-    };
+    let addr_c = addr.to_string();
+    let server_host_c = server_host.to_string();
+    let sni_c = sni.to_string();
+    let pool_c = connection_pool.clone();
+    let (version_result, key_result) = tokio::join!(
+        query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c),
+        fetch_keys(&addr_c, &server_host_c, &sni_c)
+    );
 
     match version_result {
         Ok(version_data) => {
             if let Some((version, parses)) = version_data {
                 report.version = version;
                 report.checks.server_version_parses = parses;
-                if use_cache
-                    && report.checks.server_version_parses
-                    && let Ok(v_json) = serde_json::to_string(&report.version)
-                {
-                    version_cache.insert(version_cache_key, v_json);
-                }
             }
         }
         Err(e) => {

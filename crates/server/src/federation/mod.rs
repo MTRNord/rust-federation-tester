@@ -5,11 +5,9 @@
 //! - network: Low-level TLS + HTTP fetch helpers (with certificate extraction)
 //! - version: Server version querying (direct + pooled)
 //! - keys: Key fetching and verification (ed25519)
-//! - cache_wrappers: Cached lookup wrappers
 //! - connection: Combined connection check orchestrating version + keys
 //! - certificate: X509 parsing helpers
 
-pub mod cache_wrappers;
 pub mod certificate;
 pub mod connection;
 pub mod dns;
@@ -30,9 +28,7 @@ pub use version::{
     VersionResp, fetch_url_pooled_simple, query_server_version, query_server_version_pooled,
 };
 
-pub use keys::{FullKeysResponse, fetch_keys, test_verify_keys};
-
-pub use cache_wrappers::{lookup_server_cached, lookup_server_well_known_cached};
+pub use keys::{FullKeysResponse, fetch_keys, verify_keys};
 
 pub use connection::connection_check;
 
