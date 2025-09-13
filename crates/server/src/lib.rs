@@ -15,10 +15,22 @@ pub mod cache;
 pub mod config;
 pub mod connection_pool;
 pub mod entity;
+pub mod error;
 pub mod recurring_alerts;
 pub mod response;
 pub mod utils;
 pub mod validation;
+
+use hickory_resolver::{Resolver, name_server::ConnectionProvider};
+
+/// Trait abstraction for DNS resolution to allow future mocking or alternate implementations.
+pub trait FederationResolver: Send + Sync + 'static {
+    fn inner_resolver<P: ConnectionProvider>(&self) -> Option<&Resolver<P>> {
+        None
+    }
+}
+
+impl<P: ConnectionProvider> FederationResolver for Resolver<P> {}
 
 #[derive(Clone)]
 pub struct AppResources {

@@ -1,5 +1,6 @@
 use crate::cache::{DnsCache, VersionCache, WellKnownCache};
 use crate::connection_pool::ConnectionPool;
+use crate::error::WellKnownError;
 use crate::response::{
     Certificate, ConnectionReportData, Ed25519Check, Error, ErrorCode, Keys, Root, SRVData,
     Version, WellKnownResult,
@@ -47,17 +48,31 @@ fn absolutize_srv_target(target: &str, base: &str) -> String {
     }
 }
 
+/// NOTE: Legacy function kept for backward compatibility. New code should prefer
+/// `lookup_server_well_known_typed` which returns a typed error.
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
     data: &mut Root,
     server_name: &str,
     resolver: &Resolver<P>,
 ) -> Option<String> {
+    lookup_server_well_known_typed(data, server_name, resolver)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// New typed version returning Result<Option<String>, WellKnownError>
+pub async fn lookup_server_well_known_typed<P: ConnectionProvider>(
+    data: &mut Root,
+    server_name: &str,
+    resolver: &Resolver<P>,
+) -> Result<Option<String>, WellKnownError> {
     // If there is an port in the server name, we skip the well-known lookup
     if server_name.contains(':') {
         info!(
             "[lookup_server_well_known] Skipping well-known lookup for {server_name} as it contains a port"
         );
-        return None;
+        return Ok(None);
     }
 
     // Parallelize IPv4 and IPv6 lookups
@@ -89,7 +104,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
             error: format!("No A/AAAA-Records for {server_name} found"),
             error_code: ErrorCode::NoRecordsFound,
         });
-        return None;
+        return Err(WellKnownError::NoAddresses);
     }
 
     let mut found_server: Option<String> = None;
@@ -276,7 +291,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         data.well_known_result.insert(addr, result);
     }
 
-    found_server
+    Ok(found_server)
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -856,7 +871,8 @@ async fn fetch_keys(
     })
 }
 
-fn verify_keys(
+/// Public (crate) level wrapper will be exposed via `pub use` for testing.
+pub(crate) fn verify_keys(
     server_name: &str,
     keys: &Keys,
     keys_string: &str,
@@ -997,6 +1013,22 @@ fn check_verify_keys(
         all_ed25519checks_ok,
         ed25519_verify_keys,
     )
+}
+
+/// Thin public API for tests to exercise Ed25519 verification logic.
+pub fn test_verify_keys(
+    server_name: &str,
+    keys: &Keys,
+    keys_string: &str,
+) -> (
+    bool,
+    bool,
+    bool,
+    std::collections::BTreeMap<String, Ed25519Check>,
+    std::collections::BTreeMap<String, String>,
+    bool,
+) {
+    verify_keys(server_name, keys, keys_string)
 }
 
 pub async fn lookup_server_well_known_cached<P: ConnectionProvider>(

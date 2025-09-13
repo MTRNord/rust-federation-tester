@@ -70,6 +70,7 @@ utoipa = { version = "5.4.0", features = [
 utoipa-axum = "0.2.0"
 utoipa-redoc = { version = "6.0.0", features = ["axum"] }
 url = "2.5.4"
+thiserror = "2.0.16"
 
 [dev-dependencies]
 axum-test = "18.1.0"
