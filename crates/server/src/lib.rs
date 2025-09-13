@@ -20,17 +20,6 @@ pub mod recurring_alerts;
 pub mod response;
 pub mod validation;
 
-use hickory_resolver::{Resolver, name_server::ConnectionProvider};
-
-/// Trait abstraction for DNS resolution to allow future mocking or alternate implementations.
-pub trait FederationResolver: Send + Sync + 'static {
-    fn inner_resolver<P: ConnectionProvider>(&self) -> Option<&Resolver<P>> {
-        None
-    }
-}
-
-impl<P: ConnectionProvider> FederationResolver for Resolver<P> {}
-
 #[derive(Clone)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
