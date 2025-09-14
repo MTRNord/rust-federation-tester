@@ -1,10 +1,10 @@
+use crate::optimization::get_shared_tls_config;
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::FutureExt;
 use http_body_util::Empty;
 use hyper::client::conn::http1::SendRequest;
 use hyper_util::rt::TokioIo;
-use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -96,15 +96,9 @@ impl ConnectionPool {
 
         let stream = timeout(self.connection_timeout, TcpStream::connect(addr)).await??;
 
-        // Create TLS configuration
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-
-        let connector = TlsConnector::from(Arc::new(config));
+        // Use shared TLS configuration for better performance
+        let config = get_shared_tls_config();
+        let connector = TlsConnector::from(config);
         let domain = ServerName::try_from(sni_host.to_string())
             .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
 
@@ -132,19 +126,18 @@ impl ConnectionPool {
             let mut connections = pool.lock().await;
             let initial_count = connections.len();
 
-            // We need to check each connection individually since we can't borrow mutably in retain
-            let mut i = 0;
-            while i < connections.len() {
-                // Remove the connection temporarily to check it
-                let mut conn = connections.remove(i);
+            // Optimized cleanup: retain only healthy connections
+            // This is more efficient than the previous remove/insert approach
+            let mut healthy_connections = Vec::with_capacity(connections.len());
+
+            for mut conn in connections.drain(..) {
                 if conn.ready().now_or_never().is_some_and(|r| r.is_ok()) {
-                    // Connection is still good, put it back
-                    connections.insert(i, conn);
-                    i += 1;
-                } else {
-                    // Connection is dead, don't put it back (i stays the same)
+                    healthy_connections.push(conn);
                 }
+                // Dead connections are automatically dropped
             }
+
+            *connections = healthy_connections;
 
             let removed = initial_count - connections.len();
             if removed > 0 {

@@ -1,6 +1,7 @@
 use crate::connection_pool::ConnectionPool;
 use crate::error::FetchError;
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
+use crate::optimization::get_shared_tls_config;
 use crate::response::Version;
 use bytes::Bytes;
 use http_body_util::BodyExt;
@@ -8,7 +9,6 @@ use http_body_util::Empty;
 use hyper::Request;
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
-use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
@@ -116,12 +116,10 @@ pub async fn fetch_url_pooled_simple(
     .await
     .map_err(|_| FetchError::Timeout(Duration::from_secs(NETWORK_TIMEOUT_SECS)))
     .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
-    let mut root_cert_store = RootCertStore::empty();
-    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(root_cert_store)
-        .with_no_client_auth();
-    let connector = TlsConnector::from(std::sync::Arc::new(config));
+
+    // Use shared TLS configuration for better performance
+    let config = get_shared_tls_config();
+    let connector = TlsConnector::from(config);
     let domain = ServerName::try_from(sni_host.to_string())
         .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
     let tls_stream = connector

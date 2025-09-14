@@ -16,6 +16,7 @@ pub mod connection_pool;
 pub mod entity;
 pub mod error;
 pub mod federation;
+pub mod optimization;
 pub mod recurring_alerts;
 pub mod response;
 pub mod validation;

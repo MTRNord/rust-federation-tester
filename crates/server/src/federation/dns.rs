@@ -1,4 +1,5 @@
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
+use crate::optimization::string_ops::{format_addr_port, format_ipv6_port};
 use crate::response::{Error, ErrorCode, SRVData};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -230,7 +231,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         Ok(ref ipv4) => {
                             for addr in ipv4.record_iter() {
                                 if let Some(ip) = addr.data().as_a() {
-                                    addrs_with_port.push(format!("{}:{port}", ip.0));
+                                    addrs_with_port.push(format_addr_port(&ip.0.to_string(), port));
                                 }
                             }
                         }
@@ -245,7 +246,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         Ok(ref ipv6) => {
                             for addr in ipv6.record_iter() {
                                 if let Some(ip) = addr.data().as_aaaa() {
-                                    addrs_with_port.push(format!("[{}]:{port}", ip.0));
+                                    addrs_with_port.push(format_ipv6_port(&ip.0.to_string(), port));
                                 }
                             }
                         }
@@ -317,7 +318,10 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Ok(ref ipv4) => {
                 for addr in ipv4.record_iter() {
                     if let Some(ip) = addr.data().as_a() {
-                        addrs_with_port.push(format!("{}:{port}", ip.0));
+                        addrs_with_port.push(format_addr_port(
+                            &ip.0.to_string(),
+                            port.parse().unwrap_or(8448),
+                        ));
                     }
                 }
             }
@@ -332,7 +336,10 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Ok(ref ipv6) => {
                 for addr in ipv6.record_iter() {
                     if let Some(ip) = addr.data().as_aaaa() {
-                        addrs_with_port.push(format!("[{}]:{port}", ip.0));
+                        addrs_with_port.push(format_ipv6_port(
+                            &ip.0.to_string(),
+                            port.parse().unwrap_or(8448),
+                        ));
                     }
                 }
             }
