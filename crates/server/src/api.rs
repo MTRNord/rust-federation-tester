@@ -21,6 +21,7 @@ pub mod federation_tester_api {
         api::FEDERATION_TAG,
         connection_pool::ConnectionPool,
         response::{Root, generate_json_report},
+        stats::{self, StatEvent},
     };
     use axum::{
         Json,
@@ -39,6 +40,9 @@ pub mod federation_tester_api {
     #[derive(Deserialize, IntoParams, Debug)]
     pub struct ApiParams {
         pub server_name: String,
+        /// When true/1 this request consents to counting anonymized statistics.
+        #[serde(default)]
+        pub stats_opt_in: Option<bool>,
     }
 
     #[derive(Clone)]
@@ -76,10 +80,11 @@ pub mod federation_tester_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         ),
     )]
-    #[tracing::instrument(name = "api_get_report", skip(state), fields(server_name = %params.server_name))]
+    #[tracing::instrument(name = "api_get_report", skip(state, resources), fields(server_name = %params.server_name))]
     async fn get_report<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
+        axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
         if params.server_name.is_empty() {
             return (
@@ -96,6 +101,18 @@ pub mod federation_tester_api {
         .await
         {
             Ok(report) => {
+                if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
+                    stats::record_event(
+                        &resources,
+                        StatEvent {
+                            server_name: &params.server_name,
+                            federation_ok: report.federation_ok,
+                            version_name: Some(&report.version.name),
+                            version_string: Some(&report.version.version),
+                        },
+                    )
+                    .await;
+                }
                 // Convert the report to a Value for JSON serialization
                 let report = serde_json::to_value(report)
                     .unwrap_or_else(|_| json!({ "error": "Failed to serialize report" }));
@@ -129,6 +146,7 @@ pub mod federation_tester_api {
     async fn get_fed_ok<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
+        axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
         if params.server_name.is_empty() {
             return (
@@ -144,14 +162,28 @@ pub mod federation_tester_api {
         )
         .await
         {
-            Ok(report) => (
-                StatusCode::OK,
-                if report.federation_ok {
-                    "GOOD".to_string()
-                } else {
-                    "BAD".to_string()
-                },
-            ),
+            Ok(report) => {
+                if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
+                    stats::record_event(
+                        &resources,
+                        StatEvent {
+                            server_name: &params.server_name,
+                            federation_ok: report.federation_ok,
+                            version_name: Some(&report.version.name),
+                            version_string: Some(&report.version.version),
+                        },
+                    )
+                    .await;
+                }
+                (
+                    StatusCode::OK,
+                    if report.federation_ok {
+                        "GOOD".to_string()
+                    } else {
+                        "BAD".to_string()
+                    },
+                )
+            }
             Err(e) => {
                 error!("Error generating report: {e:?}");
                 (
@@ -718,14 +750,26 @@ pub async fn start_webserver<P: ConnectionProvider>(
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
+    use axum::routing::get;
+    async fn metrics_handler(
+        axum::Extension(resources): axum::Extension<AppResources>,
+    ) -> (hyper::StatusCode, String) {
+        if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
+            return (hyper::StatusCode::NOT_FOUND, "".into());
+        }
+        let body = crate::stats::build_prometheus_metrics_cached(&resources).await;
+        (hyper::StatusCode::OK, body)
+    }
+
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest(
             "/api/federation",
             federation_tester_api::router::<P>(app_state, debug_mode),
         )
         .nest("/api/alerts", alert_api::router(alert_state))
-        .layer(axum::Extension(app_resources))
         .routes(routes!(health))
+        .route("/metrics", get(metrics_handler))
+        .layer(axum::Extension(app_resources))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .split_for_parts();

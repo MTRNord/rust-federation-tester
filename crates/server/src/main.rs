@@ -107,7 +107,10 @@ async fn main() -> color_eyre::eyre::Result<()> {
         task_manager: task_manager.clone(),
     };
 
-    let resources = AppResources { db, mailer, config };
+    let resources = std::sync::Arc::new(AppResources { db, mailer, config });
+    tracing::info!(enabled=%resources.config.statistics.enabled, prometheus=%resources.config.statistics.prometheus_enabled, retention_days=%resources.config.statistics.raw_retention_days, salt_set=%!resources.config.statistics.anonymization_salt.is_empty(), "statistics configuration");
+    // Start retention pruning task for federation stats (if enabled)
+    rust_federation_tester::stats::spawn_retention_task(resources.clone());
 
     // Start background cleanup task for connection pool
     {
@@ -128,7 +131,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let connection_pool_for_checks = state.connection_pool.clone();
     tokio::spawn(async move {
         recurring_alert_checks(
-            resources_for_checks.into(),
+            resources_for_checks,
             task_manager_for_checks,
             resolver_for_checks,
             connection_pool_for_checks,
@@ -154,6 +157,6 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    start_webserver(state, alert_state, resources, debug_mode).await?;
+    start_webserver(state, alert_state, (*resources).clone(), debug_mode).await?;
     Ok(())
 }

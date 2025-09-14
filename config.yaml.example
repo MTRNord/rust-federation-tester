@@ -8,3 +8,14 @@ smtp:
   from: "alerts@example.com"
 frontend_url: "https://your-frontend.com"
 magic_token_secret: "CHANGE_ME"
+## Optional anonymized, opt-in statistics & Prometheus metrics
+statistics:
+  # Master switch. When false, no events are recorded even if clients pass stats_opt_in.
+  enabled: false
+  # Whether to expose /metrics with anonymized federation stats. Requires a non-empty anonymization_salt when enabled.
+  prometheus_enabled: true
+  # Salt used to hash server names (blake3). MUST be set (non-empty) if both enabled and prometheus_enabled are true.
+  # Change this to rotate anonymized identifiers (will invalidate previous anon IDs).
+  anonymization_salt: ""
+  # Retention window (days) for inactive federation entries (based on last_seen_at). Entries older than this are pruned.
+  raw_retention_days: 30

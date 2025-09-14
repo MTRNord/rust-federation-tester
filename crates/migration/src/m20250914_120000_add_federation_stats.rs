@@ -1,0 +1,207 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Raw events table: append-only short retention
+        manager
+            .create_table(
+                Table::create()
+                    .table(FederationStatRaw::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(FederationStatRaw::Id)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatRaw::Ts)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatRaw::ServerName)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatRaw::FederationOk)
+                            .boolean()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatRaw::VersionName)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatRaw::VersionString)
+                            .string()
+                            .null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_fed_stat_raw_ts")
+                    .table(FederationStatRaw::Table)
+                    .col(FederationStatRaw::Ts)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_fed_stat_raw_server")
+                    .table(FederationStatRaw::Table)
+                    .col(FederationStatRaw::ServerName)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Aggregate table: one row per server
+        manager
+            .create_table(
+                Table::create()
+                    .table(FederationStatAggregate::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::ServerName)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::FirstSeenAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::LastSeenAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::ReqCount)
+                            .big_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::SuccessCount)
+                            .big_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::FailureCount)
+                            .big_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::FirstVersionName)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::FirstVersionString)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::LastVersionName)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::LastVersionString)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::SoftwareFamily)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(FederationStatAggregate::SoftwareVersion)
+                            .string()
+                            .null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(FederationStatAggregate::Table)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_fed_stat_raw_server")
+                    .table(FederationStatRaw::Table)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_fed_stat_raw_ts")
+                    .table(FederationStatRaw::Table)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(FederationStatRaw::Table).to_owned())
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(Iden)]
+pub enum FederationStatRaw {
+    Table,
+    Id,
+    Ts,
+    ServerName,
+    FederationOk,
+    VersionName,
+    VersionString,
+}
+
+#[derive(Iden)]
+pub enum FederationStatAggregate {
+    Table,
+    ServerName,
+    FirstSeenAt,
+    LastSeenAt,
+    ReqCount,
+    SuccessCount,
+    FailureCount,
+    FirstVersionName,
+    FirstVersionString,
+    LastVersionName,
+    LastVersionString,
+    SoftwareFamily,
+    SoftwareVersion,
+}

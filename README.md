@@ -10,6 +10,7 @@ configuration, server keys, TLS certificates, and federation endpoints for a giv
 - Checks DNS SRV, A, and AAAA records.
 - Validates server keys and TLS certificates.
 - Reports detailed results as JSON.
+- Optional anonymized, opt-in federation request statistics with Prometheus export.
 
 ## Usage
 
@@ -230,6 +231,85 @@ Then (from an allowed IP):
 ```sh
 curl http://localhost:8080/api/federation/debug/cache-stats
 ```
+
+---
+
+## Federation Statistics & Prometheus Metrics
+
+The service can (optionally) record per-request federation statistics on a strict opt-in basis and expose anonymized aggregates via `GET /metrics` in Prometheus text format.
+
+### Opt-In Model
+
+Statistics are only recorded if **both** of these are true:
+
+1. `statistics.enabled` is `true` in `config.yaml`.
+2. The incoming request to `/api/report` (or other future endpoints) includes the query parameter `stats_opt_in=1`.
+
+If either condition is not met, the request is processed normally but no event is persisted.
+
+### Anonymization
+
+Server names are never stored or exported in raw form to Prometheus. Instead, each server name is hashed using: `blake3(anonymization_salt || "::" || server_name)`.
+
+To prevent correlation across deployments, you MUST configure a unique, secret `anonymization_salt`. Changing the salt will rotate (invalidate) all previously emitted anonymized identifiers.
+
+If `statistics.enabled` and `statistics.prometheus_enabled` are both `true` but `anonymization_salt` is empty, startup will fail (validation error).
+
+### Configuration (`statistics` block)
+
+```yaml
+statistics:
+  enabled: false                 # Master switch. When false, nothing is recorded.
+  prometheus_enabled: true       # Expose /metrics with anonymized counters.
+  anonymization_salt: "change-me" # REQUIRED (non-empty) when both enabled + prometheus_enabled are true.
+  raw_retention_days: 30         # Inactive rows (no updates for > N days) are pruned periodically.
+```
+
+Only aggregate counters are stored currently; there is no raw per-event table yet. A pruning task runs every 12h and deletes rows whose `last_seen_at` is older than `raw_retention_days`.
+
+### Metrics Exposed
+
+`federation_request_total{server="<anon>",result="success|failure",software_family="<family>",software_version="<version>"}`
+
+Per anonymized server + outcome. `software_family` and `software_version` are heuristically extracted from the Matrix server's reported version string (currently detects `synapse`, `conduit`, `dendrite`). Missing values are omitted.
+
+`federation_request_family_total{software_family="<family>",result="success|failure"}`
+
+Aggregated by software family (allows trends without per-instance granularity).
+
+Both counters are monotonic and backed by a lightweight aggregate table maintained through high-level SeaORM entity operations (no manual SQL upsert logic). Each opted-in request results in either an insert (first time a server is seen) or an update (incrementing existing counters and refreshing last_seen_at).
+
+### Performance, Caching & Retention
+
+The `/metrics` endpoint output is cached in-memory for 5 seconds. Any new recorded event invalidates the cache; high write rates may reduce cache effectiveness. A background pruning task (every 12h) removes stale rows older than `raw_retention_days`.
+
+### Privacy Considerations
+
+- No unhashed server names are exported.
+- Rotating `anonymization_salt` effectively produces a new anonymity namespace (old IDs become unrelatable).
+- Avoid using trivially guessable salts (treat like a secret).
+- Consider periodically rotating the salt if long-term linkage is not desired.
+
+### Example Request with Opt-In
+
+```sh
+curl "http://localhost:8080/api/report?server_name=example.org&stats_opt_in=1"
+```
+
+Then scrape metrics:
+
+```sh
+curl http://localhost:8080/metrics
+```
+
+### Operational Roadmap (Planned Enhancements)
+
+- Optional raw per-event table (entity already scaffolded) with batching to reduce write amplification.
+- Additional configurable prune cadence and metrics about prune operations.
+- Optional latency buckets or histogram metrics (requires careful cardinality control).
+- K-anonymity guard before exporting low-frequency version labels.
+
+Contributions / suggestions welcome.
 
 ---
 

@@ -46,6 +46,7 @@ sea-orm = { version = "1.1.13", features = [
     "runtime-tokio-rustls",
     "sqlx-postgres",
     "sqlx-sqlite",
+    "with-time",
 ] }
 dotenvy = "0.15.7"
 config = { version = "0.15.13", features = ["yaml"] }
@@ -72,6 +73,7 @@ utoipa-axum = "0.2.0"
 utoipa-redoc = { version = "6.0.0", features = ["axum"] }
 url = "2.5.4"
 thiserror = "2.0.16"
+blake3 = "1.8.2"
 
 [features]
 default = []

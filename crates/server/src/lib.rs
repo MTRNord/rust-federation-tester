@@ -19,9 +19,10 @@ pub mod federation;
 pub mod optimization;
 pub mod recurring_alerts;
 pub mod response;
+pub mod stats;
 pub mod validation;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
     pub mailer: Arc<AsyncSmtpTransport<Tokio1Executor>>,

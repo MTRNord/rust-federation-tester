@@ -11,7 +11,7 @@ pub enum ConfigError {
     Validation(String),
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct SmtpConfig {
     pub server: String,
     pub port: u16,
@@ -19,7 +19,7 @@ pub struct SmtpConfig {
     pub password: String,
     pub from: String,
 }
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub database_url: String,
     pub smtp: SmtpConfig,
@@ -29,6 +29,39 @@ pub struct AppConfig {
     /// If not provided, defaults to common private & loopback ranges.
     #[serde(default = "default_debug_allowed_nets")]
     pub debug_allowed_nets: Vec<IpNet>,
+    #[serde(default)]
+    pub statistics: StatisticsConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StatisticsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_prometheus_enabled")]
+    pub prometheus_enabled: bool,
+    /// Salt used for anonymization hashing. MUST be configured (non-empty) if statistics.enabled && prometheus_enabled.
+    #[serde(default)]
+    pub anonymization_salt: String,
+    #[serde(default = "default_raw_retention_days")]
+    pub raw_retention_days: u32,
+}
+
+impl Default for StatisticsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            prometheus_enabled: true,
+            anonymization_salt: String::new(),
+            raw_retention_days: default_raw_retention_days(),
+        }
+    }
+}
+
+fn default_prometheus_enabled() -> bool {
+    true
+}
+fn default_raw_retention_days() -> u32 {
+    30
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -129,6 +162,21 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
     }
     if app.smtp.port == 0 {
         return Err(ConfigError::Validation("smtp.port must be > 0".into()));
+    }
+
+    if app.statistics.enabled
+        && app.statistics.prometheus_enabled
+        && app.statistics.anonymization_salt.is_empty()
+    {
+        return Err(ConfigError::Validation(
+            "statistics.enabled is true and prometheus_enabled is true but anonymization_salt is empty".into(),
+        ));
+    }
+
+    if app.statistics.enabled && app.statistics.anonymization_salt.len() < 16 {
+        return Err(ConfigError::Validation(
+            "statistics.anonymization_salt must be at least 16 characters".into(),
+        ));
     }
 
     Ok(app)
