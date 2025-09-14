@@ -744,23 +744,32 @@ async fn health() -> &'static str {
     "ok"
 }
 
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = MISC_TAG,
+    operation_id = "Prometheus Metrics",
+    responses(
+        (status = 200, description = "Prometheus metrics in text exposition format", body = String, content_type = "text/plain"),
+        (status = 404, description = "Metrics disabled via configuration")
+    )
+)]
+async fn metrics(
+    axum::Extension(resources): axum::Extension<AppResources>,
+) -> (hyper::StatusCode, String) {
+    if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
+        return (hyper::StatusCode::NOT_FOUND, String::new());
+    }
+    let body = crate::stats::build_prometheus_metrics_cached(&resources).await;
+    (hyper::StatusCode::OK, body)
+}
+
 pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
     alert_state: AlertAppState,
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
-    use axum::routing::get;
-    async fn metrics_handler(
-        axum::Extension(resources): axum::Extension<AppResources>,
-    ) -> (hyper::StatusCode, String) {
-        if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
-            return (hyper::StatusCode::NOT_FOUND, "".into());
-        }
-        let body = crate::stats::build_prometheus_metrics_cached(&resources).await;
-        (hyper::StatusCode::OK, body)
-    }
-
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest(
             "/api/federation",
@@ -768,7 +777,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
         )
         .nest("/api/alerts", alert_api::router(alert_state))
         .routes(routes!(health))
-        .route("/metrics", get(metrics_handler))
+        .routes(routes!(metrics))
         .layer(axum::Extension(app_resources))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
