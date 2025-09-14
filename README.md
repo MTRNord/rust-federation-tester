@@ -75,21 +75,110 @@ Open `target/coverage/html/index.html` in a browser for a detailed report.
 
 ## Debug & Observability
 
-The application exposes additional observability capabilities when run in *debug mode* (controlled by environment variables).
+The application supports advanced debugging and observability through tokio-console and standard Rust logging.
 
-### Environment Variables
+### Tokio Console Integration
 
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `RFT_DEBUG` | `1`, `true` (case-insensitive) | unset (debug off) | Enables debug mode: extra logging, debug-only routes, periodic cache stats logging. |
-| `RFT_LOG_FORMAT` | `text`, `json` | `text` | Selects log output format (JSON only active if compiled with a `json` feature). |
-| `RFT_TRACE_SPANS` | `close` | unset | When `close`, emits span close events for latency measurements. |
+The application supports [tokio-console](https://github.com/tokio-rs/console), a debugger for async Rust programs that provides real-time task and async resource monitoring.
+
+#### Prerequisites
+
+First, install `tokio-console`:
+
+```sh
+cargo install --locked tokio-console
+```
+
+#### Tokio Console Usage
+
+1. **Build with console support:**
+
+   ```sh
+   cargo build --features console --release
+   ```
+
+2. **Run the application with console enabled:**
+
+   ```sh
+   cargo run --features console --release
+   ```
+
+3. **Connect with tokio-console (in another terminal):**
+
+   ```sh
+   tokio-console
+   ```
+
+   By default, tokio-console connects to `127.0.0.1:6669`. The console-subscriber will automatically bind to this address when the console feature is enabled.
+
+The console provides real-time insights into:
+
+- Active tasks and their states
+- Async resource usage (mutexes, channels, etc.)
+- Task spawn rates and durations
+- Resource contention and blocking
+
+#### Configuration
+
+The application automatically configures the necessary `tokio_unstable` compilation flags via `.cargo/config.toml`.
+
+No additional environment variables are required - simply build with `--features console` to enable tokio-console support.
+
+**Note:** The `.cargo/config.toml` file in the project root automatically adds the required `--cfg tokio_unstable` rustflag for all builds. This is necessary for tokio-console integration but doesn't affect normal operation when the console feature is disabled.
+
+#### Environment Variables
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `RUST_LOG` | Log level directives | Controls standard logging output. Examples: `debug`, `rust_federation_tester=debug`, `trace` |
+
+**Note:** When using the `console` feature, both tokio-console and standard logging output are available simultaneously. Standard logs will appear in your terminal while tokio-console provides the async runtime inspection interface.
+
+**Important:** For tokio-console to display detailed task information, the application automatically enables `tokio=trace,runtime=trace` when built with the console feature. This ensures tokio-console receives the necessary runtime instrumentation data.
+
+#### Production Considerations
+
+⚠️ **Important:** The `console` feature should **not** be enabled in production builds as it:
+
+- Adds runtime overhead for task tracking
+- Exposes debugging endpoints
+- Is intended for development and debugging only
+
+For production, use standard logging with `RUST_LOG`:
+
+```sh
+RUST_LOG=info cargo run --release
+```
+
+### Standard Logging
+
+When the `console` feature is not enabled, the application uses standard tracing-subscriber logging.
+
+**Examples:**
+
+- **Default logging:**
+
+  ```sh
+  cargo run --release
+  ```
+
+- **Debug logging:**
+
+  ```sh
+  RUST_LOG=debug cargo run --release
+  ```
+
+- **Module-specific logging:**
+
+  ```sh
+  RUST_LOG=rust_federation_tester=debug,hyper=warn cargo run --release
+  ```
 
 ### Debug Cache Stats Endpoint
 
-When `RFT_DEBUG` is enabled a non-documented endpoint becomes available:
+When debug logging is enabled (e.g., `RUST_LOG=debug` or `RUST_LOG=rust_federation_tester=debug`), a non-documented endpoint becomes available:
 
-```
+```http
 GET /api/federation/debug/cache-stats
 ```
 
@@ -120,7 +209,7 @@ debug_allowed_nets:
 
 If `debug_allowed_nets` is omitted, the following defaults apply:
 
-```
+```text
 127.0.0.1/32, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1/128, fc00::/7
 ```
 
@@ -128,44 +217,18 @@ Requests whose source IP does not fall inside any configured CIDR receive `403 F
 
 ### Periodic Cache Metrics Logging
 
-While in debug mode the service emits a `cache_stats` debug log line every 60 seconds summarizing hit/miss/eviction counters for each cache and the active connection pool count. This helps correlate performance or anomalies with cache behavior.
+While in debug mode, the service emits a `cache_stats` debug log line every 60 seconds summarizing hit/miss/eviction counters for each cache and the active connection pool count. This helps correlate performance or anomalies with cache behavior.
 
 ### Example: Running in Debug Mode
 
 ```sh
-RFT_DEBUG=1 cargo run
+RUST_LOG=debug cargo run --release
 ```
 
 Then (from an allowed IP):
 
 ```sh
 curl http://localhost:8080/api/federation/debug/cache-stats
-```
-
-If you need JSON logs (enable the `json` feature):
-
-```sh
-cargo run --features json --release
-```
-
-Or combined with debug mode:
-
-```sh
-RFT_DEBUG=1 RFT_LOG_FORMAT=json cargo run --features json
-```
-
-### Enabling JSON Logs via Feature Flag
-
-The server crate defines an optional `json` feature which activates the `tracing-subscriber` JSON formatter. Without the feature, requesting `RFT_LOG_FORMAT=json` logs a warning and falls back to text output. Build with:
-
-```sh
-cargo run --features json
-```
-
-Or for tests:
-
-```sh
-cargo test --features json
 ```
 
 ---

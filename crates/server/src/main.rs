@@ -14,71 +14,60 @@ use sea_orm::Database;
 use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use tracing::{Level, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+#[cfg(not(feature = "console"))]
+fn initialize_standard_tracing() {
+    let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info";
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
+
+    let registry = tracing_subscriber::registry().with(env_filter);
+    let layer = fmt::layer().with_target(true).with_level(true);
+
+    registry.with(layer).init();
+}
+
+#[cfg(feature = "console")]
+fn initialize_layered_tracing() {
+    let default_directives =
+        "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace";
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
+
+    // Create console layer for tokio-console
+    let console_layer = console_subscriber::spawn();
+
+    // Create standard fmt layer for normal logging
+    let fmt_layer = fmt::layer().with_target(true).with_level(true);
+
+    // Combine both layers
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .with(fmt_layer)
+        .init();
+}
+
+fn is_debug_mode() -> bool {
+    env::var("RUST_LOG").unwrap_or_default().contains("debug")
+        || env::var("RUST_LOG").unwrap_or_default().contains("trace")
+}
 
 #[tokio::main]
 async fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install().expect("Failed to install `color_eyre::install`");
 
     // -------- Tracing Initialization --------
-    // Environment variables controlling behavior:
-    // RFT_DEBUG = "1" enables debug-level logging & extra spans.
-    // RFT_LOG_FORMAT = "json" for structured JSON logs (default pretty text).
-    // RFT_TRACE_SPANS = "close" to emit span close events for latency measurement.
-    let debug_mode = env::var("RFT_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let log_format = env::var("RFT_LOG_FORMAT").unwrap_or_else(|_| "text".into());
-    let span_mode = env::var("RFT_TRACE_SPANS").unwrap_or_default();
-
-    let base_level = if debug_mode {
-        Level::DEBUG
-    } else {
-        Level::INFO
-    };
-    let default_directives = format!("rust_federation_tester={base_level},hyper=warn,sea_orm=info");
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
-
-    // Build registry + formatting layer (separate branches keep concrete types simple)
-    #[cfg(feature = "json")]
+    // Initialize tracing with console support if enabled, otherwise standard logging
+    #[cfg(feature = "console")]
     {
-        let registry = tracing_subscriber::registry().with(env_filter);
-        if log_format == "json" {
-            let mut layer = fmt::layer()
-                .with_target(true)
-                .json()
-                .with_current_span(true);
-            if span_mode == "close" {
-                layer = layer.with_span_events(fmt::format::FmtSpan::CLOSE);
-            }
-            registry.with(layer).init();
-        } else {
-            let mut layer = fmt::layer().with_target(true).with_level(true);
-            if span_mode == "close" {
-                layer = layer.with_span_events(fmt::format::FmtSpan::CLOSE);
-            }
-            registry.with(layer).init();
-        }
+        initialize_layered_tracing();
+        tracing::info!("Tokio Console enabled - connect with `tokio-console`");
     }
-    #[cfg(not(feature = "json"))]
+    #[cfg(not(feature = "console"))]
     {
-        let registry = tracing_subscriber::registry().with(env_filter);
-        if log_format == "json" {
-            tracing::warn!(
-                "'json' log format requested but 'json' feature not enabled; falling back to text"
-            );
-        }
-        let mut layer = fmt::layer().with_target(true).with_level(true);
-        if span_mode == "close" {
-            layer = layer.with_span_events(fmt::format::FmtSpan::CLOSE);
-        }
-        registry.with(layer).init();
-    }
-
-    if debug_mode {
-        info!("Debug mode enabled (RFT_DEBUG=1)");
+        initialize_standard_tracing();
     }
 
     // Load config
@@ -146,6 +135,8 @@ async fn main() -> color_eyre::eyre::Result<()> {
         )
         .await;
     });
+
+    let debug_mode = is_debug_mode();
 
     // If debug mode, spawn periodic cache stats logging task
     if debug_mode {

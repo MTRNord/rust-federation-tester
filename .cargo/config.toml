@@ -1,0 +1,6 @@
+# Cargo configuration for rust-federation-tester
+
+# Enable tokio_unstable for tokio-console integration
+# This is required for console-subscriber to work properly
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

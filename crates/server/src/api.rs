@@ -36,7 +36,7 @@ pub mod federation_tester_api {
     use utoipa::IntoParams;
     use utoipa_axum::{router::OpenApiRouter, routes};
 
-    #[derive(Deserialize, IntoParams)]
+    #[derive(Deserialize, IntoParams, Debug)]
     pub struct ApiParams {
         pub server_name: String,
     }
@@ -76,6 +76,7 @@ pub mod federation_tester_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         ),
     )]
+    #[tracing::instrument(name = "api_get_report", skip(state), fields(server_name = %params.server_name))]
     async fn get_report<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
@@ -124,6 +125,7 @@ pub mod federation_tester_api {
             (status = 500, description = "Internal server error")
         ),
     )]
+    #[tracing::instrument(name = "api_get_fed_ok", skip(state), fields(server_name = %params.server_name))]
     async fn get_fed_ok<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
