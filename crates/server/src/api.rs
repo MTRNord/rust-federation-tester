@@ -163,6 +163,7 @@ pub mod federation_tester_api {
     }
 
     // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
+    #[tracing::instrument(name = "api_cache_stats", skip(state, resources), fields(client_addr = %addr.ip()))]
     async fn cache_stats<P: ConnectionProvider>(
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
@@ -263,6 +264,7 @@ pub mod alert_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
+    #[tracing::instrument(name = "api_register_alert", skip(resources, payload), fields(server_name = %payload.server_name))]
     async fn register_alert(
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<RegisterAlert>,
@@ -419,6 +421,7 @@ The Federation Tester Team"#,
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
+    #[tracing::instrument(name = "api_verify_alert", skip(resources, params), fields(token_len = %params.token.len()))]
     async fn verify_alert(
         Extension(resources): Extension<AppResources>,
         Query(params): Query<VerifyParams>,
@@ -535,6 +538,7 @@ The Federation Tester Team"#,
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
+    #[tracing::instrument(name = "api_list_alerts", skip(resources, payload))]
     async fn list_alerts(
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<ListAlerts>,
@@ -614,6 +618,7 @@ The Federation Tester Team"#
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
+    #[tracing::instrument(name = "api_delete_alert", skip(resources), fields(alert_id = %id))]
     async fn delete_alert(
         Extension(resources): Extension<AppResources>,
         Path(id): Path<i32>,

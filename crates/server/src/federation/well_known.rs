@@ -106,6 +106,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 }
 
+#[tracing::instrument(name = "federation_fetch_with_redirects", fields(addr = %addr, host = %host, sni = %sni, max_redirects = %max_redirects))]
 async fn fetch_url_with_redirects(
     addr: &str,
     host: &str,

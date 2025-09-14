@@ -23,6 +23,7 @@ pub struct FullKeysResponse {
     pub keys_string: String,
 }
 
+#[tracing::instrument(name = "federation_fetch_keys", fields(addr = %addr, server_name = %server_name, sni = %sni))]
 pub async fn fetch_keys(
     addr: &str,
     server_name: &str,

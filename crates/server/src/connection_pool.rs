@@ -37,6 +37,7 @@ impl ConnectionPool {
     }
 
     /// Get a connection from the pool or create a new one
+    #[tracing::instrument(name = "connection_pool_get", skip(self), fields(addr = %addr, sni = %sni))]
     pub async fn get_connection(
         &self,
         addr: &str,
@@ -68,6 +69,7 @@ impl ConnectionPool {
     }
 
     /// Return a connection to the pool for reuse
+    #[tracing::instrument(name = "connection_pool_return", skip(self, conn), fields(addr = %addr, sni = %sni))]
     pub async fn return_connection(&self, addr: &str, sni: &str, mut conn: PooledConnection) {
         let key = (Arc::from(addr), Arc::from(sni));
 
@@ -123,6 +125,7 @@ impl ConnectionPool {
 
     /// Clean up dead connections periodically
     /// Should be called by a background task every few minutes
+    #[tracing::instrument(name = "connection_pool_cleanup", skip(self))]
     pub async fn cleanup_dead_connections(&self) {
         for entry in self.pools.iter() {
             let pool = entry.value();

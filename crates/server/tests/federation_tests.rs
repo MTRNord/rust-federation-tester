@@ -170,7 +170,7 @@ mod federation_tests {
                 .await
                 .unwrap();
 
-            let (federation_ok_for_test, filtered_connection_errors) = if is_github_actions {
+            let (federation_ok_for_test, _filtered_connection_errors) = if is_github_actions {
                 // Filter out IPv6 os error 101 (network unreachable) connection errors for GitHub Actions only
                 let filtered: std::collections::BTreeMap<_, _> = result
                     .connection_errors
