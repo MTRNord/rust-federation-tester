@@ -11,6 +11,7 @@ use sea_orm::DatabaseConnection;
 use crate::config::AppConfig;
 
 pub mod api;
+pub mod client;
 pub mod config;
 pub mod connection_pool;
 pub mod entity;

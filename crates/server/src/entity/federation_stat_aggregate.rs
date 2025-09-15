@@ -17,6 +17,8 @@ pub struct Model {
     pub last_version_string: Option<String>,
     pub software_family: Option<String>,
     pub software_version: Option<String>,
+    pub unstable_features_enabled: i32,
+    pub unstable_features_announced: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

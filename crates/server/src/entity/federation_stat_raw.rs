@@ -11,6 +11,8 @@ pub struct Model {
     pub federation_ok: bool,
     pub version_name: Option<String>,
     pub version_string: Option<String>,
+    pub unstable_features_enabled: Option<String>,
+    pub unstable_features_announced: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

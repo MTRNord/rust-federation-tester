@@ -3,12 +3,13 @@ use crate::AppResources;
 use blake3::Hasher;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use sea_orm::DatabaseConnection;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ConnectionTrait, DatabaseBackend, EntityTrait, Statement,
+    ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait,
+    QuerySelect, Statement,
 };
+use sea_orm::{DatabaseConnection, QueryFilter};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::RwLock,
     time::{Duration, Instant},
 };
@@ -20,6 +21,8 @@ pub struct StatEvent<'a> {
     pub federation_ok: bool,
     pub version_name: Option<&'a str>,
     pub version_string: Option<&'a str>,
+    pub unstable_features_enabled: Option<&'a [String]>,
+    pub unstable_features_announced: Option<&'a [String]>,
 }
 
 /// Classify software family & version from the version_name/version_string (simple heuristic).
@@ -64,6 +67,24 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
     let failure_inc: i64 = if ev.federation_ok { 0 } else { 1 };
     let now: OffsetDateTime = OffsetDateTime::now_utc();
 
+    // Serialize unstable features lists to JSON strings for storage
+    let unstable_enabled_json = ev
+        .unstable_features_enabled
+        .map(|features| serde_json::to_string(features).unwrap_or_default());
+    let unstable_announced_json = ev
+        .unstable_features_announced
+        .map(|features| serde_json::to_string(features).unwrap_or_default());
+
+    // Count features for aggregate tracking
+    let enabled_count = ev
+        .unstable_features_enabled
+        .map(|f| f.len() as i32)
+        .unwrap_or(0);
+    let announced_count = ev
+        .unstable_features_announced
+        .map(|f| f.len() as i32)
+        .unwrap_or(0);
+
     // Insert raw event (append-only) first
     let raw_model = raw::ActiveModel {
         id: ActiveValue::NotSet,
@@ -72,6 +93,8 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
         federation_ok: ActiveValue::Set(ev.federation_ok),
         version_name: ActiveValue::Set(ev.version_name.map(|s| s.to_string())),
         version_string: ActiveValue::Set(ev.version_string.map(|s| s.to_string())),
+        unstable_features_enabled: ActiveValue::Set(unstable_enabled_json),
+        unstable_features_announced: ActiveValue::Set(unstable_announced_json),
     };
     if let Err(e) = raw_model.insert(db).await {
         tracing::warn!(error=%e, server=%server_key, "failed inserting raw federation event");
@@ -87,6 +110,8 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
             model.last_version_string = ev.version_string.map(ToString::to_string);
             model.software_family = family_val.clone();
             model.software_version = version_val.clone();
+            model.unstable_features_enabled = enabled_count;
+            model.unstable_features_announced = announced_count;
             let active: agg::ActiveModel = model.into();
             if let Err(e) = active.update(db).await {
                 tracing::warn!(error=%e, server=%server_key, "failed updating federation_stat_aggregate");
@@ -106,6 +131,8 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
                 last_version_string: ActiveValue::Set(ev.version_string.map(|s| s.to_string())),
                 software_family: ActiveValue::Set(family_val.clone()),
                 software_version: ActiveValue::Set(version_val.clone()),
+                unstable_features_enabled: ActiveValue::Set(enabled_count),
+                unstable_features_announced: ActiveValue::Set(announced_count),
             };
             if let Err(e) = active.insert(db).await {
                 tracing::warn!(error=%e, server=%server_key, "failed inserting federation_stat_aggregate");
@@ -241,6 +268,150 @@ fn escape_label(val: &str) -> String {
 }
 
 /// Build Prometheus exposition text for federation stats.
+/// Calculate unique features across all servers from raw data
+async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
+    use crate::entity::federation_stat_raw as raw;
+
+    // Get the most recent entry for each server (latest features state)
+    let rows: Vec<(String, Option<String>, Option<String>)> = raw::Entity::find()
+        .select_only()
+        .column(raw::Column::ServerName)
+        .column(raw::Column::UnstableFeaturesEnabled)
+        .column(raw::Column::UnstableFeaturesAnnounced)
+        .filter(raw::Column::UnstableFeaturesEnabled.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await
+        .unwrap_or_default();
+
+    let mut unique_enabled_features: HashSet<String> = HashSet::new();
+    let mut unique_announced_features: HashSet<String> = HashSet::new();
+    let mut latest_per_server: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+
+    // Get the latest features for each server
+    for (server_name, enabled_json, announced_json) in rows {
+        latest_per_server.insert(server_name, (enabled_json, announced_json));
+    }
+
+    // Collect unique features across all servers
+    for (_server, (enabled_json, announced_json)) in latest_per_server {
+        // Parse enabled features
+        if let Some(enabled_str) = enabled_json
+            && let Ok(enabled_features) = serde_json::from_str::<Vec<String>>(&enabled_str)
+        {
+            for feature in enabled_features {
+                unique_enabled_features.insert(feature);
+            }
+        }
+
+        // Parse announced features
+        if let Some(announced_str) = announced_json
+            && let Ok(announced_features) = serde_json::from_str::<Vec<String>>(&announced_str)
+        {
+            for feature in announced_features {
+                unique_announced_features.insert(feature);
+            }
+        }
+    }
+
+    (
+        unique_enabled_features.len() as i64,
+        unique_announced_features.len() as i64,
+    )
+}
+
+/// Build per-feature metrics by analyzing raw data
+async fn build_feature_metrics(db: &DatabaseConnection, _salt: &str) -> String {
+    use crate::entity::federation_stat_raw as raw;
+
+    // Get all raw entries with unstable features data from the last 30 days
+    let thirty_days_ago = OffsetDateTime::now_utc() - time::Duration::days(30);
+    let rows: Vec<(String, Option<String>, Option<String>)> = raw::Entity::find()
+        .select_only()
+        .column(raw::Column::ServerName)
+        .column(raw::Column::UnstableFeaturesEnabled)
+        .column(raw::Column::UnstableFeaturesAnnounced)
+        .filter(raw::Column::Ts.gte(thirty_days_ago))
+        .filter(raw::Column::UnstableFeaturesEnabled.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await
+        .unwrap_or_default();
+
+    let mut feature_enabled_counts: HashMap<String, i32> = HashMap::new();
+    let mut feature_announced_counts: HashMap<String, i32> = HashMap::new();
+    let mut servers_with_feature_enabled: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut servers_with_feature_announced: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for (server_name, enabled_json, announced_json) in rows {
+        // Parse enabled features
+        if let Some(enabled_str) = enabled_json
+            && let Ok(enabled_features) = serde_json::from_str::<Vec<String>>(&enabled_str)
+        {
+            for feature in enabled_features {
+                *feature_enabled_counts.entry(feature.clone()).or_insert(0) += 1;
+                servers_with_feature_enabled
+                    .entry(feature)
+                    .or_default()
+                    .insert(server_name.clone());
+            }
+        }
+
+        // Parse announced features
+        if let Some(announced_str) = announced_json
+            && let Ok(announced_features) = serde_json::from_str::<Vec<String>>(&announced_str)
+        {
+            for feature in announced_features {
+                *feature_announced_counts.entry(feature.clone()).or_insert(0) += 1;
+                servers_with_feature_announced
+                    .entry(feature)
+                    .or_default()
+                    .insert(server_name.clone());
+            }
+        }
+    }
+
+    let mut buf = String::new();
+
+    // Add per-feature enabled metrics
+    if !feature_enabled_counts.is_empty() {
+        buf.push_str("# HELP federation_unstable_feature_enabled_servers Count of servers with each unstable feature enabled.\n");
+        buf.push_str("# TYPE federation_unstable_feature_enabled_servers gauge\n");
+
+        for (feature, _count) in feature_enabled_counts.iter() {
+            let servers = servers_with_feature_enabled
+                .get(feature)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let feature_label = escape_label(feature);
+            buf.push_str(&format!(
+                "federation_unstable_feature_enabled_servers{{feature=\"{}\"}} {}\n",
+                feature_label, servers
+            ));
+        }
+    }
+
+    // Add per-feature announced metrics
+    if !feature_announced_counts.is_empty() {
+        buf.push_str("# HELP federation_unstable_feature_announced_servers Count of servers with each unstable feature announced.\n");
+        buf.push_str("# TYPE federation_unstable_feature_announced_servers gauge\n");
+
+        for (feature, _count) in feature_announced_counts.iter() {
+            let servers = servers_with_feature_announced
+                .get(feature)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let feature_label = escape_label(feature);
+            buf.push_str(&format!(
+                "federation_unstable_feature_announced_servers{{feature=\"{}\"}} {}\n",
+                feature_label, servers
+            ));
+        }
+    }
+
+    buf
+}
+
 pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
     if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
         return String::new();
@@ -263,6 +434,7 @@ pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
     buf.push_str("# HELP federation_request_total Total opted-in federation test requests by server/result.\n");
     buf.push_str("# TYPE federation_request_total counter\n");
     let mut family_totals: HashMap<String, i64> = HashMap::new();
+
     for r in &rows {
         if let Some(anon) = stable_anon_id(salt, &r.server_name) {
             let server_label = escape_label(&anon);
@@ -288,6 +460,29 @@ pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
             family, total
         ));
     }
+
+    // Calculate unique unstable features across all servers
+    let (unique_enabled, unique_announced) = calculate_unique_features(db).await;
+
+    // Add unstable features metrics
+    buf.push_str("# HELP federation_unstable_features_enabled_total Total count of unique enabled unstable features across all servers.\n");
+    buf.push_str("# TYPE federation_unstable_features_enabled_total gauge\n");
+    buf.push_str(&format!(
+        "federation_unstable_features_enabled_total {}\n",
+        unique_enabled
+    ));
+
+    buf.push_str("# HELP federation_unstable_features_announced_total Total count of unique announced unstable features across all servers.\n");
+    buf.push_str("# TYPE federation_unstable_features_announced_total gauge\n");
+    buf.push_str(&format!(
+        "federation_unstable_features_announced_total {}\n",
+        unique_announced
+    ));
+
+    // Add per-feature metrics
+    let feature_metrics = build_feature_metrics(db, salt).await;
+    buf.push_str(&feature_metrics);
+
     buf
 }
 
@@ -358,7 +553,9 @@ mod tests {
             last_version_name TEXT NULL,
             last_version_string TEXT NULL,
             software_family TEXT NULL,
-            software_version TEXT NULL
+            software_version TEXT NULL,
+            unstable_features_enabled INTEGER NOT NULL DEFAULT 0,
+            unstable_features_announced INTEGER NOT NULL DEFAULT 0
         );"#,
         ))
         .await
@@ -386,6 +583,8 @@ mod tests {
                 federation_ok: true,
                 version_name: Some("synapse"),
                 version_string: Some("synapse 1.2.3"),
+                unstable_features_enabled: None,
+                unstable_features_announced: None,
             },
         )
         .await;
@@ -414,6 +613,8 @@ mod tests {
                 federation_ok: true,
                 version_name: None,
                 version_string: None,
+                unstable_features_enabled: None,
+                unstable_features_announced: None,
             },
         )
         .await;
@@ -446,6 +647,8 @@ mod tests {
                 federation_ok: true,
                 version_name: None,
                 version_string: None,
+                unstable_features_enabled: None,
+                unstable_features_announced: None,
             },
         )
         .await;
@@ -458,6 +661,8 @@ mod tests {
                 federation_ok: true,
                 version_name: None,
                 version_string: None,
+                unstable_features_enabled: None,
+                unstable_features_announced: None,
             },
         )
         .await;
@@ -528,6 +733,8 @@ mod tests {
                 federation_ok: true,
                 version_name: Some("Synapse"),
                 version_string: Some("Synapse 1.99.0"),
+                unstable_features_enabled: None,
+                unstable_features_announced: None,
             },
         )
         .await;
@@ -535,6 +742,52 @@ mod tests {
         assert!(
             metrics.contains("federation_request_total"),
             "metrics should include federation_request_total line"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unstable_features_tracking() {
+        let db = setup_db().await;
+        let config = dummy_config(true, "salt");
+        let dummy_mailer =
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build();
+        let resources = AppResources {
+            db: Arc::new(db),
+            mailer: Arc::new(dummy_mailer),
+            config: Arc::new(config),
+        };
+
+        let enabled_features = vec!["msc2716".to_string(), "msc3030".to_string()];
+        let announced_features = vec![
+            "msc2716".to_string(),
+            "msc3030".to_string(),
+            "msc1234".to_string(),
+        ];
+
+        record_event(
+            &resources,
+            StatEvent {
+                server_name: "unstable.example",
+                federation_ok: true,
+                version_name: Some("Synapse"),
+                version_string: Some("Synapse 1.99.0"),
+                unstable_features_enabled: Some(&enabled_features),
+                unstable_features_announced: Some(&announced_features),
+            },
+        )
+        .await;
+
+        let metrics = build_prometheus_metrics(&resources).await;
+        assert!(
+            metrics.contains("federation_unstable_features_enabled_total 2"),
+            "metrics should include enabled unstable features count: {}",
+            metrics
+        );
+        assert!(
+            metrics.contains("federation_unstable_features_announced_total 3"),
+            "metrics should include announced unstable features count: {}",
+            metrics
         );
     }
 }

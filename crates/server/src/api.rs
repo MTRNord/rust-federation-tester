@@ -19,6 +19,7 @@ const ALERTS_TAG: &str = "Alerts API";
 pub mod federation_tester_api {
     use crate::{
         api::FEDERATION_TAG,
+        client::resolution::{fetch_client_server_versions, resolve_client_side_api},
         connection_pool::ConnectionPool,
         response::{Root, generate_json_report},
         stats::{self, StatEvent},
@@ -102,6 +103,25 @@ pub mod federation_tester_api {
         {
             Ok(report) => {
                 if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
+                    // Fetch client-server versions for unstable features tracking
+                    let (unstable_enabled, unstable_announced) = if report.federation_ok {
+                        let cs_address = resolve_client_side_api(&params.server_name).await;
+                        let cs_versions = fetch_client_server_versions(&cs_address).await;
+
+                        if let Some(features) = cs_versions.unstable_features {
+                            let enabled: Vec<String> = features
+                                .iter()
+                                .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
+                                .collect();
+                            let announced: Vec<String> = features.keys().cloned().collect();
+                            (Some(enabled), Some(announced))
+                        } else {
+                            (None, None)
+                        }
+                    } else {
+                        (None, None)
+                    };
+
                     stats::record_event(
                         &resources,
                         StatEvent {
@@ -109,6 +129,8 @@ pub mod federation_tester_api {
                             federation_ok: report.federation_ok,
                             version_name: Some(&report.version.name),
                             version_string: Some(&report.version.version),
+                            unstable_features_enabled: unstable_enabled.as_deref(),
+                            unstable_features_announced: unstable_announced.as_deref(),
                         },
                     )
                     .await;
@@ -164,6 +186,25 @@ pub mod federation_tester_api {
         {
             Ok(report) => {
                 if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
+                    // Fetch client-server versions for unstable features tracking
+                    let (unstable_enabled, unstable_announced) = if report.federation_ok {
+                        let cs_address = resolve_client_side_api(&params.server_name).await;
+                        let cs_versions = fetch_client_server_versions(&cs_address).await;
+
+                        if let Some(features) = cs_versions.unstable_features {
+                            let enabled: Vec<String> = features
+                                .iter()
+                                .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
+                                .collect();
+                            let announced: Vec<String> = features.keys().cloned().collect();
+                            (Some(enabled), Some(announced))
+                        } else {
+                            (None, None)
+                        }
+                    } else {
+                        (None, None)
+                    };
+
                     stats::record_event(
                         &resources,
                         StatEvent {
@@ -171,6 +212,8 @@ pub mod federation_tester_api {
                             federation_ok: report.federation_ok,
                             version_name: Some(&report.version.name),
                             version_string: Some(&report.version.version),
+                            unstable_features_enabled: unstable_enabled.as_deref(),
+                            unstable_features_announced: unstable_announced.as_deref(),
                         },
                     )
                     .await;
