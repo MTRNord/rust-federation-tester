@@ -560,6 +560,24 @@ mod tests {
         ))
         .await
         .expect("create table");
+
+        // Also create the raw table for storing individual events
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"CREATE TABLE federation_stat_raw (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            server_name TEXT NOT NULL,
+            federation_ok BOOLEAN NOT NULL,
+            version_name TEXT NULL,
+            version_string TEXT NULL,
+            unstable_features_enabled TEXT NULL,
+            unstable_features_announced TEXT NULL
+        );"#,
+        ))
+        .await
+        .expect("create raw table");
+
         db
     }
 
