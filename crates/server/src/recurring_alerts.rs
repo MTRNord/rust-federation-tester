@@ -113,7 +113,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                             "Federation Alert: {server_name} is not healthy"
                                         );
                                         let check_url = format!(
-                                            "{}?server_name={}",
+                                            "{}?serverName={}",
                                             config.frontend_url, server_name
                                         );
                                         let body = format!(
