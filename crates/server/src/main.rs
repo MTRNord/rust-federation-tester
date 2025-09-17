@@ -18,7 +18,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 #[cfg(not(feature = "console"))]
 fn initialize_standard_tracing() {
-    let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info";
+    let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tower_http=debug";
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
 
@@ -30,8 +30,7 @@ fn initialize_standard_tracing() {
 
 #[cfg(feature = "console")]
 fn initialize_layered_tracing() {
-    let default_directives =
-        "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace";
+    let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
 
