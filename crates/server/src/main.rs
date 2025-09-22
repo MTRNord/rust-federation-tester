@@ -14,18 +14,10 @@ use sea_orm::Database;
 use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(not(feature = "console"))]
 fn initialize_standard_tracing() {
-    let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tower_http=debug";
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
-
-    let registry = tracing_subscriber::registry().with(env_filter);
-    let layer = fmt::layer().with_target(true).with_level(true);
-
-    registry.with(layer).init();
+    tracing_subscriber::fmt().init();
 }
 
 #[cfg(feature = "console")]

@@ -411,6 +411,7 @@ pub mod alert_api {
                     .exec(resources.db.as_ref())
                     .await;
                 if let Err(e) = insert_res {
+                    error!("Failed to insert new alert: {:#?}", e);
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({"error": format!("DB error: {e}")})),
@@ -418,6 +419,7 @@ pub mod alert_api {
                 }
             }
             Err(e) => {
+                error!("Failed to query existing alert: {:#?}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": format!("DB error: {e}")})),
@@ -525,6 +527,7 @@ The Federation Tester Team"#,
                                 let mut model: alert::ActiveModel = a.into();
                                 model.verified = Set(true);
                                 if let Err(e) = model.update(resources.db.as_ref()).await {
+                                    error!("Failed to verify alert: {:#?}", e);
                                     return (
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(json!({"error": format!("DB error: {e}")})),
@@ -536,10 +539,13 @@ The Federation Tester Team"#,
                                 StatusCode::BAD_REQUEST,
                                 Json(json!({"error": "No alert found for this email and server"})),
                             ),
-                            Err(e) => (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error": format!("DB error: {e}")})),
-                            ),
+                            Err(e) => {
+                                error!("Failed to query alert for verification: {:#?}", e);
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(json!({"error": format!("DB error: {e}")})),
+                                );
+                            }
                         }
                     }
                     "list" => {
@@ -550,10 +556,13 @@ The Federation Tester Team"#,
                             .await;
                         match alerts {
                             Ok(list) => (StatusCode::OK, Json(json!({"alerts": list}))),
-                            Err(e) => (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error": format!("DB error: {e}")})),
-                            ),
+                            Err(e) => {
+                                error!("Failed to query alerts for listing: {:#?}", e);
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(json!({"error": format!("DB error: {e}")})),
+                                );
+                            }
                         }
                     }
                     "delete" => {
@@ -561,7 +570,8 @@ The Federation Tester Team"#,
                         if let Some(alert_id) = claims.alert_id.clone() {
                             let alert_id: i32 = match alert_id.parse() {
                                 Ok(id) => id,
-                                Err(_) => {
+                                Err(e) => {
+                                    error!("Invalid alert_id in token: {alert_id}\n{:#?}", e);
                                     return (
                                         StatusCode::BAD_REQUEST,
                                         Json(json!({"error": "Invalid alert_id in token"})),
@@ -575,10 +585,13 @@ The Federation Tester Team"#,
                                 .await;
                             match del {
                                 Ok(_) => (StatusCode::OK, Json(json!({"status": "deleted"}))),
-                                Err(e) => (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(json!({"error": format!("DB error: {e}")})),
-                                ),
+                                Err(e) => {
+                                    error!("Failed to delete alert: {:#?}", e);
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(json!({"error": format!("DB error: {e}")})),
+                                    );
+                                }
                             }
                         } else {
                             (
@@ -634,6 +647,7 @@ The Federation Tester Team"#,
         ) {
             Ok(t) => t,
             Err(e) => {
+                error!("Failed to generate token for listing alerts: {:#?}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": format!("Failed to generate token: {e}") })),
@@ -721,6 +735,7 @@ The Federation Tester Team"#
                 ) {
                     Ok(t) => t,
                     Err(e) => {
+                        error!("Failed to generate token for deleting alert: {:#?}", e);
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({ "error": format!("Failed to generate token: {e}") })),
@@ -766,10 +781,13 @@ The Federation Tester Team"#,
                 StatusCode::NOT_FOUND,
                 Json(json!({"error": "Alert not found"})),
             ),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("DB error: {e}")})),
-            ),
+            Err(e) => {
+                error!("Failed to query alert for deletion: {:#?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("DB error: {e}")})),
+                );
+            }
         }
     }
 }
