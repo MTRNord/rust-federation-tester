@@ -123,7 +123,8 @@ fn check_verify_keys(
                 has_ed25519key = true;
                 let mut matching_signature = false;
                 if public_key.len() == 32 {
-                    if let Ok(json_keys) = serde_json::from_str::<serde_json::Value>(keys_string)
+                    if let Ok(json_keys) =
+                        crate::security::secure_parse_json_slice(keys_string.as_bytes())
                         && let Some(signatures) = json_keys.get("signatures")
                         && let Some(server_signatures) = signatures.get(server_name)
                         && let Some(signature) = server_signatures.get(key_id.clone())

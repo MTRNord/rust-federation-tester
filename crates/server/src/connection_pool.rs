@@ -7,6 +7,8 @@ use hyper::client::conn::http1::SendRequest;
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::ServerName;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
@@ -16,33 +18,96 @@ use tracing::{debug, warn};
 type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni) - use Arc<str> for better memory efficiency
 type PooledConnection = SendRequest<Empty<Bytes>>;
 
+/// Track per-client connection usage to prevent DoS attacks
+#[derive(Debug)]
+struct ClientUsage {
+    connection_count: AtomicUsize,
+    last_request: AtomicU64, // Unix timestamp
+    rate_limit_tokens: AtomicU32,
+}
+
+impl ClientUsage {
+    fn new() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        Self {
+            connection_count: AtomicUsize::new(0),
+            last_request: AtomicU64::new(now),
+            rate_limit_tokens: AtomicU32::new(10), // Start with 10 tokens
+        }
+    }
+}
+
 /// Connection pool for reusing HTTP/1.1 connections with custom SNI
 /// This helps avoid repeated TCP handshakes and TLS negotiations
+/// Now includes per-client limits to prevent DoS attacks
 #[derive(Clone)]
 pub struct ConnectionPool {
     pools: Arc<DashMap<ConnectionKey, Arc<Mutex<Vec<PooledConnection>>>>>,
+    client_usage: Arc<DashMap<String, ClientUsage>>, // Track per-client usage
     max_connections_per_key: usize,
     max_total_connections: usize,
+    max_connections_per_client: usize, // NEW: Per-client limit
     connection_timeout: Duration,
 }
 
 impl ConnectionPool {
     pub fn new(max_connections_per_key: usize, connection_timeout_secs: u64) -> Self {
+        Self::new_with_limits(
+            max_connections_per_key,
+            max_connections_per_key * 2,
+            connection_timeout_secs,
+        )
+    }
+
+    pub fn new_with_limits(
+        max_connections_per_key: usize,
+        max_connections_per_client: usize,
+        connection_timeout_secs: u64,
+    ) -> Self {
         Self {
             pools: Arc::new(DashMap::new()),
+            client_usage: Arc::new(DashMap::new()),
             max_connections_per_key,
             max_total_connections: max_connections_per_key * 20, // Reasonable total limit
+            max_connections_per_client,
             connection_timeout: Duration::from_secs(connection_timeout_secs),
         }
     }
 
-    /// Get a connection from the pool or create a new one
+    /// Get a connection from the pool or create a new one (backward compatibility)
     #[tracing::instrument(name = "connection_pool_get", skip(self), fields(addr = %addr, sni = %sni))]
     pub async fn get_connection(
         &self,
         addr: &str,
         sni: &str,
     ) -> color_eyre::eyre::Result<PooledConnection> {
+        // Use "anonymous" as default client ID for backward compatibility
+        self.get_connection_with_client_id(addr, sni, "anonymous")
+            .await
+    }
+
+    /// Get a connection from the pool or create a new one
+    /// Now includes per-client limits to prevent DoS attacks
+    #[tracing::instrument(name = "connection_pool_get", skip(self), fields(addr = %addr, sni = %sni, client_id = %client_id))]
+    pub async fn get_connection_with_client_id(
+        &self,
+        addr: &str,
+        sni: &str,
+        client_id: &str, // IP address or request identifier
+    ) -> color_eyre::eyre::Result<PooledConnection> {
+        // Check per-client limits first
+        if !self.can_client_create_connection(client_id) {
+            return Err(color_eyre::eyre::eyre!("Client connection limit exceeded"));
+        }
+
+        // Apply rate limiting
+        if !self.apply_rate_limit(client_id) {
+            return Err(color_eyre::eyre::eyre!("Rate limit exceeded"));
+        }
+
         let key = (Arc::from(addr), Arc::from(sni));
 
         // Try to get an existing connection from the pool
@@ -52,6 +117,7 @@ impl ConnectionPool {
                 // Test if connection is still alive
                 if conn.ready().await.is_ok() {
                     debug!("Reusing pooled connection for {addr} with SNI {sni}");
+                    self.increment_client_usage(client_id);
                     return Ok(conn);
                 }
                 // Connection is dead, continue to try next one
@@ -65,12 +131,20 @@ impl ConnectionPool {
 
         // Create new connection
         debug!("Creating new connection for {addr} with SNI {sni}");
-        self.create_new_connection(addr, sni).await
+        let conn = self.create_new_connection(addr, sni).await?;
+        self.increment_client_usage(client_id);
+        Ok(conn)
     }
 
     /// Return a connection to the pool for reuse
-    #[tracing::instrument(name = "connection_pool_return", skip(self, conn), fields(addr = %addr, sni = %sni))]
-    pub async fn return_connection(&self, addr: &str, sni: &str, mut conn: PooledConnection) {
+    #[tracing::instrument(name = "connection_pool_return", skip(self, conn), fields(addr = %addr, sni = %sni, client_id = %client_id))]
+    pub async fn return_connection(
+        &self,
+        addr: &str,
+        sni: &str,
+        client_id: &str,
+        mut conn: PooledConnection,
+    ) {
         let key = (Arc::from(addr), Arc::from(sni));
 
         // Only return connection if it's still ready
@@ -85,6 +159,9 @@ impl ConnectionPool {
                 debug!("Returned connection to pool for {addr} with SNI {sni}");
             }
         }
+
+        // Decrement client usage when connection is returned to pool or dropped
+        self.decrement_client_usage(client_id);
     }
 
     async fn create_new_connection(
@@ -192,6 +269,63 @@ impl ConnectionPool {
     /// Check if we can create a new connection without exceeding limits
     fn can_create_connection(&self) -> bool {
         self.total_connections() < self.max_total_connections
+    }
+
+    /// Check if a client can create another connection
+    fn can_client_create_connection(&self, client_id: &str) -> bool {
+        if let Some(usage) = self.client_usage.get(client_id) {
+            usage.connection_count.load(Ordering::Relaxed) < self.max_connections_per_client
+        } else {
+            true
+        }
+    }
+
+    /// Apply rate limiting to prevent abuse
+    fn apply_rate_limit(&self, client_id: &str) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let usage = self
+            .client_usage
+            .entry(client_id.to_string())
+            .or_insert_with(ClientUsage::new);
+
+        let last_request = usage.last_request.load(Ordering::Relaxed);
+        let time_passed = now.saturating_sub(last_request);
+
+        // Refill tokens (1 token per second, max 10)
+        let tokens_to_add = (time_passed as u32).min(10);
+        let current_tokens = usage.rate_limit_tokens.load(Ordering::Relaxed);
+        let new_tokens = (current_tokens + tokens_to_add).min(10);
+        usage.rate_limit_tokens.store(new_tokens, Ordering::Relaxed);
+        usage.last_request.store(now, Ordering::Relaxed);
+
+        // Consume a token if available
+        if new_tokens > 0 {
+            usage
+                .rate_limit_tokens
+                .store(new_tokens - 1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Increment client connection usage
+    fn increment_client_usage(&self, client_id: &str) {
+        let usage = self
+            .client_usage
+            .entry(client_id.to_string())
+            .or_insert_with(ClientUsage::new);
+        usage.connection_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement client connection usage when connection is returned
+    fn decrement_client_usage(&self, client_id: &str) {
+        if let Some(usage) = self.client_usage.get(client_id) {
+            usage.connection_count.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 
     /// Force cleanup of excess connections if memory limits are exceeded

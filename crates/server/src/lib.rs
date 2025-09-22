@@ -20,6 +20,7 @@ pub mod federation;
 pub mod optimization;
 pub mod recurring_alerts;
 pub mod response;
+pub mod security;
 pub mod stats;
 pub mod validation;
 

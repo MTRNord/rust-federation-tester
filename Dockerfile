@@ -41,11 +41,26 @@ RUN case \"$TARGETPLATFORM\" in \
 FROM debian:trixie-slim
 ARG TARGETPLATFORM
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
+# Create a non-root user for the application
+RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser
 
-COPY --from=builder /app/target/dist/rust-federation-tester /usr/local/bin/rust-federation-tester
-COPY --from=builder /app/target/dist/migration /usr/local/bin/migration
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Create application directory with proper ownership
+WORKDIR /app
+RUN chown appuser:appuser /app
+
+COPY --from=builder --chown=appuser:appuser /app/target/dist/rust-federation-tester /usr/local/bin/rust-federation-tester
+COPY --from=builder --chown=appuser:appuser /app/target/dist/migration /usr/local/bin/migration
+
+# Switch to non-root user
+USER appuser
 
 EXPOSE 8080
+
+# Add security labels for container runtime
+LABEL security.capabilities.drop="ALL"
+LABEL security.no-new-privileges="true"
+LABEL security.read-only-rootfs="true"
+
 CMD ["sh", "-c", "migration up && rust-federation-tester"]

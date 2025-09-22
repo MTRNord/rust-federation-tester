@@ -96,7 +96,9 @@ pub async fn fetch_url_pooled_simple(
                 .map_err(|e| FetchError::Network(e.to_string()))?;
             match sender.send_request(req).await {
                 Ok(response) => {
-                    connection_pool.return_connection(addr, sni, sender).await;
+                    connection_pool
+                        .return_connection(addr, sni, "anonymous", sender)
+                        .await;
                     return Ok(Some(response));
                 }
                 Err(e) => {
@@ -145,6 +147,8 @@ pub async fn fetch_url_pooled_simple(
         .send_request(req)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
-    connection_pool.return_connection(addr, sni, sender).await;
+    connection_pool
+        .return_connection(addr, sni, "anonymous", sender)
+        .await;
     Ok(Some(response))
 }

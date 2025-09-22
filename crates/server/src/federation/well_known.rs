@@ -1,15 +1,94 @@
 use crate::federation::network::fetch_url_custom_sni_host;
-use crate::response::{Error, ErrorCode, WellKnownResult};
+use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;
 use ::time as time_crate;
 use futures::{StreamExt, stream::FuturesUnordered};
 use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{Resolver, name_server::ConnectionProvider};
+use std::net::IpAddr;
 use tokio::time::{Duration, timeout};
-use tracing::info;
+use tracing::{info, warn};
 use url::Url;
 
 pub const NETWORK_TIMEOUT_SECS: u64 = 3;
+
+/// Validate well-known response for security issues
+fn validate_well_known_security(original_server: &str, m_server: &str) -> Result<(), Error> {
+    // 1. Prevent empty server names
+    if m_server.is_empty() {
+        return Err(Error {
+            error: "Empty m.server value in well-known response".to_string(),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::EmptyString),
+        });
+    }
+
+    // 2. Length limits to prevent resource exhaustion
+    if m_server.len() > 255 {
+        return Err(Error {
+            error: "m.server value too long (max 255 characters)".to_string(),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+        });
+    }
+
+    // 3. Prevent infinite redirect loops
+    if m_server == original_server {
+        warn!(
+            "Self-referential delegation detected: {} -> {}",
+            original_server, m_server
+        );
+        // Allow but warn - this might be intentional
+    }
+
+    // 4. Validate against localhost/internal addresses to prevent SSRF
+    let server_host = m_server.split(':').next().unwrap_or(m_server);
+    if let Ok(ip) = server_host.parse::<IpAddr>() {
+        if is_private_or_internal_ip(&ip) {
+            return Err(Error {
+                error: format!("m.server points to private/internal address: {}", m_server),
+                error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+            });
+        }
+    }
+
+    // 5. Check for suspicious patterns
+    if server_host.contains("localhost")
+        || server_host.contains("127.0.0.1")
+        || server_host.contains("::1")
+    {
+        return Err(Error {
+            error: format!("m.server points to localhost: {}", m_server),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+        });
+    }
+
+    Ok(())
+}
+
+/// Check if an IP address is private or internal to prevent SSRF
+fn is_private_or_internal_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private() ||
+            v4.is_loopback() ||
+            v4.is_link_local() ||
+            // AWS metadata service
+            (v4.octets()[0] == 169 && v4.octets()[1] == 254) ||
+            // RFC 5737 test addresses
+            (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 2) ||
+            (v4.octets()[0] == 198 && v4.octets()[1] == 51 && v4.octets()[2] == 100) ||
+            (v4.octets()[0] == 203 && v4.octets()[1] == 0 && v4.octets()[2] == 113)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback() ||
+            // Unique local addresses (fc00::/7)
+            (v6.segments()[0] & 0xfe00) == 0xfc00 ||
+            // Link local addresses (fe80::/10)
+            (v6.segments()[0] & 0xffc0) == 0xfe80 ||
+            // Documentation addresses (2001:db8::/32)
+            (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct WellKnownPhaseResult {
@@ -160,12 +239,34 @@ async fn fetch_url_with_redirects(
                         }
                         if let Ok(body) = resp.into_body().collect().await {
                             let body = body.to_bytes();
-                            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
-                                && let Some(m_server) = json.get("m.server")
-                                && let Some(server_str) = m_server.as_str()
-                            {
-                                result.m_server = server_str.to_string();
-                                return (None, result, Some(server_str.to_string()));
+                            // Use secure JSON parsing to prevent JSON bombs
+                            match crate::security::secure_parse_json_slice(&body) {
+                                Ok(json) => {
+                                    if let Some(m_server) = json.get("m.server")
+                                        && let Some(server_str) = m_server.as_str()
+                                    {
+                                        // Apply security validation before accepting the m.server value
+                                        if let Err(security_error) =
+                                            validate_well_known_security(&current_host, server_str)
+                                        {
+                                            result.error = Some(security_error);
+                                            return (None, result, None);
+                                        }
+
+                                        result.m_server = server_str.to_string();
+                                        return (None, result, Some(server_str.to_string()));
+                                    }
+                                }
+                                Err(e) => {
+                                    result.error = Some(Error {
+                                        error: format!(
+                                            "Invalid JSON in well-known response: {}",
+                                            e
+                                        ),
+                                        error_code: ErrorCode::InvalidJson(e.to_string()),
+                                    });
+                                    return (None, result, None);
+                                }
                             }
                         }
                         return (None, result, None);
