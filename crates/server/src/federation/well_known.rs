@@ -41,13 +41,13 @@ fn validate_well_known_security(original_server: &str, m_server: &str) -> Result
 
     // 4. Validate against localhost/internal addresses to prevent SSRF
     let server_host = m_server.split(':').next().unwrap_or(m_server);
-    if let Ok(ip) = server_host.parse::<IpAddr>() {
-        if is_private_or_internal_ip(&ip) {
-            return Err(Error {
-                error: format!("m.server points to private/internal address: {}", m_server),
-                error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
-            });
-        }
+    if let Ok(ip) = server_host.parse::<IpAddr>()
+        && is_private_or_internal_ip(&ip)
+    {
+        return Err(Error {
+            error: format!("m.server points to private/internal address: {}", m_server),
+            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+        });
     }
 
     // 5. Check for suspicious patterns
