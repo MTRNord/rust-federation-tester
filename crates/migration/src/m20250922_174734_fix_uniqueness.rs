@@ -108,7 +108,6 @@ impl MigrationTrait for Migration {
                 .await
         } else {
             // Remove the unique constraint from email column
-
             manager
                 .alter_table(
                     Table::alter()
@@ -120,28 +119,10 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
 
-            // Then drop the old index that included id
+            // Manually add new unique index on (email, server_name)
             manager
-                .drop_index(
-                    Index::drop()
-                        .name("alert_email_key")
-                        .table(Alert::Table)
-                        .to_owned(),
-                )
-                .await?;
-
-            // Finally, create the new unique index on (email, server_name)
-            manager
-                .create_index(
-                    Index::create()
-                        .name("idx_email_server_name_unique")
-                        .table(Alert::Table)
-                        .col(Alert::Email)
-                        .col(Alert::ServerName)
-                        .unique()
-                        .to_owned(),
-                )
-                .await
+                .get_connection().execute_unprepared("ALTER TABLE alert ADD CONSTRAINT idx_email_server_name_unique UNIQUE (email, server_name)")
+                .await.map(|_| ())
         }
     }
 
@@ -247,24 +228,22 @@ impl MigrationTrait for Migration {
                 )
                 .await
         } else {
-            // For PostgreSQL, restore the original unique index
+            // Manually drop the unique constraint on (email, server_name)
             manager
-                .drop_index(
-                    Index::drop()
-                        .name("idx_email_server_name_unique")
-                        .table(Alert::Table)
-                        .to_owned(),
-                )
+                .get_connection()
+                .execute_unprepared("ALTER TABLE alert DROP CONSTRAINT alert_email_server_name_key")
                 .await?;
+
             manager
-                .create_index(
-                    Index::create()
-                        .name("idx_email_server_name_unique")
+                .alter_table(
+                    Table::alter()
                         .table(Alert::Table)
-                        .col(Alert::Id)
-                        .col(Alert::Email)
-                        .col(Alert::ServerName)
-                        .unique()
+                        .modify_column(
+                            ColumnDef::new(Alert::Email)
+                                .string()
+                                .not_null()
+                                .unique_key(), // Restore unique constraint on email
+                        )
                         .to_owned(),
                 )
                 .await
