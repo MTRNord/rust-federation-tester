@@ -113,7 +113,7 @@ impl MigrationTrait for Migration {
             manager
                 .drop_index(
                     Index::drop()
-                        .name("idx_email_server_name_unique")
+                        .name("alert_email_key")
                         .table(Alert::Table)
                         .to_owned(),
                 )
