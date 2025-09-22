@@ -159,7 +159,7 @@ mod tests {
         for _ in 0..50 {
             deep_json.push_str("{\"a\":");
         }
-        deep_json.push_str("1");
+        deep_json.push('1');
         for _ in 0..50 {
             deep_json.push('}');
         }
