@@ -107,9 +107,20 @@ impl MigrationTrait for Migration {
                 )
                 .await
         } else {
-            // For PostgreSQL, we can modify constraints directly
+            // Remove the unique constraint from email column
 
-            // First drop the old index that included id
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(Alert::Table)
+                        .modify_column(
+                            ColumnDef::new(Alert::Email).string().not_null(), // Remove unique constraint
+                        )
+                        .to_owned(),
+                )
+                .await?;
+
+            // Then drop the old index that included id
             manager
                 .drop_index(
                     Index::drop()
@@ -119,9 +130,7 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
 
-            // Remove the unique constraint from email column
-            // Note: PostgreSQL would need ALTER TABLE to modify column constraints
-            // For now, we'll create the new unique index on (email, server_name)
+            // Finally, create the new unique index on (email, server_name)
             manager
                 .create_index(
                     Index::create()
