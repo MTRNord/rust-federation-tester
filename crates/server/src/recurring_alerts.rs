@@ -23,7 +23,7 @@ type AlertCheckTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Email sending policy configuration
 const REMINDER_EMAIL_INTERVAL: Duration = Duration::from_secs(12 * 3600); // 12 hours
-const CHECK_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour - check frequently
+const CHECK_INTERVAL: Duration = Duration::from_secs(15 * 60); // 15 minutes - check frequently
 
 pub struct AlertTaskManager {
     running: RwLock<HashMap<i32, Arc<AtomicBool>>>,
@@ -409,7 +409,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                 }
                             }
 
-                            // Check every hour
+                            // Check every 15 minutes
                             tokio::time::sleep(CHECK_INTERVAL).await;
                         }
                         info!("Stopped recurring check for {} ({})", server_name, email);
