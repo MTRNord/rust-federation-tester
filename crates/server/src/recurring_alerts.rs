@@ -57,6 +57,12 @@ impl AlertTaskManager {
         tokio::spawn(task);
     }
 
+    /// Check if a task is already running for this alert
+    pub async fn is_running(&self, alert_id: i32) -> bool {
+        let running = self.running.read().await;
+        running.contains_key(&alert_id)
+    }
+
     #[tracing::instrument(name = "alert_manager_stop_task", skip(self), fields(alert_id = %alert_id))]
     pub async fn stop_task(&self, alert_id: i32) {
         let mut running = self.running.write().await;
@@ -252,6 +258,12 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
 
         for (index, a) in alerts.iter().enumerate() {
             let alert_id = a.id;
+
+            // Skip if task is already running for this alert
+            if task_manager.is_running(alert_id).await {
+                continue;
+            }
+
             let email = a.email.clone();
             let server_name = a.server_name.clone();
             let resolver = resolver.clone();
@@ -264,7 +276,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
             task_manager
                 .start_or_restart_task(alert_id, move |flag| {
                     Box::pin(async move {
-                        // Stagger the initial start time to distribute load
+                        // Stagger the initial start time to distribute load (only on first start)
                         if initial_delay.as_secs() > 0 {
                             info!(
                                 "Alert check for {} ({}) will start in {} seconds",
