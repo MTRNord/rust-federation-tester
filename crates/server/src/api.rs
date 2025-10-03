@@ -429,29 +429,49 @@ pub mod alert_api {
 
         // Send verification email (always for new or unverified)
         let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
-        let email_body = format!(
-            r#"Hello,
-        
-You requested to receive alerts for your server: {}
 
-Please verify your email address by clicking the link below (valid for 1 hour):
-{}
+        let template = crate::email_templates::VerificationEmailTemplate {
+            server_name: payload.server_name.clone(),
+            verify_url: verify_url.clone(),
+        };
 
-If you did not request this, you can ignore this email.
+        let subject = "Please verify your email for Federation Alerts";
 
-Best regards,
-The Federation Tester Team"#,
-            payload.server_name, verify_url
-        );
+        // Render both HTML and plain text versions
+        let html_body = match template.render_html() {
+            Ok(html) => html,
+            Err(e) => {
+                error!("Failed to render HTML email template: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to render email template" })),
+                );
+            }
+        };
+        let text_body = template.render_text();
+
+        // Create multipart email with both HTML and plain text
         let email = lettre::Message::builder()
             .from(resources.config.smtp.from.parse().unwrap())
             .to(payload.email.parse().unwrap())
-            .subject("Please verify your email for Federation Alerts")
-            .header(lettre::message::header::ContentType::TEXT_PLAIN)
+            .subject(subject)
             .header(lettre::message::header::MIME_VERSION_1_0)
             .message_id(None)
-            .body(email_body)
+            .multipart(
+                lettre::message::MultiPart::alternative()
+                    .singlepart(
+                        lettre::message::SinglePart::builder()
+                            .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                            .body(text_body),
+                    )
+                    .singlepart(
+                        lettre::message::SinglePart::builder()
+                            .header(lettre::message::header::ContentType::TEXT_HTML)
+                            .body(html_body),
+                    ),
+            )
             .unwrap();
+
         if let Err(e) = resources.mailer.send(email).await {
             error!("Failed to send verification email: {:#?}", e);
             return (

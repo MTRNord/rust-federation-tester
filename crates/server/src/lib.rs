@@ -14,6 +14,7 @@ pub mod api;
 pub mod client;
 pub mod config;
 pub mod connection_pool;
+pub mod email_templates;
 pub mod entity;
 pub mod error;
 pub mod federation;

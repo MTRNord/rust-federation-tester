@@ -1,6 +1,7 @@
 use crate::AppResources;
 use crate::api::alert_api::MagicClaims;
 use crate::connection_pool::ConnectionPool;
+use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate};
 use crate::entity::alert;
 use crate::response::generate_json_report;
 use hickory_resolver::Resolver;
@@ -9,6 +10,7 @@ use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
 use lettre::AsyncTransport;
 use lettre::message::header::HeaderName;
 use lettre::message::header::{Header, HeaderValue};
+use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -107,17 +109,7 @@ async fn send_failure_email(
     alert_id: i32,
     failure_count: i32,
 ) {
-    let subject = format!("Federation Alert: {server_name} is not healthy");
     let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
-
-    let reminder_text = if failure_count > 1 {
-        format!(
-            "\nThis is reminder #{} - the server has been failing for a while.",
-            failure_count
-        )
-    } else {
-        String::new()
-    };
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
@@ -134,19 +126,6 @@ async fn send_failure_email(
         format!("{} hours", reminder_hours)
     };
 
-    let body = format!(
-        r#"Hello,
-
-Your server '{server_name}' failed the federation health check.{reminder_text}
-
-Please review the latest report at {check_url} and take action if needed.
-
-You will receive reminder emails every {reminder_interval_text} while the issue persists, and a confirmation email once the issue is resolved.
-
-Best regards,
-The Federation Tester Team"#
-    );
-
     let unsubscribe_url = generate_list_unsubscribe_url(
         &config.magic_token_secret,
         email,
@@ -155,15 +134,48 @@ The Federation Tester Team"#
         &config.frontend_url,
     );
 
+    let template = FailureEmailTemplate {
+        server_name: server_name.to_string(),
+        check_url: check_url.clone(),
+        is_reminder: failure_count > 1,
+        failure_count,
+        reminder_interval: reminder_interval_text,
+        unsubscribe_url: unsubscribe_url.clone(),
+    };
+
+    let subject = format!("Federation Alert: {server_name} is not healthy");
+
+    // Render both HTML and plain text versions
+    let html_body = match template.render_html() {
+        Ok(html) => html,
+        Err(e) => {
+            error!("Failed to render HTML email template: {}", e);
+            return;
+        }
+    };
+    let text_body = template.render_text();
+
+    // Create multipart email with both HTML and plain text
     let email_msg = lettre::Message::builder()
         .from(config.smtp.from.parse().unwrap())
         .to(email.parse().unwrap())
         .subject(subject)
-        .header(lettre::message::header::ContentType::TEXT_PLAIN)
         .header(lettre::message::header::MIME_VERSION_1_0)
         .header(UnsubscribeHeader::from(unsubscribe_url))
         .message_id(None)
-        .body(body)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                        .body(text_body),
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_HTML)
+                        .body(html_body),
+                ),
+        )
         .unwrap();
 
     if let Err(e) = mailer.send(email_msg).await {
@@ -184,21 +196,7 @@ async fn send_recovery_email(
     server_name: &str,
     alert_id: i32,
 ) {
-    let subject = format!("Federation Alert: {server_name} has recovered!");
     let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
-
-    let body = format!(
-        r#"Hello,
-
-Good news! Your server '{server_name}' has recovered and is now passing federation health checks.
-
-You can verify the current status at {check_url}
-
-We'll continue monitoring and will notify you if any issues arise again.
-
-Best regards,
-The Federation Tester Team"#
-    );
 
     let unsubscribe_url = generate_list_unsubscribe_url(
         &config.magic_token_secret,
@@ -208,15 +206,45 @@ The Federation Tester Team"#
         &config.frontend_url,
     );
 
+    let template = RecoveryEmailTemplate {
+        server_name: server_name.to_string(),
+        check_url: check_url.clone(),
+        unsubscribe_url: unsubscribe_url.clone(),
+    };
+
+    let subject = format!("Federation Alert: {server_name} has recovered!");
+
+    // Render both HTML and plain text versions
+    let html_body = match template.render_html() {
+        Ok(html) => html,
+        Err(e) => {
+            error!("Failed to render HTML email template: {}", e);
+            return;
+        }
+    };
+    let text_body = template.render_text();
+
+    // Create multipart email with both HTML and plain text
     let email_msg = lettre::Message::builder()
         .from(config.smtp.from.parse().unwrap())
         .to(email.parse().unwrap())
         .subject(subject)
-        .header(lettre::message::header::ContentType::TEXT_PLAIN)
         .header(lettre::message::header::MIME_VERSION_1_0)
         .header(UnsubscribeHeader::from(unsubscribe_url))
         .message_id(None)
-        .body(body)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                        .body(text_body),
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_HTML)
+                        .body(html_body),
+                ),
+        )
         .unwrap();
 
     if let Err(e) = mailer.send(email_msg).await {

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Email - Federation Alerts</title>
+</head>
+
+<body>
+    <div class="email-container">
+        <div class="email-header">
+            <h1 class="brand">Matrix Federation Tester</h1>
+        </div>
+
+        <div class="email-body">
+            <h1>📧 Verify Your Email</h1>
+
+            <p>You requested to receive alerts for your server: <strong>{{ server_name }}</strong></p>
+
+            <p>Please verify your email address by clicking the button below (valid for 1 hour):</p>
+
+            <a href="{{ verify_url }}" class="cta-button">Verify Email Address</a>
+
+            <div class="info-box">
+                <p><strong>What happens after verification?</strong></p>
+                <p>Once verified, you'll start receiving alerts if your server fails federation health checks. We'll
+                    check your server regularly and notify you of any issues.</p>
+            </div>
+
+            <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+            <div class="server-details">
+                {{ verify_url }}
+            </div>
+
+            <p>If you did not request this, you can safely ignore this email.</p>
+        </div>
+
+        <div class="email-footer">
+            <p><strong>Matrix Federation Tester</strong></p>
+            <p>Automated monitoring for Matrix homeserver federation.</p>
+        </div>
+    </div>
+</body>
+
+</html>

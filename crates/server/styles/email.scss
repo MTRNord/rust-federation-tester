@@ -1,0 +1,384 @@
+// GOV.UK inspired email styles
+// Colors from GOV.UK Design System
+$govuk-blue: #1d70b8;
+$govuk-green: #00703c;
+$govuk-red: #d4351c;
+$govuk-yellow: #ffdd00;
+$govuk-black: #0b0c0c;
+$govuk-grey-1: #f3f2f1;
+$govuk-grey-2: #505a5f;
+$govuk-white: #ffffff;
+
+// Typography
+$font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+
+// Base styles
+body {
+  margin: 0;
+  padding: 0;
+  font-family: $font-family;
+  font-size: 19px;
+  line-height: 1.5;
+  color: $govuk-black;
+  background-color: $govuk-grey-1;
+}
+
+// Email container
+.email-container {
+  max-width: 600px;
+  margin: 0 auto;
+  background-color: $govuk-white;
+}
+
+// Header
+.email-header {
+  background-color: $govuk-black;
+  padding: 20px 30px;
+  border-bottom: 10px solid $govuk-blue;
+
+  .brand {
+    color: $govuk-white;
+    font-size: 30px;
+    font-weight: bold;
+    margin: 0;
+    text-decoration: none;
+  }
+}
+
+// Main content
+.email-body {
+  padding: 30px;
+
+  h1 {
+    font-size: 32px;
+    line-height: 1.2;
+    font-weight: bold;
+    margin: 0 0 20px 0;
+    color: $govuk-black;
+  }
+
+  p {
+    margin: 0 0 20px 0;
+    font-size: 19px;
+    line-height: 1.5;
+  }
+
+  a {
+    color: $govuk-blue;
+    text-decoration: underline;
+    word-wrap: break-word;
+
+    &:hover {
+      color: darken($govuk-blue, 10%);
+    }
+  }
+}
+
+// GOV.UK Notification Banner - for failure/success notifications
+.govuk-notification-banner {
+  font-family: $font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.25;
+  margin-bottom: 30px;
+  border: 5px solid $govuk-blue;
+  background-color: $govuk-blue;
+  
+  &:focus {
+    outline: 3px solid $govuk-yellow;
+  }
+  
+  &--success {
+    border-color: $govuk-green;
+    background-color: $govuk-green;
+  }
+  
+  &--warning {
+    border-color: $govuk-red;
+    background-color: $govuk-red;
+  }
+  
+  @media (min-width: 40.0625em) {
+    margin-bottom: 50px;
+    font-size: 1.1875rem;
+    line-height: 1.3157894737;
+  }
+}
+
+.govuk-notification-banner__header {
+  padding: 2px 15px 5px;
+  border-bottom: 1px solid transparent;
+  
+  @media (min-width: 40.0625em) {
+    padding: 2px 20px 5px;
+  }
+}
+
+.govuk-notification-banner__title {
+  font-size: 1rem;
+  line-height: 1.25;
+  font-weight: 700;
+  margin: 0;
+  padding: 0;
+  color: $govuk-white;
+  
+  @media (min-width: 40.0625em) {
+    font-size: 1.1875rem;
+    line-height: 1.3157894737;
+  }
+}
+
+.govuk-notification-banner__content {
+  color: $govuk-black;
+  padding: 15px;
+  background-color: $govuk-white;
+  
+  @media (min-width: 40.0625em) {
+    padding: 20px;
+  }
+  
+  > * {
+    box-sizing: border-box;
+    max-width: 605px;
+  }
+  
+  > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+.govuk-notification-banner__heading {
+  font-size: 1.125rem;
+  line-height: 1.1111111111;
+  font-weight: 700;
+  margin: 0 0 15px;
+  padding: 0;
+  
+  @media (min-width: 40.0625em) {
+    font-size: 1.5rem;
+    line-height: 1.25;
+  }
+}
+
+.govuk-body {
+  color: $govuk-black;
+  font-family: $font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.25;
+  margin-top: 0;
+  margin-bottom: 15px;
+  
+  @media (min-width: 40.0625em) {
+    font-size: 1.1875rem;
+    line-height: 1.3157894737;
+    margin-bottom: 20px;
+  }
+}
+
+.govuk-notification-banner__link {
+  font-family: $font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-decoration: underline;
+  text-decoration-thickness: max(1px, 0.0625rem);
+  text-underline-offset: 0.1578em;
+  
+  &:link,
+  &:visited {
+    color: $govuk-blue;
+  }
+  
+  &:hover {
+    color: #003078;
+    text-decoration-thickness: max(3px, 0.1875rem, 0.12em);
+    -webkit-text-decoration-skip-ink: none;
+    text-decoration-skip-ink: none;
+    -webkit-text-decoration-skip: none;
+    text-decoration-skip: none;
+  }
+  
+  &:active,
+  &:focus {
+    color: $govuk-black;
+  }
+  
+  &:focus {
+    outline: 3px solid transparent;
+    background-color: $govuk-yellow;
+    box-shadow: 0 -2px $govuk-yellow, 0 4px $govuk-black;
+    text-decoration: none;
+  }
+  
+  .govuk-notification-banner--success & {
+    &:link,
+    &:visited {
+      color: $govuk-green;
+    }
+    
+    &:hover {
+      color: #004e2a;
+    }
+    
+    &:active {
+      color: $govuk-green;
+    }
+    
+    &:focus {
+      color: $govuk-black;
+    }
+  }
+}
+
+// Call to action button - GOV.UK Design System style
+.cta-button {
+  font-family: $font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.1875;
+  box-sizing: border-box;
+  display: inline-block;
+  position: relative;
+  width: 100%;
+  margin: 0 0 22px;
+  padding: 8px 10px 7px;
+  border: 2px solid transparent;
+  border-radius: 0;
+  color: $govuk-white;
+  background-color: $govuk-green;
+  box-shadow: 0 2px 0 #002d18;
+  text-align: center;
+  vertical-align: top;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  text-decoration: none;
+  
+  &::before {
+    content: "";
+    display: block;
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    bottom: -4px;
+    left: -2px;
+    background: transparent;
+  }
+  
+  &:hover {
+    background-color: #005a30;
+    color: $govuk-white;
+    text-decoration: none;
+  }
+  
+  &:active {
+    top: 2px;
+  }
+  
+  &:link,
+  &:visited {
+    color: $govuk-white;
+    text-decoration: none;
+  }
+  
+  &:focus:not(:active):not(:hover) {
+    border-color: $govuk-yellow;
+    color: $govuk-black;
+    background-color: $govuk-yellow;
+    box-shadow: 0 2px 0 $govuk-black;
+  }
+  
+  &:focus {
+    border-color: $govuk-yellow;
+    outline: 3px solid transparent;
+    box-shadow: inset 0 0 0 1px $govuk-yellow;
+  }
+  
+  @media (min-width: 40.0625em) {
+    margin-bottom: 32px;
+    width: auto;
+    font-size: 1.1875rem;
+    line-height: 1;
+  }
+}
+
+// Info box
+.info-box {
+  background-color: $govuk-grey-1;
+  padding: 20px;
+  margin: 20px 0;
+  border-left: 5px solid $govuk-grey-2;
+
+  p {
+    margin: 0;
+  }
+}
+
+// Server details
+.server-details {
+  background-color: $govuk-grey-1;
+  padding: 15px 20px;
+  margin: 20px 0;
+  font-family: monospace;
+  font-size: 16px;
+
+  strong {
+    font-weight: bold;
+  }
+}
+
+// Footer
+.email-footer {
+  background-color: $govuk-grey-1;
+  padding: 20px 30px;
+  border-top: 1px solid darken($govuk-grey-1, 10%);
+  font-size: 16px;
+  color: $govuk-grey-2;
+
+  p {
+    margin: 0 0 10px 0;
+    
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  a {
+    color: $govuk-grey-2;
+    text-decoration: underline;
+  }
+}
+
+// Reminder badge
+.reminder-badge {
+  display: inline-block;
+  background-color: $govuk-yellow;
+  color: $govuk-black;
+  padding: 5px 10px;
+  font-weight: bold;
+  border-radius: 3px;
+  margin: 10px 0;
+}
+
+// Responsive adjustments for mobile
+@media only screen and (max-width: 600px) {
+  .email-container {
+    width: 100% !important;
+  }
+
+  .email-header,
+  .email-body,
+  .email-footer {
+    padding: 20px !important;
+  }
+
+  .email-body h1 {
+    font-size: 24px !important;
+  }
+}
