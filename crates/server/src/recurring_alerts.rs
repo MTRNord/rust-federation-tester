@@ -3,6 +3,7 @@ use crate::api::alert_api::MagicClaims;
 use crate::connection_pool::ConnectionPool;
 use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate};
 use crate::entity::alert;
+use crate::entity::email_log;
 use crate::response::generate_json_report;
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
@@ -104,6 +105,7 @@ fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool 
 async fn send_failure_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
     server_name: &str,
     alert_id: i32,
@@ -185,6 +187,21 @@ async fn send_failure_email(
             "Sent failure alert email #{} to {} for server {}",
             failure_count, email, server_name
         );
+
+        // Log the email to database
+        let email_log_entry = email_log::ActiveModel {
+            id: ActiveValue::NotSet,
+            alert_id: ActiveValue::Set(alert_id),
+            email: ActiveValue::Set(email.to_string()),
+            server_name: ActiveValue::Set(server_name.to_string()),
+            email_type: ActiveValue::Set("failure".to_string()),
+            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
+            failure_count: ActiveValue::Set(Some(failure_count)),
+        };
+
+        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
+            error!("Failed to log failure email to database: {}", e);
+        }
     }
 }
 
@@ -192,6 +209,7 @@ async fn send_failure_email(
 async fn send_recovery_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
     server_name: &str,
     alert_id: i32,
@@ -254,6 +272,21 @@ async fn send_recovery_email(
             "Sent recovery email to {} for server {}",
             email, server_name
         );
+
+        // Log the email to database
+        let email_log_entry = email_log::ActiveModel {
+            id: ActiveValue::NotSet,
+            alert_id: ActiveValue::Set(alert_id),
+            email: ActiveValue::Set(email.to_string()),
+            server_name: ActiveValue::Set(server_name.to_string()),
+            email_type: ActiveValue::Set("recovery".to_string()),
+            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
+            failure_count: ActiveValue::NotSet,
+        };
+
+        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
+            error!("Failed to log recovery email to database: {}", e);
+        }
     }
 }
 
@@ -368,6 +401,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                 send_failure_email(
                                                     &mailer,
                                                     &config,
+                                                    &db,
                                                     &email,
                                                     &server_name,
                                                     alert_id,
@@ -396,6 +430,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                     send_recovery_email(
                                                         &mailer,
                                                         &config,
+                                                        &db,
                                                         &email,
                                                         &server_name,
                                                         alert_id,
