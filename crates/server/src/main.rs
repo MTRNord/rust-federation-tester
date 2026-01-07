@@ -45,13 +45,9 @@ fn initialize_otel_console_tracing() {
         use opentelemetry_otlp::SpanExporter;
         use opentelemetry_otlp::WithExportConfig;
 
-        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| "http://localhost:4317".to_string());
-
         let exporter = SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
-            .with_endpoint(endpoint)
             .build()
             .unwrap();
 
