@@ -29,25 +29,58 @@ use tracing::{Level, Span, field};
 #[derive(Clone)]
 pub struct WideEvent {
     span: Span,
+    target: &'static str,
 }
 
 impl WideEvent {
+    /// Construct a WideEvent from an existing `tracing::Span`.
+    ///
+    /// This is useful for inline macro forms that create a `tracing::span!` with a
+    /// literal span name so the span name visible in tracing backends is the logical
+    /// event name. Callers can then `enter()` or clone the span as needed.
+    pub fn from_span(span: Span) -> Self {
+        WideEvent {
+            span,
+            target: concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        }
+    }
+
+    /// Construct a WideEvent from an existing `tracing::Span` and an explicit target string.
+    /// Use this when the macro creating the span also knows the desired `target` value.
+    pub fn from_span_with_target(span: Span, target: &'static str) -> Self {
+        WideEvent { span, target }
+    }
+
+    /// Return a clone of the inner tracing::Span so it can be passed to other callers
+    /// or used to instrument spawned tasks.
+    pub fn span(&self) -> Span {
+        self.span.clone()
+    }
+
+    /// Return the recorded target associated with this WideEvent (usually crate::module).
+    pub fn target(&self) -> &'static str {
+        self.target
+    }
+
     /// Create a new WideEvent with a logical `name` and `target`.
     ///
     /// `name` should be a &'static str (logical event name). `target` should be the
     /// tracing target string (usually package::module).
     pub fn new(name: &'static str, target: &'static str) -> Self {
-        // `tracing::span!` requires a literal span name. Use a stable literal and record
-        // the logical event name as a span attribute so exporters see it.
+        // `tracing::span!` requires a literal span name in many usage patterns.
+        // This helper uses a stable literal span name and records the logical event
+        // name as a span attribute so exporters still receive it when callers cannot
+        // provide a literal span name at macro-invocation time.
         let span = tracing::span!(Level::INFO, "wide_event", target = target, event.name = %name);
-        WideEvent { span }
+        WideEvent { span, target }
     }
 
     /// Create a WideEvent that is a child of the provided parent span.
-    /// Usage: let child = WideEvent::with_parent("name", "target", &parent_span);
-    pub fn with_parent(name: &'static str, target: &'static str, parent: &tracing::Span) -> Self {
-        let span = tracing::span!(parent: parent, tracing::Level::INFO, "wide_event", target = target, event.name = %name);
-        WideEvent { span }
+    /// Usage: let child = WideEvent::with_parent("name", "target", parent_span);
+    /// Note: `parent` is taken by value (a Span clone) so callers can do `with_parent(..., evt.span())`.
+    pub fn with_parent(name: &'static str, target: &'static str, parent: Span) -> Self {
+        let span = tracing::span!(parent: &parent, tracing::Level::INFO, "wide_event", target = target, event.name = %name);
+        WideEvent { span, target }
     }
 
     /// Enter the span and return a guard that keeps it entered while alive.
@@ -202,7 +235,8 @@ macro_rules! wide_info {
     // name + msg convenience form with automatic target and optional key-value pairs
     ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __span = tracing::span!(tracing::Level::INFO, $name, target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __evt = $crate::WideEvent::from_span_with_target(__span, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::INFO);
             __evt
@@ -219,11 +253,13 @@ macro_rules! wide_info {
         }
     };
 
-    // Inline form: create a WideEvent, optionally add key=value pairs, then emit.
-    // Usage: wide_info!("name", "target", "message", key1 = val1, key2 = val2);
+    // Inline form: create a WideEvent with a literal span name so backends show it,
+    // optionally add key=value pairs, then emit.
+    // Usage: wide_info!("my.event", "mycrate::module", "message", key1 = val1, ...);
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, $target);
+            let __span = tracing::span!(tracing::Level::INFO, $name, target = $target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::INFO);
             __evt
@@ -236,7 +272,8 @@ macro_rules! wide_debug {
     // name + msg convenience form with automatic target and optional key-value pairs
     ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __span = tracing::span!(tracing::Level::DEBUG, $name, target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __evt = $crate::WideEvent::from_span_with_target(__span, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::DEBUG);
             __evt
@@ -256,7 +293,8 @@ macro_rules! wide_debug {
     // inline form
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, $target);
+            let __span = tracing::span!(tracing::Level::DEBUG, $name, target = $target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::DEBUG);
             __evt
@@ -269,7 +307,8 @@ macro_rules! wide_error {
     // name + msg convenience form with automatic target and optional key-value pairs
     ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __span = tracing::span!(tracing::Level::ERROR, $name, target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            let __evt = $crate::WideEvent::from_span_with_target(__span, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::ERROR);
             __evt
@@ -289,7 +328,8 @@ macro_rules! wide_error {
     // inline form
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::new($name, $target);
+            let __span = tracing::span!(tracing::Level::ERROR, $name, target = $target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::ERROR);
             __evt

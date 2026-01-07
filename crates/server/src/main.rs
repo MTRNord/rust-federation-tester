@@ -15,8 +15,6 @@ use sea_orm::Database;
 use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use tracing::Level;
-use wide_events::WideEvent;
 use wide_events::wide_debug;
 use wide_events::wide_info;
 
@@ -319,24 +317,6 @@ async fn main() -> color_eyre::eyre::Result<()> {
     });
 
     let debug_mode = is_debug_mode();
-
-    // If debug mode, spawn periodic cache stats logging task
-    if debug_mode {
-        let pool_l = state.connection_pool.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                // Build a small WideEvent for periodic stats and emit it.
-                let periodic = WideEvent::new(
-                    "stats.periodic",
-                    concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                );
-                periodic.add("connection_pools", pool_l.len());
-                periodic.emit("Periodic stats", Level::DEBUG);
-            }
-        });
-    }
 
     start_webserver(state, alert_state, (*resources).clone(), debug_mode).await?;
     Ok(())

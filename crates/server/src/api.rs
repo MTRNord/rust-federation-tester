@@ -10,7 +10,7 @@ use utoipa::{
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
-use wide_events::{WideEvent, wide_info};
+use wide_events::{wide_debug, wide_info};
 
 const MISC_TAG: &str = "Miscellaneous";
 const FEDERATION_TAG: &str = "Federation Tester API";
@@ -1001,11 +1001,9 @@ async fn propagate_trace(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    // Create a request-scoped WideEvent and attach some common attributes.
-    let evt = WideEvent::new(
-        "request",
-        concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-    );
+    // Create a request-scoped WideEvent using the canonical macro so the span name is literal in backends.
+    // The macro returns a `WideEvent` which we can enter for the request lifetime.
+    let evt = wide_debug!("request", "Propagating trace info");
 
     // Generate a server-side request_id and attach it to the event and response.
     let request_id = uuid::Uuid::new_v4().to_string();
