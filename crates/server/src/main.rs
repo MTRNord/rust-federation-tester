@@ -35,12 +35,12 @@ fn initialize_standard_tracing() {
 fn initialize_otel_console_tracing() {
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::logs::SdkLoggerProvider;
-    use opentelemetry_stdout::LogExporter;
     use tracing_subscriber::prelude::*;
 
     #[cfg(feature = "otlp")]
-    {
+    let logging_provider = {
         use opentelemetry::global;
+        use opentelemetry_otlp::LogExporter;
         use opentelemetry_otlp::Protocol;
         use opentelemetry_otlp::SpanExporter;
         use opentelemetry_otlp::WithExportConfig;
@@ -55,13 +55,28 @@ fn initialize_otel_console_tracing() {
             .with_batch_exporter(exporter)
             .build();
         global::set_tracer_provider(provider);
+
+        let log_exporter = LogExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpBinary)
+            .build()
+            .unwrap();
+
+        let logging_provider = SdkLoggerProvider::builder()
+            .with_batch_exporter(log_exporter)
+            .build();
+        logging_provider
     };
 
-    let exporter = LogExporter::default();
+    #[cfg(not(feature = "otlp"))]
+    let logging_provider = {
+        use opentelemetry_stdout::LogExporter;
+        let exporter = LogExporter::default();
 
-    let logging_provider = SdkLoggerProvider::builder()
-        .with_simple_exporter(exporter)
-        .build();
+        let logging_provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+    };
 
     let otel_layer = OpenTelemetryTracingBridge::new(&logging_provider);
 
