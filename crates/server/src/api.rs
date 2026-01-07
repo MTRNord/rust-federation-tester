@@ -1,3 +1,4 @@
+use crate::logging::wide_events::WideEvent;
 use crate::{
     AppResources,
     api::{alert_api::AlertAppState, federation_tester_api::AppState},
@@ -934,12 +935,126 @@ async fn metrics(
     (hyper::StatusCode::OK, body)
 }
 
+/// Middleware that collects/wires wide-event metadata and propagates traceparent header.
+///
+/// Behavior:
+/// - If the incoming request includes a `traceparent` header, we record it onto the WideEvent
+///   and echo it back in the response headers so capable frontends can correlate logs.
+/// - We always create a per-request `WideEvent` span and enter it for the request lifetime so
+///   recorded attributes and child events are attached to a request-scoped span.
+/// - This middleware is defensive: if the client doesn't send trace headers (older versions),
+///   we still create the request span and carry on.
+async fn propagate_trace(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Create a request-scoped WideEvent and attach some common attributes.
+    let evt = WideEvent::new(
+        "request",
+        concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+    );
+
+    // Generate a server-side request_id and attach it to the event and response.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    evt.add("request_id", &request_id);
+
+    // Add HTTP method and path if available
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    evt.add("http.method", method);
+    evt.add("http.path", path);
+
+    // Record a few headers that may be useful (if present). Keep it small.
+    if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT) {
+        if let Ok(s) = hv.to_str() {
+            evt.add("http.user_agent", s);
+        }
+    }
+    // Client IP is available through ConnectInfo; try to grab it from extensions if present.
+    if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
+        evt.add("client.ip", addr.ip().to_string());
+    }
+
+    // Extract incoming traceparent header if present and attach to the event.
+    let incoming_traceparent = req
+        .headers()
+        .get("traceparent")
+        .and_then(|hv| hv.to_str().ok())
+        .map(|s| s.to_string());
+    if let Some(tp) = incoming_traceparent.as_deref() {
+        evt.add("traceparent.incoming", tp);
+    }
+
+    // Enter the request span so downstream code logs/records attach to it.
+    let _enter = evt.enter();
+
+    // Call the next service in the stack.
+    let mut response = next.run(req).await;
+
+    // Always include x-request-id in the response so clients can correlate.
+    if let Ok(hv) = axum::http::HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", hv);
+    }
+
+    // If an incoming traceparent was present, echo it back to the client so the client can
+    // correlate. If not present, and tracing-opentelemetry is enabled, return the server span's traceparent.
+    if let Some(tp) = incoming_traceparent {
+        // It's okay if insertion fails (invalid header) — ignore in that case.
+        if let Ok(hv) = axum::http::HeaderValue::from_str(&tp) {
+            response.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("traceparent"),
+                hv,
+            );
+        }
+    } else {
+        // If tracing-opentelemetry is enabled and a span was created, we can attempt to
+        // return the current span's traceparent for clients that can accept it.
+        // This is optional and guarded by the tracing-opentelemetry feature at compile time.
+        #[cfg(feature = "tracing-opentelemetry")]
+        {
+            use opentelemetry::trace::TraceContextExt;
+            use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+            // Extract the OpenTelemetry Context from the current tracing span (if available).
+            let cx = tracing::Span::current().context();
+            // Keep a SpanRef alive while we extract its SpanContext so we don't borrow a temporary.
+            let span_ref = cx.span();
+            let span_ctx = span_ref.span_context();
+            if span_ctx.is_valid() {
+                // Format traceparent according to W3C traceparent header: "00-{trace}-{span}-{flags}"
+                let trace_id = span_ctx.trace_id().to_string();
+                let span_id = span_ctx.span_id().to_string();
+                let trace_flags = format!("{:02x}", span_ctx.trace_flags().to_u8());
+                let tp_value = format!("00-{}-{}-{}", trace_id, span_id, trace_flags);
+                if let Ok(hv) = axum::http::HeaderValue::from_str(&tp_value) {
+                    response.headers_mut().insert(
+                        axum::http::header::HeaderName::from_static("traceparent"),
+                        hv,
+                    );
+                }
+            }
+        }
+    }
+
+    // Optionally, record response metadata as attributes on the same event/span.
+    // e.g. status code
+    {
+        // Response::status() returns a StatusCode; convert to u16 then to u64 for the attribute.
+        let status_u16 = response.status().as_u16();
+        evt.add_u64("http.status_code", status_u16 as u64);
+    }
+
+    response
+}
+
 pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
     alert_state: AlertAppState,
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
+    // Build the router and attach middleware layers. The propagate_trace middleware is applied
+    // so incoming trace headers are recorded and propagated back to clients when available.
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest(
             "/api/federation",
@@ -948,8 +1063,10 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .nest("/api/alerts", alert_api::router(alert_state))
         .routes(routes!(health))
         .routes(routes!(metrics))
+        // Attach application resources, CORS, our trace propagation middleware and the standard TraceLayer.
         .layer(axum::Extension(app_resources))
         .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(propagate_trace))
         .layer(TraceLayer::new_for_http())
         .split_for_parts();
 
