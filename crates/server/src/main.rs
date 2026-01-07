@@ -33,7 +33,6 @@ fn initialize_standard_tracing() {
 
 #[cfg(feature = "otel")]
 fn initialize_otel_console_tracing() {
-    use hyper_util::service;
     use opentelemetry::KeyValue;
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::Resource;
