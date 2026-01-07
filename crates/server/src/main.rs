@@ -33,9 +33,26 @@ fn initialize_standard_tracing() {
 
 #[cfg(feature = "otel")]
 fn initialize_otel_console_tracing() {
+    use hyper_util::service;
+    use opentelemetry::KeyValue;
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+    use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::logs::SdkLoggerProvider;
     use tracing_subscriber::prelude::*;
+
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| {
+        // fallback to crate name
+        env!("CARGO_PKG_NAME").to_string()
+    });
+
+    // Build a Resource that includes service.name
+    let resource = Resource::builder()
+        .with_service_name(service_name)
+        .with_attribute(KeyValue::new(
+            "service.version",
+            env!("CARGO_PKG_VERSION").to_string(),
+        ))
+        .build();
 
     #[cfg(feature = "otlp")]
     let logging_provider = {
@@ -53,6 +70,7 @@ fn initialize_otel_console_tracing() {
 
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_batch_exporter(exporter)
+            .with_resource(resource.clone())
             .build();
         global::set_tracer_provider(provider);
 
@@ -64,6 +82,7 @@ fn initialize_otel_console_tracing() {
 
         let logging_provider = SdkLoggerProvider::builder()
             .with_batch_exporter(log_exporter)
+            .with_resource(resource.clone())
             .build();
         logging_provider
     };
@@ -75,6 +94,7 @@ fn initialize_otel_console_tracing() {
 
         let logging_provider = SdkLoggerProvider::builder()
             .with_simple_exporter(exporter)
+            .with_resource(resource.clone())
             .build();
     };
 
