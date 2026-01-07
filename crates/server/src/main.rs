@@ -99,10 +99,14 @@ fn initialize_otel_console_tracing() {
 
     let otel_layer = OpenTelemetryTracingBridge::new(&logging_provider);
 
+    #[cfg(feature = "otlp")]
     tracing_subscriber::registry()
         .with(otel_layer)
-        //.with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer())
         .init();
+
+    #[cfg(not(feature = "otlp"))]
+    tracing_subscriber::registry().with(otel_layer).init();
 }
 
 #[cfg(feature = "console")]
