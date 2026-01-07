@@ -43,6 +43,13 @@ impl WideEvent {
         WideEvent { span }
     }
 
+    /// Create a WideEvent that is a child of the provided parent span.
+    /// Usage: let child = WideEvent::with_parent("name", "target", &parent_span);
+    pub fn with_parent(name: &'static str, target: &'static str, parent: &tracing::Span) -> Self {
+        let span = tracing::span!(parent: parent, tracing::Level::INFO, "wide_event", target = target, event.name = %name);
+        WideEvent { span }
+    }
+
     /// Enter the span and return a guard that keeps it entered while alive.
     /// Use `let _enter = evt.enter();` so child events become children of this span.
     pub fn enter<'a>(&'a self) -> tracing::span::Entered<'a> {
@@ -198,12 +205,20 @@ macro_rules! wide_info {
             let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::INFO);
+            __evt
         }
     };
-    // Existing evt-form: pass an existing WideEvent instance and format args
-    ($evt:expr, $($arg:tt)+) => {
-        $evt.emit(&format!($($arg)+), tracing::Level::INFO)
+
+    // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
+    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::ERROR);
+            __evt
+        }
     };
+
     // Inline form: create a WideEvent, optionally add key=value pairs, then emit.
     // Usage: wide_info!("name", "target", "message", key1 = val1, key2 = val2);
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
@@ -211,6 +226,7 @@ macro_rules! wide_info {
             let __evt = $crate::WideEvent::new($name, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::INFO);
+            __evt
         }
     };
 }
@@ -223,19 +239,27 @@ macro_rules! wide_debug {
             let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::DEBUG);
+            __evt
         }
     };
 
-    // evt-form
-    ($evt:expr, $($arg:tt)+) => {
-        $evt.emit(&format!($($arg)+), tracing::Level::DEBUG)
+    // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
+    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::ERROR);
+            __evt
+        }
     };
+
     // inline form
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
             let __evt = $crate::WideEvent::new($name, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::DEBUG);
+            __evt
         }
     };
 }
@@ -248,19 +272,27 @@ macro_rules! wide_error {
             let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::ERROR);
+            __evt
         }
     };
 
-    // evt-form
-    ($evt:expr, $($arg:tt)+) => {
-        $evt.emit(&format!($($arg)+), tracing::Level::ERROR)
+    // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
+    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::ERROR);
+            __evt
+        }
     };
+
     // inline form
     ($name:expr, $target:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
             let __evt = $crate::WideEvent::new($name, $target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::ERROR);
+            __evt
         }
     };
 }

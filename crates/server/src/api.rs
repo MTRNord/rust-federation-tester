@@ -10,7 +10,7 @@ use utoipa::{
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
-use wide_events::WideEvent;
+use wide_events::{WideEvent, wide_info};
 
 const MISC_TAG: &str = "Miscellaneous";
 const FEDERATION_TAG: &str = "Federation Tester API";
@@ -36,7 +36,7 @@ pub mod federation_tester_api {
     use std::sync::Arc;
     use utoipa::IntoParams;
     use utoipa_axum::{router::OpenApiRouter, routes};
-    use wide_events::WideEvent;
+    use wide_events::wide_info;
 
     #[derive(Deserialize, IntoParams, Debug)]
     pub struct ApiParams {
@@ -52,6 +52,7 @@ pub mod federation_tester_api {
         pub connection_pool: ConnectionPool,
     }
 
+    #[wide_instrument_macro::wide_instrument]
     pub(crate) fn router<P: ConnectionProvider>(
         state: AppState<P>,
         debug_mode: bool,
@@ -69,6 +70,7 @@ pub mod federation_tester_api {
         r.with_state(state)
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         get,
         path = "/report",
@@ -86,11 +88,11 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_get_report",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.get_report",
+            "Received request for federation report",
+            server_name = &params.server_name
         );
-        evt.add("server_name", &params.server_name);
         let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
@@ -162,6 +164,7 @@ pub mod federation_tester_api {
         }
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         get,
         path = "/federation-ok",
@@ -179,12 +182,13 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_get_fed_ok",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.get_fed_ok",
+            "Received request for federation status",
+            server_name = &params.server_name
         );
-        evt.add("server_name", &params.server_name);
         let _wide_evt_enter = evt.enter();
+
         if params.server_name.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
@@ -258,16 +262,17 @@ pub mod federation_tester_api {
     }
 
     // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
+    #[wide_instrument_macro::wide_instrument]
     async fn cache_stats<P: ConnectionProvider>(
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
         axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_cache_stats",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.cache_stats",
+            "Received request for cache statistics",
+            client_addr = addr.ip()
         );
-        evt.add("client_addr", addr.ip());
         let _wide_evt_enter = evt.enter();
         use serde::Serialize;
         if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
@@ -289,6 +294,7 @@ pub mod federation_tester_api {
         (hyper::StatusCode::OK, axum::Json(value))
     }
 
+    #[wide_instrument_macro::wide_instrument]
     fn is_allowed_ip(addr: &std::net::SocketAddr, nets: &[crate::config::IpNet]) -> bool {
         let ip = addr.ip();
         nets.iter().any(|net| net.contains(&ip))
@@ -311,7 +317,7 @@ pub mod alert_api {
     use time::OffsetDateTime;
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
-    use wide_events::WideEvent;
+    use wide_events::wide_info;
 
     #[derive(Serialize, Deserialize)]
     pub struct MagicClaims {
@@ -344,6 +350,7 @@ pub mod alert_api {
         pub task_manager: Arc<AlertTaskManager>,
     }
 
+    #[wide_instrument_macro::wide_instrument]
     pub(crate) fn router(alert_state: AlertAppState) -> OpenApiRouter {
         OpenApiRouter::new()
             .routes(routes!(register_alert, delete_alert))
@@ -352,6 +359,7 @@ pub mod alert_api {
             .with_state(alert_state)
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         post,
         path = "/register",
@@ -368,11 +376,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<RegisterAlert>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_register_alert",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.register_alert",
+            "Received request to register alert",
+            server_name = &payload.server_name
         );
-        evt.add("server_name", &payload.server_name);
         let _wide_evt_enter = evt.enter();
 
         // JWT magic token
@@ -554,6 +562,7 @@ pub mod alert_api {
         alerts: Vec<alert::Model>,
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         get,
         path = "/verify",
@@ -579,11 +588,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Query(params): Query<VerifyParams>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_verify_alert",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.verify_alert",
+            "Got request to verify alert",
+            token_len = params.token.len()
         );
-        evt.add("token_len", params.token.len());
         let _wide_evt_enter = evt.enter();
 
         let secret = resources.config.magic_token_secret.as_bytes();
@@ -730,6 +739,7 @@ pub mod alert_api {
         }
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         post,
         path = "/list",
@@ -744,11 +754,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<ListAlerts>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_list_alerts",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.list_alerts",
+            "Got request to list alerts",
+            email_len = payload.email.len()
         );
-        evt.add("email", &payload.email);
         let _wide_evt_enter = evt.enter();
 
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
@@ -818,6 +828,7 @@ The Federation Tester Team"#
         )
     }
 
+    #[wide_instrument_macro::wide_instrument]
     #[utoipa::path(
         delete,
         path = "/{id}",
@@ -841,11 +852,11 @@ The Federation Tester Team"#
         Extension(resources): Extension<AppResources>,
         Path(id): Path<i32>,
     ) -> impl IntoResponse {
-        let evt = WideEvent::new(
-            "api_delete_alert",
-            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        let evt = wide_info!(
+            "api.delete_alert",
+            "Got request to delete alert",
+            alert_id = id
         );
-        evt.add("alert_id", id);
         let _wide_evt_enter = evt.enter();
         let found = alert::Entity::find()
             .filter(alert::Column::Id.eq(id))
@@ -942,6 +953,7 @@ The Federation Tester Team"#,
     }
 }
 
+#[wide_instrument_macro::wide_instrument]
 #[utoipa::path(
     method(get, head),
     path = "/healthz",
@@ -955,6 +967,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
+#[wide_instrument_macro::wide_instrument]
 #[utoipa::path(
     get,
     path = "/metrics",
@@ -1093,6 +1106,9 @@ pub async fn start_webserver<P: ConnectionProvider>(
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
+    let webserver_wide_event = wide_info!("server.start_webserver", "Starting webserver");
+    let _webserver_span = webserver_wide_event.enter();
+
     // Build the router and attach middleware layers. The propagate_trace middleware is applied
     // so incoming trace headers are recorded and propagated back to clients when available.
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -1113,12 +1129,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
     let router = router.merge(Redoc::with_url("/api-docs", api));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    tracing::info!(
-        name = "server.started",
-        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-        message = "Server running",
-        addr = "0.0.0.0:8080"
-    );
+    wide_info!("server.started", "Server running", addr = "0.0.0.0:8080");
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
