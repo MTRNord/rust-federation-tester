@@ -965,10 +965,10 @@ async fn propagate_trace(
     evt.add("http.path", path);
 
     // Record a few headers that may be useful (if present). Keep it small.
-    if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT) {
-        if let Ok(s) = hv.to_str() {
-            evt.add("http.user_agent", s);
-        }
+    if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT)
+        && let Ok(s) = hv.to_str()
+    {
+        evt.add("http.user_agent", s);
     }
     // Client IP is available through ConnectInfo; try to grab it from extensions if present.
     if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
