@@ -176,3 +176,33 @@ macro_rules! wide_error {
         }
     };
 }
+
+/// Macro to create a function-scoped WideEvent ("instrumentation") that callers can enter.
+///
+/// This is intended as a light-weight helper to replace `tracing::instrument` usage with a
+/// WideEvent-based approach. It does not replicate all features of `tracing::instrument`
+/// (that would require a procedural attribute macro) but provides a compact, ergonomic
+/// way to construct a WideEvent with recorded fields that the caller can then enter for
+/// the function's lifetime.
+///
+/// Example usage inside a handler (preferred placement at the top of the function):
+/// ```rust
+/// let evt = wide_instrument!("api_get_report", concat!(env!("CARGO_PKG_NAME"), "::", module_path!()), server_name = params.server_name);
+/// let _enter = evt.enter();
+/// // ... handler body ...
+/// evt.info("request complete");
+/// ```
+/// The macro returns a `WideEvent` so the caller controls the enter/exit scope.
+#[macro_export]
+macro_rules! wide_instrument {
+    // Create a WideEvent, record optional key=value pairs, and return it.
+    // Usage:
+    //   let evt = wide_instrument!("api_get_report", "mycrate::api", key = value, ...);
+    ($name:expr, $target:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let evt = $crate::logging::wide_events::WideEvent::new($name, $target);
+            $( evt.add(stringify!($k), $v); )*
+            evt
+        }
+    };
+}

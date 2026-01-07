@@ -17,6 +17,7 @@ const FEDERATION_TAG: &str = "Federation Tester API";
 const ALERTS_TAG: &str = "Alerts API";
 
 pub mod federation_tester_api {
+    use crate::wide_instrument;
     use crate::{
         api::FEDERATION_TAG,
         client::resolution::{fetch_client_server_versions, resolve_client_side_api},
@@ -80,12 +81,17 @@ pub mod federation_tester_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         ),
     )]
-    #[tracing::instrument(name = "api_get_report", skip(state, resources), fields(server_name = %params.server_name))]
     async fn get_report<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_get_report",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            server_name = &params.server_name
+        );
+        let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
@@ -168,12 +174,17 @@ pub mod federation_tester_api {
             (status = 500, description = "Internal server error")
         ),
     )]
-    #[tracing::instrument(name = "api_get_fed_ok", skip(state), fields(server_name = %params.server_name))]
     async fn get_fed_ok<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_get_fed_ok",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            server_name = &params.server_name
+        );
+        let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
@@ -247,12 +258,17 @@ pub mod federation_tester_api {
     }
 
     // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
-    #[tracing::instrument(name = "api_cache_stats", skip(state, resources), fields(client_addr = %addr.ip()))]
     async fn cache_stats<P: ConnectionProvider>(
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
         axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_cache_stats",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            client_addr = addr.ip()
+        );
+        let _wide_evt_enter = evt.enter();
         use serde::Serialize;
         if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
             return (
@@ -279,6 +295,7 @@ pub mod federation_tester_api {
     }
 }
 pub mod alert_api {
+    use crate::wide_instrument;
     use crate::{AppResources, api::ALERTS_TAG, entity::alert, recurring_alerts::AlertTaskManager};
     use axum::{
         Extension, Json,
@@ -347,11 +364,17 @@ pub mod alert_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
-    #[tracing::instrument(name = "api_register_alert", skip(resources, payload), fields(server_name = %payload.server_name))]
     async fn register_alert(
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<RegisterAlert>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_register_alert",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            server_name = &payload.server_name
+        );
+        let _wide_evt_enter = evt.enter();
+
         // JWT magic token
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
         let claims = MagicClaims {
@@ -552,11 +575,17 @@ pub mod alert_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
-    #[tracing::instrument(name = "api_verify_alert", skip(resources, params), fields(token_len = %params.token.len()))]
     async fn verify_alert(
         Extension(resources): Extension<AppResources>,
         Query(params): Query<VerifyParams>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_verify_alert",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            token_len = params.token.len()
+        );
+        let _wide_evt_enter = evt.enter();
+
         let secret = resources.config.magic_token_secret.as_bytes();
         let mut validation = Validation::default();
         validation.validate_exp = true;
@@ -711,11 +740,17 @@ pub mod alert_api {
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
-    #[tracing::instrument(name = "api_list_alerts", skip(resources, payload))]
     async fn list_alerts(
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<ListAlerts>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_list_alerts",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            email = &payload.email
+        );
+        let _wide_evt_enter = evt.enter();
+
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
         let claims = MagicClaims {
             exp,
@@ -802,11 +837,16 @@ The Federation Tester Team"#
             (status = 500, description = "Internal server error", content_type = "application/json")
         )
     )]
-    #[tracing::instrument(name = "api_delete_alert", skip(resources), fields(alert_id = %id))]
     async fn delete_alert(
         Extension(resources): Extension<AppResources>,
         Path(id): Path<i32>,
     ) -> impl IntoResponse {
+        let evt = wide_instrument!(
+            "api_delete_alert",
+            concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            alert_id = &id
+        );
+        let _wide_evt_enter = evt.enter();
         let found = alert::Entity::find()
             .filter(alert::Column::Id.eq(id))
             .one(resources.db.as_ref())
