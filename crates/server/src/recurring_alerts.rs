@@ -155,7 +155,6 @@ async fn send_failure_email(
                 name = "alerts.send_failure_email.template_render_failed",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 error = %e,
-                email = %email,
                 server_name = %server_name,
                 alert_id = alert_id,
                 message = "Failed to render HTML email template"
@@ -193,7 +192,6 @@ async fn send_failure_email(
             name = "alerts.send_failure_email.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
             error = %e,
-            email = %email,
             server_name = %server_name,
             alert_id = alert_id,
             message = "Failed to send failure alert email"
@@ -221,7 +219,6 @@ async fn send_failure_email(
                 name = "alerts.send_failure_email.log_insert_failed",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 error = %e,
-                email = %email,
                 server_name = %server_name,
                 alert_id = alert_id,
                 message = "Failed to log failure email to database"
@@ -265,7 +262,6 @@ async fn send_recovery_email(
                 name = "alerts.send_recovery_email.template_render_failed",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 error = %e,
-                email = %email,
                 server_name = %server_name,
                 alert_id = alert_id,
                 message = "Failed to render HTML email template for recovery"
@@ -303,7 +299,6 @@ async fn send_recovery_email(
             name = "alerts.send_recovery_email.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
             error = %e,
-            email = %email,
             server_name = %server_name,
             alert_id = alert_id,
             message = "Failed to send recovery email"
@@ -330,7 +325,6 @@ async fn send_recovery_email(
                 name = "alerts.send_recovery_email.log_insert_failed",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 error = %e,
-                email = %email,
                 server_name = %server_name,
                 alert_id = alert_id,
                 message = "Failed to log recovery email to database"
@@ -393,7 +387,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                                 message = "Alert check scheduled",
                                 server_name = %server_name,
-                                email = %email,
                                 delay_seconds = initial_delay.as_secs()
                             );
                             tokio::time::sleep(initial_delay).await;
@@ -405,7 +398,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                                 message = "Running recurring alert check",
                                 server_name = %server_name,
-                                email = %email
                             );
 
                             // Perform the federation check
@@ -532,7 +524,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                         name = "alerts.recurring_check.error",
                                         target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                                         server_name = %server_name,
-                                        email = %email,
                                         error = ?e,
                                         message = "Federation check error"
                                     );
@@ -547,7 +538,6 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                             message = "Stopped recurring check for alert",
                             server_name = %server_name,
-                            email = %email
                         );
                     })
                 })
