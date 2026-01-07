@@ -1,4 +1,3 @@
-use crate::logging::wide_events::WideEvent;
 use crate::{
     AppResources,
     api::{alert_api::AlertAppState, federation_tester_api::AppState},
@@ -11,13 +10,13 @@ use utoipa::{
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
+use wide_events::WideEvent;
 
 const MISC_TAG: &str = "Miscellaneous";
 const FEDERATION_TAG: &str = "Federation Tester API";
 const ALERTS_TAG: &str = "Alerts API";
 
 pub mod federation_tester_api {
-    use crate::wide_instrument;
     use crate::{
         api::FEDERATION_TAG,
         client::resolution::{fetch_client_server_versions, resolve_client_side_api},
@@ -37,6 +36,7 @@ pub mod federation_tester_api {
     use std::sync::Arc;
     use utoipa::IntoParams;
     use utoipa_axum::{router::OpenApiRouter, routes};
+    use wide_events::WideEvent;
 
     #[derive(Deserialize, IntoParams, Debug)]
     pub struct ApiParams {
@@ -86,11 +86,11 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_get_report",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            server_name = &params.server_name
         );
+        evt.add("server_name", &params.server_name);
         let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
@@ -179,11 +179,11 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_get_fed_ok",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            server_name = &params.server_name
         );
+        evt.add("server_name", &params.server_name);
         let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
@@ -263,11 +263,11 @@ pub mod federation_tester_api {
         axum::Extension(resources): axum::Extension<crate::AppResources>,
         axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_cache_stats",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            client_addr = addr.ip()
         );
+        evt.add("client_addr", addr.ip());
         let _wide_evt_enter = evt.enter();
         use serde::Serialize;
         if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
@@ -295,7 +295,6 @@ pub mod federation_tester_api {
     }
 }
 pub mod alert_api {
-    use crate::wide_instrument;
     use crate::{AppResources, api::ALERTS_TAG, entity::alert, recurring_alerts::AlertTaskManager};
     use axum::{
         Extension, Json,
@@ -312,6 +311,7 @@ pub mod alert_api {
     use time::OffsetDateTime;
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
+    use wide_events::WideEvent;
 
     #[derive(Serialize, Deserialize)]
     pub struct MagicClaims {
@@ -368,11 +368,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<RegisterAlert>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_register_alert",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            server_name = &payload.server_name
         );
+        evt.add("server_name", &payload.server_name);
         let _wide_evt_enter = evt.enter();
 
         // JWT magic token
@@ -579,11 +579,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Query(params): Query<VerifyParams>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_verify_alert",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            token_len = params.token.len()
         );
+        evt.add("token_len", params.token.len());
         let _wide_evt_enter = evt.enter();
 
         let secret = resources.config.magic_token_secret.as_bytes();
@@ -634,10 +634,10 @@ pub mod alert_api {
                                     error = ?e,
                                     message = "Failed to query alert for verification"
                                 );
-                                return (
+                                (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({"error": format!("DB error: {e}")})),
-                                );
+                                )
                             }
                         }
                     }
@@ -656,10 +656,10 @@ pub mod alert_api {
                                     error = ?e,
                                     message = "Failed to query alerts for listing"
                                 );
-                                return (
+                                (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({"error": format!("DB error: {e}")})),
-                                );
+                                )
                             }
                         }
                     }
@@ -696,10 +696,10 @@ pub mod alert_api {
                                         error = ?e,
                                         message = "Failed to delete alert"
                                     );
-                                    return (
+                                    (
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(json!({"error": format!("DB error: {e}")})),
-                                    );
+                                    )
                                 }
                             }
                         } else {
@@ -744,11 +744,11 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<ListAlerts>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_list_alerts",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            email = &payload.email
         );
+        evt.add("email", &payload.email);
         let _wide_evt_enter = evt.enter();
 
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
@@ -841,11 +841,11 @@ The Federation Tester Team"#
         Extension(resources): Extension<AppResources>,
         Path(id): Path<i32>,
     ) -> impl IntoResponse {
-        let evt = wide_instrument!(
+        let evt = WideEvent::new(
             "api_delete_alert",
             concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            alert_id = &id
         );
+        evt.add("alert_id", id);
         let _wide_evt_enter = evt.enter();
         let found = alert::Entity::find()
             .filter(alert::Column::Id.eq(id))
@@ -933,10 +933,10 @@ The Federation Tester Team"#,
                     error = ?e,
                     message = "Failed to query alert for deletion"
                 );
-                return (
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": format!("DB error: {e}")})),
-                );
+                )
             }
         }
     }
@@ -998,11 +998,10 @@ async fn propagate_trace(
     let request_id = uuid::Uuid::new_v4().to_string();
     evt.add("request_id", &request_id);
 
-    // Add HTTP method and path if available
+    // Add HTTP method and path using the WideEvent helper so OTel semantic names are used.
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
-    evt.add("http.method", method);
-    evt.add("http.path", path);
+    evt.attach_http_request(&method, &path);
 
     // Record a few headers that may be useful (if present). Keep it small.
     if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT)
@@ -1022,11 +1021,16 @@ async fn propagate_trace(
         .and_then(|hv| hv.to_str().ok())
         .map(|s| s.to_string());
     if let Some(tp) = incoming_traceparent.as_deref() {
-        evt.add("traceparent.incoming", tp);
+        // Record and parse incoming traceparent header into structured attributes.
+        evt.record_traceparent(tp);
     }
 
     // Enter the request span so downstream code logs/records attach to it.
     let _enter = evt.enter();
+
+    // Record the current tracing span context (trace/span ids) onto the event when available.
+    // This is a no-op when `tracing-opentelemetry` feature is not enabled so it's safe to call.
+    evt.record_current_span_context();
 
     // Call the next service in the stack.
     let mut response = next.run(req).await;
@@ -1076,13 +1080,9 @@ async fn propagate_trace(
         }
     }
 
-    // Optionally, record response metadata as attributes on the same event/span.
-    // e.g. status code
-    {
-        // Response::status() returns a StatusCode; convert to u16 then to u64 for the attribute.
-        let status_u16 = response.status().as_u16();
-        evt.add_u64("http.status_code", status_u16 as u64);
-    }
+    // Record response metadata using the WideEvent helper so numeric status and OTel semantics are used.
+    let status_u16 = response.status().as_u16();
+    evt.attach_http_response_status(status_u16);
 
     response
 }

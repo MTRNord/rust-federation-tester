@@ -21,7 +21,6 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::info;
-
 type AlertCheckTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Email sending policy configuration
@@ -45,7 +44,7 @@ impl AlertTaskManager {
         }
     }
 
-    #[tracing::instrument(name = "alert_manager_start_task", skip(self, f), fields(alert_id = %alert_id))]
+    #[crate::wide_instrument(name = "alert_manager_start_task", alert_id = alert_id)]
     pub async fn start_or_restart_task<F>(&self, alert_id: i32, f: F)
     where
         F: FnOnce(Arc<AtomicBool>) -> AlertCheckTask + Send + 'static,
@@ -66,7 +65,7 @@ impl AlertTaskManager {
         running.contains_key(&alert_id)
     }
 
-    #[tracing::instrument(name = "alert_manager_stop_task", skip(self), fields(alert_id = %alert_id))]
+    #[crate::wide_instrument(name = "alert_manager_stop_task", alert_id = alert_id)]
     pub async fn stop_task(&self, alert_id: i32) {
         let mut running = self.running.write().await;
         if let Some(flag) = running.remove(&alert_id) {
@@ -333,10 +332,7 @@ async fn send_recovery_email(
     }
 }
 
-#[tracing::instrument(
-    name = "recurring_alert_checks",
-    skip(resources, task_manager, resolver, connection_pool)
-)]
+#[crate::wide_instrument(name = "recurring_alert_checks")]
 pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'static>(
     resources: Arc<AppResources>,
     task_manager: Arc<AlertTaskManager>,

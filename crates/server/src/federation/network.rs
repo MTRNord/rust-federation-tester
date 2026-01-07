@@ -22,7 +22,7 @@ pub struct FullResponse {
     pub certificates: Vec<Certificate>,
 }
 
-#[tracing::instrument(name = "fetch_url_custom_sni_host", level = "debug", skip(path))]
+#[crate::wide_instrument(name = "fetch_url_custom_sni_host", level = "debug", path = path)]
 pub async fn fetch_url_custom_sni_host(
     path: &str,
     addr: &str,

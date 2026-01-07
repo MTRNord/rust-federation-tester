@@ -76,7 +76,10 @@ tokio = { version = "1.45.1", features = ["full"] }
 tokio-rustls = "0.26"
 tower-http = { version = "0.6.6", features = ["cors", "trace"] }
 tracing = "0.1.41"
+wide_events = { path = "../wide_events" }
+wide_instrument_macro = { path = "../wide_instrument_macro" }
 tracing-core = "0.1.36"
+tracing-futures = "0.2.5"
 tracing-opentelemetry = { version = "0.32.0", optional = true }
 tracing-subscriber = { version = "0.3.20", features = ["registry","std","fmt","env-filter", "json"] }
 url = "2.5.4"

@@ -1,6 +1,7 @@
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;
+use crate::wide_instrument;
 use ::time as time_crate;
 use futures::{StreamExt, stream::FuturesUnordered};
 use hickory_resolver::proto::rr::RecordType;
@@ -99,7 +100,7 @@ pub struct WellKnownPhaseResult {
     pub error: Option<Error>,
 }
 
-#[tracing::instrument(name = "lookup_server_well_known", skip(resolver), fields(server_name = %server_name))]
+#[wide_instrument(name = "lookup_server_well_known", server_name = server_name)]
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
@@ -190,7 +191,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 }
 
-#[tracing::instrument(name = "federation_fetch_with_redirects", fields(addr = %addr, host = %host, sni = %sni, max_redirects = %max_redirects))]
+#[crate::wide_instrument(name = "federation_fetch_with_redirects", addr = addr, host = host, sni = sni, max_redirects = max_redirects)]
 async fn fetch_url_with_redirects(
     addr: &str,
     host: &str,

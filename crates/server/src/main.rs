@@ -6,7 +6,6 @@ use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
-use rust_federation_tester::logging::wide_events::WideEvent;
 use rust_federation_tester::recurring_alerts::AlertTaskManager;
 use rust_federation_tester::recurring_alerts::recurring_alert_checks;
 
@@ -17,6 +16,7 @@ use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
 use tracing::Level;
+use wide_events::WideEvent;
 
 // Logging guidelines due to otel:
 // Use the correct log levels!

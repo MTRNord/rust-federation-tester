@@ -2,6 +2,7 @@ use crate::error::FetchError;
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
 use crate::response::{Certificate, Ed25519Check, Keys};
+
 use ::time as time_crate;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD_NO_PAD;
@@ -22,7 +23,7 @@ pub struct FullKeysResponse {
     pub keys_string: String,
 }
 
-#[tracing::instrument(name = "federation_fetch_keys", fields(addr = %addr, server_name = %server_name, sni = %sni))]
+#[crate::wide_instrument(name = "federation_fetch_keys", addr = addr, server_name = server_name, sni = sni)]
 pub async fn fetch_keys(
     addr: &str,
     server_name: &str,

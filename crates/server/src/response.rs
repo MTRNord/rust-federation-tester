@@ -1,6 +1,7 @@
 use crate::connection_pool::ConnectionPool;
 use crate::federation::{connection_check, lookup_server, lookup_server_well_known};
 use crate::validation::server_name::parse_and_validate_server_name;
+
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use hickory_resolver::Resolver;
@@ -199,11 +200,7 @@ pub struct Error {
     pub error_code: ErrorCode,
 }
 
-#[tracing::instrument(
-    name = "generate_json_report",
-    skip(resolver, connection_pool,),
-    fields(server_name = %server_name)
-)]
+#[crate::wide_instrument(name = "generate_json_report", server_name = server_name)]
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,

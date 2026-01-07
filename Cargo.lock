@@ -4237,6 +4237,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-core",
+ "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
@@ -4245,6 +4246,8 @@ dependencies = [
  "utoipa-redoc",
  "uuid",
  "webpki-roots 1.0.5",
+ "wide_events",
+ "wide_instrument_macro",
  "wiremock",
  "x509-parser",
 ]
@@ -5718,6 +5721,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "pin-project",
+ "tracing",
+]
+
+[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6164,6 +6177,27 @@ checksum = "5d4a4db5077702ca3015d3d02d74974948aba2ad9e12ab7df718ee64ccd7e97d"
 dependencies = [
  "libredox",
  "wasite",
+]
+
+[[package]]
+name = "wide_events"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-opentelemetry",
+]
+
+[[package]]
+name = "wide_instrument_macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+ "wide_events",
 ]
 
 [[package]]

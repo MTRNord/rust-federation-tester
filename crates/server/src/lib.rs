@@ -10,6 +10,12 @@ use sea_orm::DatabaseConnection;
 
 use crate::config::AppConfig;
 
+// Re-export WideEvent and the attribute proc-macro at the crate root so other modules
+// can refer to them as `crate::WideEvent` and `crate::wide_instrument`.
+// This makes `use crate::wide_instrument;` valid in submodules (the attribute is a proc-macro).
+pub use wide_events::WideEvent;
+pub use wide_instrument_macro::wide_instrument;
+
 pub mod api;
 pub mod client;
 pub mod config;
@@ -18,7 +24,6 @@ pub mod email_templates;
 pub mod entity;
 pub mod error;
 pub mod federation;
-pub mod logging;
 pub mod optimization;
 pub mod recurring_alerts;
 pub mod response;

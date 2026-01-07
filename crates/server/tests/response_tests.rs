@@ -2,7 +2,7 @@ use rust_federation_tester::response::{
     Certificate, Checks, Cipher, ConnectionReportData, Dnsresult, Ed25519Check, Ed25519VerifyKey,
     Error, ErrorCode, InvalidServerNameErrorCode, Keys, Root, SRVData, Version, WellKnownResult,
 };
-use serde_json;
+
 use std::collections::BTreeMap;
 
 #[test]

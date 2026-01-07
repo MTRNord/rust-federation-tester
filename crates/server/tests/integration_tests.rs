@@ -76,7 +76,7 @@ async fn test_concurrent_requests() {
 
         join_set.spawn(async move {
             let server_name = format!("invalid{}.example.com", i);
-            let result = generate_json_report(&server_name, &*resolver, &*connection_pool).await;
+            let result = generate_json_report(&server_name, &resolver, &connection_pool).await;
 
             // Just verify the function completes
             result.is_ok()

@@ -11,6 +11,7 @@ pub struct DnsPhaseResult {
     pub srvskipped: bool,
     pub errors: Vec<Error>,
 }
+
 use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{ResolveErrorKind, Resolver, name_server::ConnectionProvider};
 use tokio::time::{Duration, timeout};
@@ -23,7 +24,7 @@ pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     }
 }
 
-#[tracing::instrument(name = "lookup_server", skip(resolver), fields(server_name = %server_name))]
+#[crate::wide_instrument(name = "lookup_server", server_name = server_name)]
 pub async fn lookup_server<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
