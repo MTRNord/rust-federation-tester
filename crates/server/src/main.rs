@@ -17,6 +17,8 @@ use std::sync::Arc;
 use tokio::time::{Duration, interval};
 use tracing::Level;
 use wide_events::WideEvent;
+use wide_events::wide_debug;
+use wide_events::wide_info;
 
 // Logging guidelines due to otel:
 // Use the correct log levels!
@@ -131,9 +133,7 @@ fn initialize_otel_console_tracing() {
         // Install trace layer first so spans and span ids are created, then install
         // the logs bridge and a fmt layer for local formatting.
         // Respect RUST_LOG (EnvFilter) when creating the subscriber.
-        let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(default_directives));
+        let env_filter = EnvFilter::from_default_env();
         tracing_subscriber::registry()
             .with(env_filter)
             .with(otel_trace_layer)
@@ -146,9 +146,7 @@ fn initialize_otel_console_tracing() {
     {
         // Only install logs bridge + fmt layer when tracing-opentelemetry is not enabled.
         // Respect RUST_LOG (EnvFilter) so environment log level directives are honored.
-        let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(default_directives));
+        let env_filter = EnvFilter::from_default_env();
         tracing_subscriber::registry()
             .with(env_filter)
             .with(otel_logs_bridge)
@@ -227,10 +225,12 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Load config
     let config = Arc::new(load_config_or_panic());
 
+    wide_debug!("config.setup_ring", "Loading ring");
     let ring_provider = crypto::ring::default_provider();
     CryptoProvider::install_default(ring_provider).expect("Failed to install crypto provider");
 
     // Set up SeaORM database connection
+    wide_debug!("config.setup_database", "Loading database");
     let db = Arc::new(
         Database::connect(&config.database_url)
             .await
@@ -238,6 +238,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     );
 
     // Set up lettre SMTP client
+    wide_debug!("config.setup_smtp", "Loading SMTP client");
     let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
     let mailer = Arc::new(
         AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
@@ -248,6 +249,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     );
 
     // Set up resolver and caches
+    wide_debug!("config.setup_resolver", "Loading resolver");
     let resolver = Arc::new(Resolver::builder_tokio()?.build());
     let connection_pool = ConnectionPool::default();
     let task_manager = Arc::new(AlertTaskManager::new());
@@ -269,18 +271,14 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let retention_days = resources.config.statistics.raw_retention_days;
     let salt_set = !resources.config.statistics.anonymization_salt.is_empty();
 
-    // Emit a compact wide event using the inline macro (records attributes on span)
-    // Build a WideEvent explicitly and emit it. Using the API directly avoids any
-    // ambiguity with macro arms and keeps the usage explicit.
-    let stats_event = WideEvent::new(
+    wide_info!(
         "config.statistics",
-        concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        "Checking statistics configuration",
+        enabled = stats_enabled,
+        prometheus = prometheus_enabled,
+        retention_days = retention_days,
+        salt_set = salt_set
     );
-    stats_event.add("enabled", stats_enabled);
-    stats_event.add("prometheus", prometheus_enabled);
-    stats_event.add("retention_days", retention_days);
-    stats_event.add("salt_set", salt_set);
-    stats_event.info("statistics configuration");
 
     // Start retention pruning task for federation stats (if enabled)
     rust_federation_tester::stats::spawn_retention_task(resources.clone());
@@ -288,6 +286,10 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Start background cleanup task for connection pool
     {
         let pool = connection_pool.clone();
+        wide_debug!(
+            "config.start_cleanup_connection_pool",
+            "Starting background cleanup task for connection pool"
+        );
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(300)); // 5 minutes
             loop {
@@ -302,6 +304,10 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let task_manager_for_checks = task_manager.clone();
     let resolver_for_checks = state.resolver.clone();
     let connection_pool_for_checks = state.connection_pool.clone();
+    wide_debug!(
+        "config.start_recurring_alert_checks",
+        "Starting recurring alert checks"
+    );
     tokio::spawn(async move {
         recurring_alert_checks(
             resources_for_checks,
@@ -331,16 +337,6 @@ async fn main() -> color_eyre::eyre::Result<()> {
             }
         });
     }
-
-    // The webserver and its handlers can create WideEvent instances per request:
-    // Example usage (to be used inside request handlers):
-    // let evt = WideEvent::new("request", "rust_federation_tester::api");
-    // evt.add("request_id", request_id);
-    // evt.add_opt("user_id", maybe_user_id);
-    // // when ready:
-    // evt.emit("request complete", Level::INFO);
-    //
-    // This pattern keeps each request's fields collected and emitted as a single canonical JSON blob.
 
     start_webserver(state, alert_state, (*resources).clone(), debug_mode).await?;
     Ok(())

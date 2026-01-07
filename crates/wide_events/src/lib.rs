@@ -192,6 +192,14 @@ impl WideEvent {
 /// invoked from other crates that depend on this crate.
 #[macro_export]
 macro_rules! wide_info {
+    // name + msg convenience form with automatic target and optional key-value pairs
+    ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::INFO);
+        }
+    };
     // Existing evt-form: pass an existing WideEvent instance and format args
     ($evt:expr, $($arg:tt)+) => {
         $evt.emit(&format!($($arg)+), tracing::Level::INFO)
@@ -209,6 +217,15 @@ macro_rules! wide_info {
 
 #[macro_export]
 macro_rules! wide_debug {
+    // name + msg convenience form with automatic target and optional key-value pairs
+    ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::DEBUG);
+        }
+    };
+
     // evt-form
     ($evt:expr, $($arg:tt)+) => {
         $evt.emit(&format!($($arg)+), tracing::Level::DEBUG)
@@ -225,6 +242,15 @@ macro_rules! wide_debug {
 
 #[macro_export]
 macro_rules! wide_error {
+    // name + msg convenience form with automatic target and optional key-value pairs
+    ($name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+        {
+            let __evt = $crate::WideEvent::new($name, concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+            $( __evt.add(stringify!($k), $v); )*
+            __evt.emit($msg, tracing::Level::ERROR);
+        }
+    };
+
     // evt-form
     ($evt:expr, $($arg:tt)+) => {
         $evt.emit(&format!($($arg)+), tracing::Level::ERROR)

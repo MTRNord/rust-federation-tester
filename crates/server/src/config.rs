@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::net::IpAddr;
 use std::str::FromStr;
 use thiserror::Error;
+use wide_events::wide_debug;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -184,6 +185,7 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
 
 /// Convenience helper for binaries wanting the old panic-on-error behaviour.
 pub fn load_config_or_panic() -> AppConfig {
+    wide_debug!("config.load", "Loading configuration");
     match load_config() {
         Ok(c) => c,
         Err(e) => panic!("Failed to load configuration: {e}"),
