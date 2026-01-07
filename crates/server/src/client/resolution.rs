@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HomeserverInfo {
@@ -65,7 +64,12 @@ pub struct ClientVersions {
 
 pub async fn fetch_client_server_versions(cs_server_address: &str) -> ClientVersions {
     let url = format!("{}/_matrix/client/versions", cs_server_address);
-    info!("Fetching client versions from {}", url);
+    tracing::info!(
+        name = "client.fetch_client_versions",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        message = "Fetching client versions",
+        url = %url
+    );
     let client = reqwest::Client::new();
     let resp = client
         .get(&url)

@@ -13,7 +13,6 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
-use tracing::{debug, warn};
 
 type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni) - use Arc<str> for better memory efficiency
 type PooledConnection = SendRequest<Empty<Bytes>>;
@@ -116,7 +115,14 @@ impl ConnectionPool {
             while let Some(mut conn) = connections.pop() {
                 // Test if connection is still alive
                 if conn.ready().await.is_ok() {
-                    debug!("Reusing pooled connection for {addr} with SNI {sni}");
+                    tracing::debug!(
+                        name = "connection_pool.reuse",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        addr = %addr,
+                        sni = %sni,
+                        client_id = %client_id,
+                        message = "Reusing pooled connection"
+                    );
                     self.increment_client_usage(client_id);
                     return Ok(conn);
                 }
@@ -130,7 +136,14 @@ impl ConnectionPool {
         }
 
         // Create new connection
-        debug!("Creating new connection for {addr} with SNI {sni}");
+        tracing::debug!(
+            name = "connection_pool.create",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            addr = %addr,
+            sni = %sni,
+            client_id = %client_id,
+            message = "Creating new pooled connection"
+        );
         let conn = self.create_new_connection(addr, sni).await?;
         self.increment_client_usage(client_id);
         Ok(conn)
@@ -156,7 +169,13 @@ impl ConnectionPool {
             let mut connections = pool.lock().await;
             if connections.len() < self.max_connections_per_key {
                 connections.push(conn);
-                debug!("Returned connection to pool for {addr} with SNI {sni}");
+                tracing::debug!(
+                    name = "connection_pool.returned",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    addr = %addr,
+                    sni = %sni,
+                    message = "Returned connection to pool"
+                );
             }
         }
 
@@ -187,7 +206,12 @@ impl ConnectionPool {
         // Spawn the connection task
         tokio::task::spawn(async move {
             if let Err(err) = conn.await {
-                warn!("Connection task failed: {err:#?}");
+                tracing::warn!(
+                    name = "connection_pool.conn_task_failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?err,
+                    message = "Connection task failed"
+                );
             }
         });
 
@@ -218,10 +242,12 @@ impl ConnectionPool {
 
             let removed = initial_count - connections.len();
             if removed > 0 {
-                debug!(
-                    "Cleaned up {} dead connections for {:?}",
-                    removed,
-                    entry.key()
+                tracing::debug!(
+                    name = "connection_pool.cleanup_removed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    removed = removed,
+                    pool_key = ?entry.key(),
+                    message = "Cleaned up dead connections"
                 );
             }
         }
@@ -349,9 +375,11 @@ impl ConnectionPool {
             }
 
             if removed > 0 {
-                debug!(
-                    "Enforced memory limits: removed {} excess connections",
-                    removed
+                tracing::debug!(
+                    name = "connection_pool.enforce_memory_limits",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    removed = removed,
+                    message = "Enforced memory limits: removed excess connections"
                 );
             }
         }

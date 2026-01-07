@@ -13,7 +13,6 @@ use rustls_pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
-use tracing::debug;
 
 #[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VersionResp {
@@ -83,8 +82,15 @@ pub async fn fetch_url_pooled_simple(
 ) -> Result<Option<hyper::Response<Incoming>>, FetchError> {
     let sni_host = sni.split(':').next().unwrap();
     let host_host = host.split(':').next().unwrap();
-    debug!(
-        "[fetch_url_pooled_simple] Fetching {path} from {addr} with SNI {sni_host} and host {host_host} using connection pool"
+    tracing::debug!(
+        name = "federation.fetch_url_pooled_simple.start",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        message = "Fetching with connection pool",
+        path = %path,
+        addr = %addr,
+        sni_host = %sni_host,
+        host = %host_host,
+        using_connection_pool = true
     );
     match connection_pool.get_connection(addr, sni).await {
         Ok(mut sender) => {
@@ -102,15 +108,31 @@ pub async fn fetch_url_pooled_simple(
                     return Ok(Some(response));
                 }
                 Err(e) => {
-                    debug!("Pooled connection send failed, fallback: {e:#?}");
+                    tracing::debug!(
+                        name = "federation.fetch_url_pooled_simple.pooled_send_failed",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        error = ?e,
+                        message = "Pooled connection send failed; falling back to fresh connection"
+                    );
                 }
             }
         }
         Err(e) => {
-            debug!("Pool get_connection error ({e:#?}), falling back to fresh connection");
+            tracing::debug!(
+                name = "federation.fetch_url_pooled_simple.pool_get_connection_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?e,
+                message = "Connection pool get_connection failed; falling back to fresh connection"
+            );
         }
     }
-    debug!("Creating fresh connection for {path}");
+    tracing::debug!(
+        name = "federation.fetch_url_pooled_simple.create_fresh_connection",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        message = "Creating fresh connection",
+        path = %path,
+        addr = %addr
+    );
     let stream = timeout(
         Duration::from_secs(NETWORK_TIMEOUT_SECS),
         TcpStream::connect(addr),
@@ -134,7 +156,12 @@ pub async fn fetch_url_pooled_simple(
         .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            debug!("Fresh connection task ended: {err:#?}");
+            tracing::debug!(
+                name = "federation.fetch_url_pooled_simple.fresh_conn_task_ended",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?err,
+                message = "Fresh connection task ended"
+            );
         }
     });
     let req = Request::builder()

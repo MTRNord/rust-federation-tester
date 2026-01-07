@@ -267,8 +267,13 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         format!("{canonical_target}.")
                     };
                     tracing::info!(
-                        "Resolved {host} to {dns_formatted_target} with {} addresses and server_name {server_name}",
-                        addrs_with_port.len()
+                        name = "federation.dns.resolved",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        message = "Resolved DNS target",
+                        host = %host,
+                        dns_target = %dns_formatted_target,
+                        addr_count = addrs_with_port.len(),
+                        server_name = %server_name
                     );
                     record.addrs.extend(addrs_with_port.clone());
                     addrs.extend(addrs_with_port);

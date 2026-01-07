@@ -27,7 +27,12 @@ fn inline_css(html: &str) -> String {
     match inliner.inline(&html_with_style) {
         Ok(inlined) => inlined,
         Err(e) => {
-            tracing::error!("Failed to inline CSS: {:?}", e);
+            tracing::error!(
+                name = "email.inline_css.failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?e,
+                message = "Failed to inline CSS"
+            );
             html.to_string()
         }
     }

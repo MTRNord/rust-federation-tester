@@ -97,7 +97,13 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
         unstable_features_announced: ActiveValue::Set(unstable_announced_json),
     };
     if let Err(e) = raw_model.insert(db).await {
-        tracing::warn!(error=%e, server=%server_key, "failed inserting raw federation event");
+        tracing::warn!(
+            name = "stats.insert_raw_federation_event",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "failed inserting raw federation event",
+            error = %e,
+            server = %server_key
+        );
     }
 
     match agg::Entity::find_by_id(server_key.clone()).one(db).await {
@@ -114,7 +120,13 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
             model.unstable_features_announced = announced_count;
             let active: agg::ActiveModel = model.into();
             if let Err(e) = active.update(db).await {
-                tracing::warn!(error=%e, server=%server_key, "failed updating federation_stat_aggregate");
+                tracing::warn!(
+                    name = "stats.update_federation_stat_aggregate",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    message = "failed updating federation_stat_aggregate",
+                    error = %e,
+                    server = %server_key
+                );
             }
         }
         Ok(None) => {
@@ -135,11 +147,23 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
                 unstable_features_announced: ActiveValue::Set(announced_count),
             };
             if let Err(e) = active.insert(db).await {
-                tracing::warn!(error=%e, server=%server_key, "failed inserting federation_stat_aggregate");
+                tracing::warn!(
+                    name = "stats.insert_federation_stat_aggregate",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    message = "failed inserting federation_stat_aggregate",
+                    error = %e,
+                    server = %server_key
+                );
             }
         }
         Err(e) => {
-            tracing::warn!(error=%e, server=%server_key, "database error fetching federation_stat_aggregate");
+            tracing::warn!(
+                name = "stats.fetch_federation_stat_aggregate",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                message = "database error fetching federation_stat_aggregate",
+                error = %e,
+                server = %server_key
+            );
         }
     }
     invalidate_metrics_cache();
@@ -174,7 +198,12 @@ pub async fn prune_old_entries(resources: &AppResources) {
         _ => Statement::from_string(backend, sql),
     };
     if let Err(e) = db.execute(stmt).await {
-        tracing::warn!(error=%e, "prune_old_entries failed");
+        tracing::warn!(
+            name: "stats.prune_old_entries",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error=%e,
+            message = "prune_old_entries failed"
+        );
     }
 }
 

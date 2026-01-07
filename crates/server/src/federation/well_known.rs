@@ -7,7 +7,6 @@ use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{Resolver, name_server::ConnectionProvider};
 use std::net::IpAddr;
 use tokio::time::{Duration, timeout};
-use tracing::{info, warn};
 use url::Url;
 
 pub const NETWORK_TIMEOUT_SECS: u64 = 3;
@@ -32,9 +31,12 @@ fn validate_well_known_security(original_server: &str, m_server: &str) -> Result
 
     // 3. Prevent infinite redirect loops
     if m_server == original_server {
-        warn!(
-            "Self-referential delegation detected: {} -> {}",
-            original_server, m_server
+        tracing::warn!(
+            name = "federation.lookup_server_well_known",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "Self-referential delegation detected",
+            original_server = %original_server,
+            m_server = %m_server
         );
         // Allow but warn - this might be intentional
     }
@@ -103,8 +105,11 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     resolver: &Resolver<P>,
 ) -> WellKnownPhaseResult {
     if server_name.contains(':') {
-        info!(
-            "[check_well_known_pure] Skipping well-known lookup for {server_name} as it contains a port"
+        tracing::info!(
+            name = "federation.lookup_server_well_known",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "Skipping well-known lookup for as it contains a port",
+            server_name = %server_name
         );
         return WellKnownPhaseResult {
             well_known_result: vec![],

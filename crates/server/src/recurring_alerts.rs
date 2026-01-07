@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{error, info};
+use tracing::info;
 
 type AlertCheckTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -151,7 +151,15 @@ async fn send_failure_email(
     let html_body = match template.render_html() {
         Ok(html) => html,
         Err(e) => {
-            error!("Failed to render HTML email template: {}", e);
+            tracing::error!(
+                name = "alerts.send_failure_email.template_render_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                email = %email,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to render HTML email template"
+            );
             return;
         }
     };
@@ -181,9 +189,18 @@ async fn send_failure_email(
         .unwrap();
 
     if let Err(e) = mailer.send(email_msg).await {
-        error!("Failed to send failure alert email to {}: {}", email, e);
+        tracing::error!(
+            name = "alerts.send_failure_email.email_send_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            email = %email,
+            server_name = %server_name,
+            alert_id = alert_id,
+            message = "Failed to send failure alert email"
+        );
     } else {
         info!(
+            target: "rust-federation-tester",
             "Sent failure alert email #{} to {} for server {}",
             failure_count, email, server_name
         );
@@ -200,7 +217,15 @@ async fn send_failure_email(
         };
 
         if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            error!("Failed to log failure email to database: {}", e);
+            tracing::error!(
+                name = "alerts.send_failure_email.log_insert_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                email = %email,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to log failure email to database"
+            );
         }
     }
 }
@@ -236,7 +261,15 @@ async fn send_recovery_email(
     let html_body = match template.render_html() {
         Ok(html) => html,
         Err(e) => {
-            error!("Failed to render HTML email template: {}", e);
+            tracing::error!(
+                name = "alerts.send_recovery_email.template_render_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                email = %email,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to render HTML email template for recovery"
+            );
             return;
         }
     };
@@ -266,7 +299,15 @@ async fn send_recovery_email(
         .unwrap();
 
     if let Err(e) = mailer.send(email_msg).await {
-        error!("Failed to send recovery email to {}: {}", email, e);
+        tracing::error!(
+            name = "alerts.send_recovery_email.email_send_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            email = %email,
+            server_name = %server_name,
+            alert_id = alert_id,
+            message = "Failed to send recovery email"
+        );
     } else {
         info!(
             "Sent recovery email to {} for server {}",
@@ -285,7 +326,15 @@ async fn send_recovery_email(
         };
 
         if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            error!("Failed to log recovery email to database: {}", e);
+            tracing::error!(
+                name = "alerts.send_recovery_email.log_insert_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                email = %email,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to log recovery email to database"
+            );
         }
     }
 }
@@ -339,17 +388,25 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                     Box::pin(async move {
                         // Stagger the initial start time to distribute load (only on first start)
                         if initial_delay.as_secs() > 0 {
-                            info!(
-                                "Alert check for {} ({}) will start in {} seconds",
-                                server_name,
-                                email,
-                                initial_delay.as_secs()
+                            tracing::info!(
+                                name = "alerts.task.initial_delay",
+                                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                message = "Alert check scheduled",
+                                server_name = %server_name,
+                                email = %email,
+                                delay_seconds = initial_delay.as_secs()
                             );
                             tokio::time::sleep(initial_delay).await;
                         }
 
                         while flag.load(Ordering::SeqCst) {
-                            info!("Running recurring check for {} ({})", server_name, email);
+                            tracing::info!(
+                                name = "alerts.check.running",
+                                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                message = "Running recurring alert check",
+                                server_name = %server_name,
+                                email = %email
+                            );
 
                             // Perform the federation check
                             let report =
@@ -381,9 +438,12 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                 alert_active.failure_count = ActiveValue::Set(1);
                                                 alert_active.last_failure_at =
                                                     ActiveValue::Set(Some(now));
-                                                info!(
-                                                    "Server {} transitioned to failing state",
-                                                    server_name
+                                                tracing::info!(
+                                                    name = "alerts.state.transition_to_failing",
+                                                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                                    message = "Server transitioned to failing state",
+                                                    server_name = %server_name,
+                                                    alert_id = alert_id
                                                 );
                                             } else {
                                                 // Still failing, increment counter
@@ -451,9 +511,12 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                             email_update.update(db.as_ref()).await;
                                                     }
                                                 }
-                                                info!(
-                                                    "Server {} recovered to healthy state",
-                                                    server_name
+                                                tracing::info!(
+                                                    name = "alerts.state.recovered",
+                                                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                                    message = "Server recovered to healthy state",
+                                                    server_name = %server_name,
+                                                    alert_id = alert_id
                                                 );
                                             } else {
                                                 // Still OK, just update check time and success time
@@ -465,9 +528,13 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                     }
                                 }
                                 Err(e) => {
-                                    error!(
-                                        "Federation check error for {} ({}): {:?}",
-                                        server_name, email, e
+                                    tracing::error!(
+                                        name = "alerts.recurring_check.error",
+                                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                        server_name = %server_name,
+                                        email = %email,
+                                        error = ?e,
+                                        message = "Federation check error"
                                     );
                                 }
                             }
@@ -475,7 +542,13 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                             // Check every 5 minutes
                             tokio::time::sleep(CHECK_INTERVAL).await;
                         }
-                        info!("Stopped recurring check for {} ({})", server_name, email);
+                        tracing::info!(
+                            name = "alerts.task.stopped",
+                            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                            message = "Stopped recurring check for alert",
+                            server_name = %server_name,
+                            email = %email
+                        );
                     })
                 })
                 .await;

@@ -9,9 +9,6 @@ name = "migration"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = { version = "1.46.1", features = ["full"] }
 config = { version = "0.15.13", features = ["yaml"] }
-
-[dependencies.sea-orm-migration]
-version = "1.1.0"
-features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"]
+sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"]}
+tokio = { version = "1.46.1", features = ["full"] }

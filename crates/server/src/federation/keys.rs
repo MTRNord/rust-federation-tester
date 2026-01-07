@@ -12,7 +12,6 @@ use http_body_util::BodyExt;
 use serde_json;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, timeout};
-use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
 pub struct FullKeysResponse {
@@ -114,9 +113,13 @@ fn check_verify_keys(
 
     for (key_id, key_data) in keys.verify_keys.clone() {
         let algorithm = key_id.split(':').next().unwrap();
-        debug!(
-            "Checking key_id: {key_id}, algorithm: {algorithm}, public key: {}",
-            key_data.key
+        tracing::debug!(
+            name = "federation.keys.check_key",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            key_id = %key_id,
+            algorithm = %algorithm,
+            public_key = %key_data.key,
+            message = "Checking key id and algorithm"
         );
         if let Ok(public_key) = BASE64_STANDARD_NO_PAD.decode(key_data.key.clone()) {
             if algorithm == "ed25519" {
@@ -153,27 +156,39 @@ fn check_verify_keys(
                             {
                                 matching_signature = true;
                             } else {
-                                error!(
-                                    "Signature verification failed for key_id: {key_id} with public key: {}",
-                                    key_data.key
+                                tracing::error!(
+                                    name = "federation.keys.signature_verification_failed",
+                                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                    key_id = %key_id,
+                                    public_key = %key_data.key,
+                                    message = "Signature verification failed for key_id"
                                 );
                             }
                         } else {
-                            error!(
-                                "Failed to create signature from bytes for key_id: {key_id} with public key: {}",
-                                key_data.key
+                            tracing::error!(
+                                name = "federation.keys.signature_parse_failed",
+                                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                key_id = %key_id,
+                                public_key = %key_data.key,
+                                message = "Failed to create signature from bytes for key_id"
                             );
                         }
                     } else {
-                        error!(
-                            "Failed to parse keys_string or find signatures for key_id: {key_id} with public key: {}",
-                            key_data.key
+                        tracing::error!(
+                            name = "federation.keys.signatures_missing_or_parse_failed",
+                            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                            key_id = %key_id,
+                            public_key = %key_data.key,
+                            message = "Failed to parse keys_string or find signatures for key_id"
                         );
                     }
                 } else {
-                    error!(
-                        "Invalid public key length for key_id: {key_id}, expected 32 bytes, got {} bytes",
-                        public_key.len()
+                    tracing::error!(
+                        name = "federation.keys.invalid_public_key_length",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        key_id = %key_id,
+                        public_key_len = public_key.len(),
+                        message = "Invalid public key length for key_id"
                     );
                 }
                 ed25519checks.insert(
@@ -190,9 +205,13 @@ fn check_verify_keys(
                 }
             }
         } else {
-            error!(
-                "Failed to decode public key for key_id: {key_id}, algorithm: {algorithm}, public key: {}",
-                key_data.key
+            tracing::error!(
+                name = "federation.keys.decode_public_key_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                key_id = %key_id,
+                algorithm = %algorithm,
+                public_key = %key_data.key,
+                message = "Failed to decode public key"
             );
         }
     }

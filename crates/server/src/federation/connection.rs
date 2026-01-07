@@ -2,7 +2,6 @@ use crate::connection_pool::ConnectionPool;
 use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
 use crate::response::{ConnectionReportData, Error, ErrorCode};
-use tracing::error;
 
 #[tracing::instrument(name = "connection_check", skip(connection_pool), fields(addr = %addr, server_name = %server_name, sni = %sni))]
 pub async fn connection_check(
@@ -47,7 +46,13 @@ pub async fn connection_check(
             key_resp
         }
         Err(e) => {
-            error!("Error fetching keys from {addr}: {e:#?}");
+            tracing::error!(
+                name = "federation.connection.fetch_keys_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                addr = %addr,
+                error = ?e,
+                message = "Error fetching keys from server"
+            );
             return Err(Error {
                 error: format!("Error fetching keys from {addr}: {e}"),
                 error_code: ErrorCode::Unknown,

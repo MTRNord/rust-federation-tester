@@ -4,7 +4,6 @@ use crate::{
 };
 use hickory_resolver::name_server::ConnectionProvider;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::info;
 use utoipa::{
     Modify, OpenApi,
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -34,7 +33,6 @@ pub mod federation_tester_api {
     use serde::Deserialize;
     use serde_json::json;
     use std::sync::Arc;
-    use tracing::error;
     use utoipa::IntoParams;
     use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -141,7 +139,12 @@ pub mod federation_tester_api {
                 (StatusCode::OK, Json(report))
             }
             Err(e) => {
-                error!("Error generating report: {e:?}");
+                tracing::error!(
+                    name = "api.get_report.failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?e,
+                    message = "Error generating report"
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
@@ -228,7 +231,12 @@ pub mod federation_tester_api {
                 )
             }
             Err(e) => {
-                error!("Error generating report: {e:?}");
+                tracing::error!(
+                    name = "api.get_fed_ok.failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?e,
+                    message = "Error generating report"
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Failed to generate report: {e}"),
@@ -284,7 +292,6 @@ pub mod alert_api {
     use serde_json::json;
     use std::sync::Arc;
     use time::OffsetDateTime;
-    use tracing::{error, warn};
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -390,6 +397,12 @@ pub mod alert_api {
                     model.magic_token = Set(token.clone());
                     model.created_at = Set(now);
                     if let Err(e) = model.update(resources.db.as_ref()).await {
+                        tracing::error!(
+                            name = "api.register_alert.db_update_failed",
+                            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                            error = ?e,
+                            message = "Failed to update existing alert"
+                        );
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({"error": format!("DB error: {e}")})),
@@ -411,7 +424,12 @@ pub mod alert_api {
                     .exec(resources.db.as_ref())
                     .await;
                 if let Err(e) = insert_res {
-                    error!("Failed to insert new alert: {:#?}", e);
+                    tracing::error!(
+                        name = "api.register_alert.db_insert_failed",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        error = ?e,
+                        message = "Failed to insert new alert"
+                    );
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({"error": format!("DB error: {e}")})),
@@ -419,7 +437,12 @@ pub mod alert_api {
                 }
             }
             Err(e) => {
-                error!("Failed to query existing alert: {:#?}", e);
+                tracing::error!(
+                    name = "api.register_alert.db_query_failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?e,
+                    message = "Failed to query existing alert"
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": format!("DB error: {e}")})),
@@ -441,7 +464,12 @@ pub mod alert_api {
         let html_body = match template.render_html() {
             Ok(html) => html,
             Err(e) => {
-                error!("Failed to render HTML email template: {}", e);
+                tracing::error!(
+                    name = "api.register_alert.template_render_failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = %e,
+                    message = "Failed to render HTML email template"
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": "Failed to render email template" })),
@@ -473,7 +501,12 @@ pub mod alert_api {
             .unwrap();
 
         if let Err(e) = resources.mailer.send(email).await {
-            error!("Failed to send verification email: {:#?}", e);
+            tracing::error!(
+                name = "api.register_alert.email_send_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?e,
+                message = "Failed to send verification email"
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("Failed to send email: {e}") })),
@@ -547,7 +580,12 @@ pub mod alert_api {
                                 let mut model: alert::ActiveModel = a.into();
                                 model.verified = Set(true);
                                 if let Err(e) = model.update(resources.db.as_ref()).await {
-                                    error!("Failed to verify alert: {:#?}", e);
+                                    tracing::error!(
+                                        name = "api.verify_alert.db_update_failed",
+                                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                        error = ?e,
+                                        message = "Failed to verify alert"
+                                    );
                                     return (
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(json!({"error": format!("DB error: {e}")})),
@@ -560,7 +598,12 @@ pub mod alert_api {
                                 Json(json!({"error": "No alert found for this email and server"})),
                             ),
                             Err(e) => {
-                                error!("Failed to query alert for verification: {:#?}", e);
+                                tracing::error!(
+                                    name = "api.verify_alert.db_query_failed",
+                                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                    error = ?e,
+                                    message = "Failed to query alert for verification"
+                                );
                                 return (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({"error": format!("DB error: {e}")})),
@@ -577,7 +620,12 @@ pub mod alert_api {
                         match alerts {
                             Ok(list) => (StatusCode::OK, Json(json!({"alerts": list}))),
                             Err(e) => {
-                                error!("Failed to query alerts for listing: {:#?}", e);
+                                tracing::error!(
+                                    name = "api.verify_alert.db_query_failed",
+                                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                    error = ?e,
+                                    message = "Failed to query alerts for listing"
+                                );
                                 return (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({"error": format!("DB error: {e}")})),
@@ -591,7 +639,13 @@ pub mod alert_api {
                             let alert_id: i32 = match alert_id.parse() {
                                 Ok(id) => id,
                                 Err(e) => {
-                                    error!("Invalid alert_id in token: {alert_id}\n{:#?}", e);
+                                    tracing::error!(
+                                        name = "api.verify_alert.invalid_alert_id",
+                                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                        alert_id = %alert_id,
+                                        error = ?e,
+                                        message = "Invalid alert_id in token"
+                                    );
                                     return (
                                         StatusCode::BAD_REQUEST,
                                         Json(json!({"error": "Invalid alert_id in token"})),
@@ -606,7 +660,12 @@ pub mod alert_api {
                             match del {
                                 Ok(_) => (StatusCode::OK, Json(json!({"status": "deleted"}))),
                                 Err(e) => {
-                                    error!("Failed to delete alert: {:#?}", e);
+                                    tracing::error!(
+                                        name = "api.verify_alert.delete_failed",
+                                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                                        error = ?e,
+                                        message = "Failed to delete alert"
+                                    );
                                     return (
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(json!({"error": format!("DB error: {e}")})),
@@ -627,7 +686,12 @@ pub mod alert_api {
                 }
             }
             Err(e) => {
-                warn!("Invalid or expired token used for verification: {e}");
+                tracing::warn!(
+                    name = "api.verify_alert.invalid_or_expired_token",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = %e,
+                    message = "Invalid or expired token used for verification"
+                );
                 (
                     StatusCode::BAD_REQUEST,
                     Json(json!({"error": "Invalid or expired token"})),
@@ -667,7 +731,12 @@ pub mod alert_api {
         ) {
             Ok(t) => t,
             Err(e) => {
-                error!("Failed to generate token for listing alerts: {:#?}", e);
+                tracing::error!(
+                    name = "api.list_alerts.token_generation_failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?e,
+                    message = "Failed to generate token for listing alerts"
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": format!("Failed to generate token: {e}") })),
@@ -677,7 +746,7 @@ pub mod alert_api {
         let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
         let email_body = format!(
             r#"Hello,
-            
+
 You requested to view your alerts.
 
 Please verify by clicking the link below (valid for 1 hour):
@@ -696,7 +765,12 @@ The Federation Tester Team"#
             .body(email_body)
             .unwrap();
         if let Err(e) = resources.mailer.send(email).await {
-            error!("Failed to send verification email: {:#?}", e);
+            tracing::error!(
+                name = "api.list_alerts.email_send_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?e,
+                message = "Failed to send verification email"
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("Failed to send email: {e}") })),
@@ -755,7 +829,12 @@ The Federation Tester Team"#
                 ) {
                     Ok(t) => t,
                     Err(e) => {
-                        error!("Failed to generate token for deleting alert: {:#?}", e);
+                        tracing::error!(
+                            name = "api.delete_alert.token_generation_failed",
+                            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                            error = ?e,
+                            message = "Failed to generate token for deleting alert"
+                        );
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({ "error": format!("Failed to generate token: {e}") })),
@@ -766,7 +845,7 @@ The Federation Tester Team"#
                     format!("{}/verify?token={}", resources.config.frontend_url, token);
                 let email_body = format!(
                     r#"Hello,
-                    
+
 You requested to delete your alert for server: {}
 
 Please verify by clicking the link below (valid for 1 hour):
@@ -786,7 +865,12 @@ The Federation Tester Team"#,
                     .body(email_body)
                     .unwrap();
                 if let Err(e) = resources.mailer.send(email).await {
-                    error!("Failed to send verification email: {:#?}", e);
+                    tracing::error!(
+                        name = "api.delete_alert.email_send_failed",
+                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                        error = ?e,
+                        message = "Failed to send verification email"
+                    );
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": format!("Failed to send email: {e}") })),
@@ -802,7 +886,12 @@ The Federation Tester Team"#,
                 Json(json!({"error": "Alert not found"})),
             ),
             Err(e) => {
-                error!("Failed to query alert for deletion: {:#?}", e);
+                tracing::error!(
+                    name = "api.delete_alert.db_query_failed",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    error = ?e,
+                    message = "Failed to query alert for deletion"
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": format!("DB error: {e}")})),
@@ -867,7 +956,12 @@ pub async fn start_webserver<P: ConnectionProvider>(
     let router = router.merge(Redoc::with_url("/api-docs", api));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    info!("Server running on http://0.0.0.0:8080");
+    tracing::info!(
+        name = "server.started",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        message = "Server running",
+        addr = "0.0.0.0:8080"
+    );
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),

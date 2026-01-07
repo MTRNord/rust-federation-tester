@@ -11,7 +11,6 @@ use rustls_pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
-use tracing::{debug, error};
 
 use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
 
@@ -32,8 +31,14 @@ pub async fn fetch_url_custom_sni_host(
 ) -> Result<FullResponse, FetchError> {
     let sni_host = sni.split(':').next().unwrap();
     let host_host = host.split(':').next().unwrap();
-    debug!(
-        "[fetch_url_custom_sni_host] Fetching {path} from {addr} with SNI {sni_host} and host {host_host}"
+    tracing::debug!(
+        name = "federation.fetch_url_custom_sni_host.start",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        message = "Fetching URL with custom SNI",
+        path = %path,
+        addr = %addr,
+        sni_host = %sni_host,
+        host = %host_host
     );
     let stream = timeout(
         Duration::from_secs(NETWORK_TIMEOUT_SECS),
@@ -87,7 +92,12 @@ pub async fn fetch_url_custom_sni_host(
         .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            error!("Connection failed: {err:#?}");
+            tracing::error!(
+                name = "federation.fetch_url_custom_sni_host.conn_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?err,
+                message = "Connection failed while performing HTTP handshake"
+            );
         }
     });
 

@@ -15,9 +15,64 @@ use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
 
-#[cfg(not(feature = "console"))]
+// Logging guidelines due to otel:
+// Use the correct log levels!
+//
+// name field: OpenTelemetry defines logs with name as Events, so every `tracing` Event is actually an OTel Event
+// target field: Groups logs from the same module/crate. At recording time, `target` is stored in a top-level field. But exporters treat this information as OpenTelemetry `InstrumentationScope`
+// level of an event: Maps directly to OpenTelemetry log severity levels
+// Fields: Converted to OpenTelemetry log attributes
+// Message: The main message of the log event, stored in the `body` field in OpenTelemetry
+//
+// This has to be followed to ensure proper mapping of tracing logs to OpenTelemetry logs.
+
+#[cfg(all(not(feature = "console"), not(feature = "otel")))]
 fn initialize_standard_tracing() {
     tracing_subscriber::fmt().init();
+}
+
+#[cfg(feature = "otel")]
+fn initialize_otel_console_tracing() {
+    use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+    use opentelemetry_sdk::logs::SdkLoggerProvider;
+    use opentelemetry_stdout::LogExporter;
+    use tracing_subscriber::prelude::*;
+
+    #[cfg(feature = "otlp")]
+    {
+        use opentelemetry::global;
+        use opentelemetry_otlp::Protocol;
+        use opentelemetry_otlp::SpanExporter;
+        use opentelemetry_otlp::WithExportConfig;
+
+        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:4317".to_string());
+
+        let exporter = SpanExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpBinary)
+            .with_endpoint(endpoint)
+            .build()
+            .unwrap();
+
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build();
+        global::set_tracer_provider(provider);
+    };
+
+    let exporter = LogExporter::default();
+
+    let logging_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(exporter)
+        .build();
+
+    let otel_layer = OpenTelemetryTracingBridge::new(&logging_provider);
+
+    tracing_subscriber::registry()
+        .with(otel_layer)
+        //.with(tracing_subscriber::fmt::layer())
+        .init();
 }
 
 #[cfg(feature = "console")]
@@ -54,9 +109,22 @@ async fn main() -> color_eyre::eyre::Result<()> {
     #[cfg(feature = "console")]
     {
         initialize_layered_tracing();
-        tracing::info!("Tokio Console enabled - connect with `tokio-console`");
+        tracing::info!(
+            name = "startup.tracing_enabled",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "Tokio console tracing enabled"
+        );
     }
-    #[cfg(not(feature = "console"))]
+    #[cfg(feature = "otel")]
+    {
+        initialize_otel_console_tracing();
+        tracing::info!(
+            name = "startup.tracing_enabled",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "OpenTelemetry tracing enabled"
+        );
+    }
+    #[cfg(all(not(feature = "console"), not(feature = "otel")))]
     {
         initialize_standard_tracing();
     }
@@ -99,7 +167,24 @@ async fn main() -> color_eyre::eyre::Result<()> {
     };
 
     let resources = std::sync::Arc::new(AppResources { db, mailer, config });
-    tracing::info!(enabled=%resources.config.statistics.enabled, prometheus=%resources.config.statistics.prometheus_enabled, retention_days=%resources.config.statistics.raw_retention_days, salt_set=%!resources.config.statistics.anonymization_salt.is_empty(), "statistics configuration");
+
+    // Compute derived values for logging (explicit so fields are clear and type-safe)
+    let stats_enabled = resources.config.statistics.enabled;
+    let prometheus_enabled = resources.config.statistics.prometheus_enabled;
+    let retention_days = resources.config.statistics.raw_retention_days;
+    let salt_set = !resources.config.statistics.anonymization_salt.is_empty();
+
+    // Emit a structured info event describing statistics config
+    tracing::info!(
+        name = "config.statistics",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        enabled = %stats_enabled,
+        prometheus = %prometheus_enabled,
+        retention_days = %retention_days,
+        salt_set = %salt_set,
+        message = "statistics configuration"
+    );
+
     // Start retention pruning task for federation stats (if enabled)
     rust_federation_tester::stats::spawn_retention_task(resources.clone());
 
@@ -139,10 +224,12 @@ async fn main() -> color_eyre::eyre::Result<()> {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
+                // Structured debug event for periodic stats
                 tracing::debug!(
-                    target = "stats",
+                    name = "stats.periodic",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                     connection_pools = pool_l.len(),
-                    "Periodic stats"
+                    message = "Periodic stats"
                 );
             }
         });
