@@ -6,14 +6,17 @@ use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
+use rust_federation_tester::logging::wide_events::WideEvent;
 use rust_federation_tester::recurring_alerts::AlertTaskManager;
 use rust_federation_tester::recurring_alerts::recurring_alert_checks;
+
 use rustls::crypto;
 use rustls::crypto::CryptoProvider;
 use sea_orm::Database;
 use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
+use tracing::Level;
 
 // Logging guidelines due to otel:
 // Use the correct log levels!
@@ -37,7 +40,13 @@ fn initialize_otel_console_tracing() {
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::logs::SdkLoggerProvider;
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
+
+    // Additional imports used to wire tracing -> opentelemetry and set propagation
+    use opentelemetry::global as otel_global;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
 
     let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| {
         // fallback to crate name
@@ -61,6 +70,7 @@ fn initialize_otel_console_tracing() {
         use opentelemetry_otlp::SpanExporter;
         use opentelemetry_otlp::WithExportConfig;
 
+        // Create a span exporter and install a tracer provider for traces (OTLP)
         let exporter = SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
@@ -73,17 +83,17 @@ fn initialize_otel_console_tracing() {
             .build();
         global::set_tracer_provider(provider);
 
+        // Create a log exporter/provider for logs
         let log_exporter = LogExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
             .build()
             .unwrap();
 
-        let logging_provider = SdkLoggerProvider::builder()
+        SdkLoggerProvider::builder()
             .with_batch_exporter(log_exporter)
             .with_resource(resource.clone())
-            .build();
-        logging_provider
+            .build()
     };
 
     #[cfg(not(feature = "otlp"))]
@@ -97,16 +107,54 @@ fn initialize_otel_console_tracing() {
             .build();
     };
 
-    let otel_layer = OpenTelemetryTracingBridge::new(&logging_provider);
+    // Bridge tracing events into the OpenTelemetry logging provider
+    let otel_logs_bridge = OpenTelemetryTracingBridge::new(&logging_provider);
 
-    #[cfg(feature = "otlp")]
-    tracing_subscriber::registry()
-        .with(otel_layer)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Ensure we have a text-map propagator (TraceContext) set globally so traceparent headers
+    // are picked up / injected when making outgoing requests.
+    otel_global::set_text_map_propagator(TraceContextPropagator::new());
 
-    #[cfg(not(feature = "otlp"))]
-    tracing_subscriber::registry().with(otel_layer).init();
+    // Create a tracing layer that converts tracing spans into OpenTelemetry spans
+    // and ensure the trace layer is installed before the logs bridge so emitted
+    // log records can observe span context (trace_id/span_id).
+    //
+    // When the `tracing-opentelemetry` feature is enabled we attach the tracing
+    // -> OpenTelemetry layer (which converts tracing spans to typed OTel spans).
+    // Otherwise we fall back to installing only the OpenTelemetry logs bridge + fmt layer.
+    #[cfg(feature = "tracing-opentelemetry")]
+    {
+        // Obtain the global tracer and create the tracing->otel layer. The tracer
+        // name uses the crate/module path for easier identification in backends.
+        let tracer = otel_global::tracer(concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
+        let otel_trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+        // Install trace layer first so spans and span ids are created, then install
+        // the logs bridge and a fmt layer for local formatting.
+        // Respect RUST_LOG (EnvFilter) when creating the subscriber.
+        let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(default_directives));
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(otel_trace_layer)
+            .with(otel_logs_bridge)
+            .with(fmt::layer().with_target(true).with_level(true))
+            .init();
+    }
+
+    #[cfg(not(feature = "tracing-opentelemetry"))]
+    {
+        // Only install logs bridge + fmt layer when tracing-opentelemetry is not enabled.
+        // Respect RUST_LOG (EnvFilter) so environment log level directives are honored.
+        let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(default_directives));
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(otel_logs_bridge)
+            .with(fmt::layer().with_target(true).with_level(true))
+            .init();
+    }
 }
 
 #[cfg(feature = "console")]
@@ -163,6 +211,19 @@ async fn main() -> color_eyre::eyre::Result<()> {
         initialize_standard_tracing();
     }
 
+    // Create an explicit application-level span early and enter it.
+    // This span represents the lifetime of the whole process and is a natural place
+    // to attach service-level fields that should appear on most telemetry.
+    let service_name =
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
+    let app_span = tracing::info_span!(
+        "app",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        service.name = %service_name,
+        service.version = %env!("CARGO_PKG_VERSION")
+    );
+    let _app_enter = app_span.enter();
+
     // Load config
     let config = Arc::new(load_config_or_panic());
 
@@ -208,16 +269,18 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let retention_days = resources.config.statistics.raw_retention_days;
     let salt_set = !resources.config.statistics.anonymization_salt.is_empty();
 
-    // Emit a structured info event describing statistics config
-    tracing::info!(
-        name = "config.statistics",
-        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-        enabled = %stats_enabled,
-        prometheus = %prometheus_enabled,
-        retention_days = %retention_days,
-        salt_set = %salt_set,
-        message = "statistics configuration"
+    // Emit a compact wide event using the inline macro (records attributes on span)
+    // Build a WideEvent explicitly and emit it. Using the API directly avoids any
+    // ambiguity with macro arms and keeps the usage explicit.
+    let stats_event = WideEvent::new(
+        "config.statistics",
+        concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
     );
+    stats_event.add("enabled", stats_enabled);
+    stats_event.add("prometheus", prometheus_enabled);
+    stats_event.add("retention_days", retention_days);
+    stats_event.add("salt_set", salt_set);
+    stats_event.info("statistics configuration");
 
     // Start retention pruning task for federation stats (if enabled)
     rust_federation_tester::stats::spawn_retention_task(resources.clone());
@@ -258,16 +321,26 @@ async fn main() -> color_eyre::eyre::Result<()> {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                // Structured debug event for periodic stats
-                tracing::debug!(
-                    name = "stats.periodic",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    connection_pools = pool_l.len(),
-                    message = "Periodic stats"
+                // Build a small WideEvent for periodic stats and emit it.
+                let periodic = WideEvent::new(
+                    "stats.periodic",
+                    concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 );
+                periodic.add("connection_pools", pool_l.len());
+                periodic.emit("Periodic stats", Level::DEBUG);
             }
         });
     }
+
+    // The webserver and its handlers can create WideEvent instances per request:
+    // Example usage (to be used inside request handlers):
+    // let evt = WideEvent::new("request", "rust_federation_tester::api");
+    // evt.add("request_id", request_id);
+    // evt.add_opt("user_id", maybe_user_id);
+    // // when ready:
+    // evt.emit("request complete", Level::INFO);
+    //
+    // This pattern keeps each request's fields collected and emitted as a single canonical JSON blob.
 
     start_webserver(state, alert_state, (*resources).clone(), debug_mode).await?;
     Ok(())

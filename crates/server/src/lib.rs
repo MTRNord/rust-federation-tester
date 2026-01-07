@@ -18,6 +18,7 @@ pub mod email_templates;
 pub mod entity;
 pub mod error;
 pub mod federation;
+pub mod logging;
 pub mod optimization;
 pub mod recurring_alerts;
 pub mod response;
