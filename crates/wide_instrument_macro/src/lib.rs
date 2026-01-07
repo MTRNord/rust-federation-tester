@@ -179,8 +179,8 @@ fn expand_wide_instrument(
         quote! {
             #(#attrs)*
             #vis fn #fn_name #generics_clone(#inputs_clone) -> impl std::future::Future<Output = #output_ty> #where_clause_clone {
-                // Create the wide_event span
-                let #span_ident = ::tracing::span!(::tracing::Level::INFO, "wide_event", target = #target_ts, event.name = %#name_ts);
+                // Create the span using the compile-time literal name so backends see the real span name.
+                let #span_ident = ::tracing::span!(::tracing::Level::INFO, #name_ts, target = #target_ts, event.name = %#name_ts);
                 // Record provided fields onto the span
                 #(#field_bind_stmts)*
 
@@ -194,7 +194,8 @@ fn expand_wide_instrument(
         quote! {
             #(#attrs)*
             #vis #sig {
-                let #span_ident = ::tracing::span!(::tracing::Level::INFO, "wide_event", target = #target_ts, event.name = %#name_ts);
+                // Create a span with the compile-time literal name so the span's displayed name is the logical function name.
+                let #span_ident = ::tracing::span!(::tracing::Level::INFO, #name_ts, target = #target_ts, event.name = %#name_ts);
                 #(#field_bind_stmts)*
                 // Enter span for the function body lifetime (non-async so Entered is not held across await)
                 let _wide_evt_enter = #span_ident.enter();

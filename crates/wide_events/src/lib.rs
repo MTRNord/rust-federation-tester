@@ -62,27 +62,6 @@ impl WideEvent {
         self.target
     }
 
-    /// Create a new WideEvent with a logical `name` and `target`.
-    ///
-    /// `name` should be a &'static str (logical event name). `target` should be the
-    /// tracing target string (usually package::module).
-    pub fn new(name: &'static str, target: &'static str) -> Self {
-        // `tracing::span!` requires a literal span name in many usage patterns.
-        // This helper uses a stable literal span name and records the logical event
-        // name as a span attribute so exporters still receive it when callers cannot
-        // provide a literal span name at macro-invocation time.
-        let span = tracing::span!(Level::INFO, "wide_event", target = target, event.name = %name);
-        WideEvent { span, target }
-    }
-
-    /// Create a WideEvent that is a child of the provided parent span.
-    /// Usage: let child = WideEvent::with_parent("name", "target", parent_span);
-    /// Note: `parent` is taken by value (a Span clone) so callers can do `with_parent(..., evt.span())`.
-    pub fn with_parent(name: &'static str, target: &'static str, parent: Span) -> Self {
-        let span = tracing::span!(parent: &parent, tracing::Level::INFO, "wide_event", target = target, event.name = %name);
-        WideEvent { span, target }
-    }
-
     /// Enter the span and return a guard that keeps it entered while alive.
     /// Use `let _enter = evt.enter();` so child events become children of this span.
     pub fn enter<'a>(&'a self) -> tracing::span::Entered<'a> {
@@ -244,11 +223,17 @@ macro_rules! wide_info {
     };
 
     // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
-    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+    // When a WideEvent is supplied as the first argument, create a child span with the literal
+    // `$name` and set the provided WideEvent's span as parent. Return the child WideEvent.
+    ($parent_evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            // Clone the parent's span and target so we can create a child span with explicit parent.
+            let __parent_span = $parent_evt.span();
+            let __target = $parent_evt.target();
+            let __span = tracing::span!(parent: &__parent_span, tracing::Level::INFO, $name, target = __target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, __target);
             $( __evt.add(stringify!($k), $v); )*
-            __evt.emit($msg, tracing::Level::ERROR);
+            __evt.emit($msg, tracing::Level::INFO);
             __evt
         }
     };
@@ -281,11 +266,15 @@ macro_rules! wide_debug {
     };
 
     // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
-    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+    // For debug-level child spans create a span with literal name and set the provided WideEvent as parent.
+    ($parent_evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            let __parent_span = $parent_evt.span();
+            let __target = $parent_evt.target();
+            let __span = tracing::span!(parent: &__parent_span, tracing::Level::DEBUG, $name, target = __target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, __target);
             $( __evt.add(stringify!($k), $v); )*
-            __evt.emit($msg, tracing::Level::ERROR);
+            __evt.emit($msg, tracing::Level::DEBUG);
             __evt
         }
     };
@@ -316,9 +305,13 @@ macro_rules! wide_error {
     };
 
     // pass wide event as argument and use it as parent. Require name and message and optional key-value pairs
-    ($evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
+    // For error-level child spans create a span with literal name and set the provided WideEvent as parent.
+    ($parent_evt:expr, $name:expr, $msg:expr $(, $k:ident = $v:expr )* $(,)? ) => {
         {
-            let __evt = $crate::WideEvent::with_parent($name, $evt.target(), $evt.span());
+            let __parent_span = $parent_evt.span();
+            let __target = $parent_evt.target();
+            let __span = tracing::span!(parent: &__parent_span, tracing::Level::ERROR, $name, target = __target);
+            let __evt = $crate::WideEvent::from_span_with_target(__span, __target);
             $( __evt.add(stringify!($k), $v); )*
             __evt.emit($msg, tracing::Level::ERROR);
             __evt
