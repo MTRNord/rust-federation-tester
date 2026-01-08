@@ -2,6 +2,7 @@ use crate::{
     AppResources,
     api::{alert_api::AlertAppState, federation_tester_api::AppState},
 };
+use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use hickory_resolver::name_server::ConnectionProvider;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::{
@@ -939,157 +940,6 @@ async fn metrics(
     (hyper::StatusCode::OK, body)
 }
 
-/// Middleware that collects/wires trace metadata and propagates traceparent header.
-///
-/// Behavior:
-/// - If the incoming request includes a `traceparent` header, we record it onto the span
-///   and echo it back in the response headers so capable frontends can correlate logs.
-/// - We create a per-request `tracing::Span` (literal name `request`) and enter it for the
-///   request lifetime so recorded attributes and child events are attached to a request-scoped span.
-/// - This implementation uses plain `tracing` APIs (span creation + `span.record`) instead of
-///   WideEvent helpers so instrumentation works with standard tracing macros.
-async fn propagate_trace(
-    req: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    // Generate a server-side request_id early so it's available for both the span and response.
-    let request_id = uuid::Uuid::new_v4().to_string();
-
-    // Create a literal-named span so backends show "request" rather than a runtime-generated name.
-    let span = tracing::span!(
-        tracing::Level::DEBUG,
-        "request",
-        // we still attach a request_id field; concrete exporting may surface more fields.
-        request_id = tracing::field::Empty
-    );
-
-    // Record basic fields onto the span using `record` (no WideEvent helpers).
-    span.record("request_id", request_id.as_str());
-
-    // Add HTTP method and path as attributes.
-    let method = req.method().to_string();
-    let path = req.uri().path().to_string();
-    span.record("http.method", method.as_str());
-    span.record("http.target", path.as_str());
-
-    // Record a few headers that may be useful (if present). Keep it small.
-    if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT)
-        && let Ok(s) = hv.to_str()
-    {
-        span.record("http.user_agent", s);
-    }
-
-    // Client IP is available through ConnectInfo; try to grab it from extensions if present.
-    if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
-        span.record("client.ip", addr.ip().to_string().as_str());
-    }
-
-    // Extract incoming traceparent header if present and attach to the span.
-    let incoming_traceparent = req
-        .headers()
-        .get("traceparent")
-        .and_then(|hv| hv.to_str().ok())
-        .map(|s| s.to_string());
-
-    if let Some(tp) = incoming_traceparent.as_deref() {
-        // Record raw traceparent header
-        span.record("traceparent", tp);
-
-        // Try to parse the W3C traceparent to extract trace/span/flags (best-effort).
-        // Expected format: "version-traceid-spanid-flags"
-        if let Some(parts) = tp.split('-').collect::<Vec<_>>().as_slice().get(1..4)
-            && parts.len() == 3
-        {
-            let trace_id = parts[0];
-            let span_id = parts[1];
-            let flags = parts[2];
-            span.record("trace.trace_id", trace_id);
-            span.record("trace.span_id", span_id);
-            span.record("trace.trace_flags", flags);
-        }
-    }
-
-    // Enter the request span so downstream code logs/records attach to it.
-    let _enter = span.enter();
-
-    // Record the current tracing span context (trace/span ids) onto the span when available.
-    // This is a no-op when `tracing-opentelemetry` feature is not enabled so it's safe to call.
-    #[cfg(feature = "tracing-opentelemetry")]
-    {
-        use opentelemetry::trace::TraceContextExt;
-        use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-        // Extract the OpenTelemetry Context from the current tracing span (if available).
-        let cx = tracing::Span::current().context();
-        let span_ref = cx.span();
-        let span_ctx = span_ref.span_context();
-        if span_ctx.is_valid() {
-            span.record("trace.trace_id", span_ctx.trace_id().to_string().as_str());
-            span.record("trace.span_id", span_ctx.span_id().to_string().as_str());
-            span.record(
-                "trace.trace_flags",
-                format!("{:02x}", span_ctx.trace_flags().to_u8()).as_str(),
-            );
-        }
-    }
-
-    // Call the next service in the stack.
-    let mut response = next.run(req).await;
-
-    // Always include x-request-id in the response so clients can correlate.
-    if let Ok(hv) = axum::http::HeaderValue::from_str(&request_id) {
-        response.headers_mut().insert("x-request-id", hv);
-    }
-
-    // If an incoming traceparent was present, echo it back to the client so the client can
-    // correlate. If not present, and tracing-opentelemetry is enabled, return the server span's traceparent.
-    if let Some(tp) = incoming_traceparent {
-        // It's okay if insertion fails (invalid header) — ignore in that case.
-        if let Ok(hv) = axum::http::HeaderValue::from_str(&tp) {
-            response.headers_mut().insert(
-                axum::http::header::HeaderName::from_static("traceparent"),
-                hv,
-            );
-        }
-    } else {
-        #[cfg(feature = "tracing-opentelemetry")]
-        {
-            use opentelemetry::trace::TraceContextExt;
-            use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-            let cx = tracing::Span::current().context();
-            let span_ref = cx.span();
-            let span_ctx = span_ref.span_context();
-            if span_ctx.is_valid() {
-                // Format traceparent according to W3C traceparent header: "00-{trace}-{span}-{flags}"
-                let trace_id = span_ctx.trace_id().to_string();
-                let span_id = span_ctx.span_id().to_string();
-                let trace_flags = format!("{:02x}", span_ctx.trace_flags().to_u8());
-                let tp_value = format!("00-{}-{}-{}", trace_id, span_id, trace_flags);
-                if let Ok(hv) = axum::http::HeaderValue::from_str(&tp_value) {
-                    response.headers_mut().insert(
-                        axum::http::header::HeaderName::from_static("traceparent"),
-                        hv,
-                    );
-                }
-            }
-        }
-    }
-
-    // Record response metadata onto the span so numeric status and OTel semantics are available.
-    let status_u16 = response.status().as_u16();
-    // record as numeric string; tracing fields are textual here — exporters may convert as needed.
-    span.record("http.status_code", status_u16);
-    // hint OTel status based on numeric code
-    if status_u16 >= 500 {
-        span.record("otel.status_code", "ERROR");
-    } else {
-        span.record("otel.status_code", "OK");
-    }
-
-    response
-}
-
 #[tracing::instrument(skip(app_state, alert_state, app_resources))]
 pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
@@ -1105,12 +955,15 @@ pub async fn start_webserver<P: ConnectionProvider>(
             federation_tester_api::router::<P>(app_state, debug_mode),
         )
         .nest("/api/alerts", alert_api::router(alert_state))
-        .routes(routes!(health))
         .routes(routes!(metrics))
+        // include trace context as header into the response
+        .layer(OtelInResponseLayer)
+        // start OpenTelemetry trace on incoming request
+        .layer(OtelAxumLayer::default())
+        .routes(routes!(health))
         // Attach application resources, CORS, our trace propagation middleware and the standard TraceLayer.
         .layer(axum::Extension(app_resources))
         .layer(CorsLayer::permissive())
-        .layer(axum::middleware::from_fn(propagate_trace))
         .layer(TraceLayer::new_for_http())
         .split_for_parts();
 
