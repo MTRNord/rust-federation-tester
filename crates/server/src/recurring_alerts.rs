@@ -44,7 +44,7 @@ impl AlertTaskManager {
         }
     }
 
-    #[crate::wide_instrument(name = "alert_manager_start_task", alert_id = alert_id)]
+    #[tracing::instrument(skip(self, f))]
     pub async fn start_or_restart_task<F>(&self, alert_id: i32, f: F)
     where
         F: FnOnce(Arc<AtomicBool>) -> AlertCheckTask + Send + 'static,
@@ -60,12 +60,13 @@ impl AlertTaskManager {
     }
 
     /// Check if a task is already running for this alert
+    #[tracing::instrument(skip(self))]
     pub async fn is_running(&self, alert_id: i32) -> bool {
         let running = self.running.read().await;
         running.contains_key(&alert_id)
     }
 
-    #[crate::wide_instrument(name = "alert_manager_stop_task", alert_id = alert_id)]
+    #[tracing::instrument(skip(self))]
     pub async fn stop_task(&self, alert_id: i32) {
         let mut running = self.running.write().await;
         if let Some(flag) = running.remove(&alert_id) {
@@ -73,6 +74,7 @@ impl AlertTaskManager {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn stop_all(&self) {
         let mut running = self.running.write().await;
         for flag in running.values() {
@@ -83,6 +85,7 @@ impl AlertTaskManager {
 }
 
 /// Determine if we should send a failure email based on alert state and timing
+#[tracing::instrument(skip_all)]
 fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool {
     // If server just started failing, send immediately
     if !alert.is_currently_failing {
@@ -101,6 +104,7 @@ fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool 
 }
 
 /// Send a failure notification email
+#[tracing::instrument(skip(mailer, config, db, email))]
 async fn send_failure_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
@@ -227,6 +231,7 @@ async fn send_failure_email(
 }
 
 /// Send a recovery notification email
+#[tracing::instrument(skip(mailer, config, db, email))]
 async fn send_recovery_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
@@ -332,7 +337,7 @@ async fn send_recovery_email(
     }
 }
 
-#[crate::wide_instrument(name = "recurring_alert_checks")]
+#[tracing::instrument(skip_all)]
 pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'static>(
     resources: Arc<AppResources>,
     task_manager: Arc<AlertTaskManager>,
@@ -566,6 +571,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn generate_list_unsubscribe_url(
     magic_token_secret: &str,
     email: &str,

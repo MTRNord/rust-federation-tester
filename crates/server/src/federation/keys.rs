@@ -23,7 +23,7 @@ pub struct FullKeysResponse {
     pub keys_string: String,
 }
 
-#[crate::wide_instrument(name = "federation_fetch_keys", addr = addr, server_name = server_name, sni = sni)]
+#[tracing::instrument()]
 pub async fn fetch_keys(
     addr: &str,
     server_name: &str,
@@ -70,6 +70,7 @@ pub async fn fetch_keys(
     })
 }
 
+#[tracing::instrument()]
 pub fn verify_keys(
     server_name: &str,
     keys: &Keys,
@@ -97,6 +98,7 @@ pub fn verify_keys(
     )
 }
 
+#[tracing::instrument()]
 fn check_verify_keys(
     server_name: &str,
     keys: &Keys,

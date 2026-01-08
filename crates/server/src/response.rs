@@ -200,7 +200,7 @@ pub struct Error {
     pub error_code: ErrorCode,
 }
 
-#[crate::wide_instrument(name = "generate_json_report", server_name = server_name)]
+#[tracing::instrument(skip(resolver, connection_pool))]
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,

@@ -10,6 +10,7 @@ static COMPILED_CSS: Lazy<String> = Lazy::new(|| {
 });
 
 /// Inline CSS into HTML
+#[tracing::instrument(skip(html))]
 fn inline_css(html: &str) -> String {
     let options = css_inline::InlineOptions {
         load_remote_stylesheets: false,
@@ -50,11 +51,13 @@ pub struct FailureEmailTemplate {
 }
 
 impl FailureEmailTemplate {
+    #[tracing::instrument(skip(self))]
     pub fn render_html(&self) -> Result<String, askama::Error> {
         let html = self.render()?;
         Ok(inline_css(&html))
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
         let reminder_text = if self.failure_count > 1 {
             format!(
@@ -97,11 +100,13 @@ pub struct RecoveryEmailTemplate {
 }
 
 impl RecoveryEmailTemplate {
+    #[tracing::instrument(skip(self))]
     pub fn render_html(&self) -> Result<String, askama::Error> {
         let html = self.render()?;
         Ok(inline_css(&html))
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
         format!(
             r#"Hello,
@@ -130,11 +135,13 @@ pub struct VerificationEmailTemplate {
 }
 
 impl VerificationEmailTemplate {
+    #[tracing::instrument(skip(self))]
     pub fn render_html(&self) -> Result<String, askama::Error> {
         let html = self.render()?;
         Ok(inline_css(&html))
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
         format!(
             r#"Hello,

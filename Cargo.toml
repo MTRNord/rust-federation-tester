@@ -3,7 +3,5 @@ resolver = "3"
 members = [
     "crates/server",
     "crates/loadtest",
-    "crates/migration",
-    "crates/wide_events",
-    "crates/wide_instrument_macro",
+    "crates/migration"
 ]

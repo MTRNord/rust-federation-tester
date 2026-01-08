@@ -16,6 +16,7 @@ use std::{
 use time::OffsetDateTime;
 
 /// Event representing a single opted-in request.
+#[derive(Debug)]
 pub struct StatEvent<'a> {
     pub server_name: &'a str,
     pub federation_ok: bool,
@@ -26,6 +27,7 @@ pub struct StatEvent<'a> {
 }
 
 /// Classify software family & version from the version_name/version_string (simple heuristic).
+#[tracing::instrument()]
 fn classify_version(
     version_name: Option<&str>,
     version_string: Option<&str>,
@@ -34,6 +36,7 @@ fn classify_version(
     (version_name.map(ToString::to_string), ver)
 }
 
+#[tracing::instrument()]
 fn extract_version(s: &str) -> Option<String> {
     // find first pattern like digit[.digit]+ simple
     let mut current = String::new();
@@ -54,6 +57,7 @@ fn extract_version(s: &str) -> Option<String> {
 }
 
 /// Record a single event directly (no batching yet) updating aggregate table.
+#[tracing::instrument(skip(resources))]
 pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
     use crate::entity::{federation_stat_aggregate as agg, federation_stat_raw as raw};
     if !resources.config.statistics.enabled {
@@ -171,6 +175,7 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
 
 /// Prune old federation aggregate rows whose last_seen_at is older than the configured retention window.
 /// This uses backend-specific date arithmetic.
+#[tracing::instrument(skip(resources))]
 pub async fn prune_old_entries(resources: &AppResources) {
     let days = resources.config.statistics.raw_retention_days as i64;
     if days == 0 {
@@ -208,6 +213,7 @@ pub async fn prune_old_entries(resources: &AppResources) {
 }
 
 /// Spawn a background task that periodically prunes old entries every 12 hours.
+#[tracing::instrument(skip(resources))]
 pub fn spawn_retention_task(resources: std::sync::Arc<AppResources>) {
     if !resources.config.statistics.enabled {
         return;
@@ -240,6 +246,7 @@ struct PromCache {
 
 /// Compute a stable anonymized id for a server name using the provided salt.
 /// Returns None if salt is empty (feature disabled for anonymized export).
+#[tracing::instrument(skip(salt, server_name))]
 pub fn stable_anon_id(salt: &str, server_name: &str) -> Option<String> {
     if salt.is_empty() {
         return None;
@@ -260,12 +267,17 @@ pub fn stable_anon_id(salt: &str, server_name: &str) -> Option<String> {
 }
 
 /// Clear the anonymization cache (e.g. if salt changes at runtime)
+#[tracing::instrument()]
 pub fn clear_cache() {
     ANON_CACHE.clear();
 }
+
+#[tracing::instrument()]
 pub fn clear_metrics_cache() {
     invalidate_metrics_cache();
 }
+
+#[tracing::instrument()]
 fn invalidate_metrics_cache() {
     if let Ok(mut guard) = PROM_CACHE.write() {
         guard.generated_at = Instant::now() - Duration::from_secs(3600);
@@ -283,6 +295,7 @@ struct AggregateRow {
     software_version: Option<String>,
 }
 
+#[tracing::instrument()]
 fn escape_label(val: &str) -> String {
     let mut out = String::with_capacity(val.len() + 4);
     for c in val.chars() {
@@ -298,6 +311,7 @@ fn escape_label(val: &str) -> String {
 
 /// Build Prometheus exposition text for federation stats.
 /// Calculate unique features across all servers from raw data
+#[tracing::instrument(skip(db))]
 async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
     use crate::entity::federation_stat_raw as raw;
 
@@ -350,7 +364,8 @@ async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
 }
 
 /// Build per-feature metrics by analyzing raw data
-async fn build_feature_metrics(db: &DatabaseConnection, _salt: &str) -> String {
+#[tracing::instrument(skip(db))]
+async fn build_feature_metrics(db: &DatabaseConnection) -> String {
     use crate::entity::federation_stat_raw as raw;
 
     // Get all raw entries with unstable features data from the last 30 days
@@ -441,6 +456,7 @@ async fn build_feature_metrics(db: &DatabaseConnection, _salt: &str) -> String {
     buf
 }
 
+#[tracing::instrument(skip(resources))]
 pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
     if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
         return String::new();
@@ -509,13 +525,14 @@ pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
     ));
 
     // Add per-feature metrics
-    let feature_metrics = build_feature_metrics(db, salt).await;
+    let feature_metrics = build_feature_metrics(db).await;
     buf.push_str(&feature_metrics);
 
     buf
 }
 
 /// Cached variant (TTL 5 seconds) to reduce DB load under frequent scrapes.
+#[tracing::instrument(skip(resources))]
 pub async fn build_prometheus_metrics_cached(resources: &AppResources) -> String {
     const TTL: Duration = Duration::from_secs(5);
     if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {

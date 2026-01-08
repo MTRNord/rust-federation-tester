@@ -1,5 +1,6 @@
 use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, Root};
 
+#[tracing::instrument(skip(data))]
 pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
     if server_name.is_empty() {
         data.error = Some(Error {

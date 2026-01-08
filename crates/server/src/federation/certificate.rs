@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
 
 /// Extract certificate information from a CertificateDer for federation reporting
+#[tracing::instrument()]
 pub fn extract_certificate_info(
     cert_der: &rustls_pki_types::CertificateDer<'_>,
 ) -> Option<Certificate> {

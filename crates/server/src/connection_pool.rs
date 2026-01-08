@@ -53,6 +53,7 @@ pub struct ConnectionPool {
 }
 
 impl ConnectionPool {
+    #[tracing::instrument()]
     pub fn new(max_connections_per_key: usize, connection_timeout_secs: u64) -> Self {
         Self::new_with_limits(
             max_connections_per_key,
@@ -61,6 +62,7 @@ impl ConnectionPool {
         )
     }
 
+    #[tracing::instrument()]
     pub fn new_with_limits(
         max_connections_per_key: usize,
         max_connections_per_client: usize,
@@ -77,7 +79,7 @@ impl ConnectionPool {
     }
 
     /// Get a connection from the pool or create a new one (backward compatibility)
-    #[crate::wide_instrument(name = "connection_pool_get", addr = addr, sni = sni)]
+    #[tracing::instrument(skip(self))]
     pub async fn get_connection(
         &self,
         addr: &str,
@@ -90,7 +92,7 @@ impl ConnectionPool {
 
     /// Get a connection from the pool or create a new one
     /// Now includes per-client limits to prevent DoS attacks
-    #[crate::wide_instrument(name = "connection_pool_get", addr = addr, sni = sni, client_id = client_id)]
+    #[tracing::instrument(skip(self))]
     pub async fn get_connection_with_client_id(
         &self,
         addr: &str,
@@ -150,7 +152,7 @@ impl ConnectionPool {
     }
 
     /// Return a connection to the pool for reuse
-    #[crate::wide_instrument(name = "connection_pool_return", addr = addr, sni = sni, client_id = client_id)]
+    #[tracing::instrument(skip(self, conn))]
     pub async fn return_connection(
         &self,
         addr: &str,
@@ -183,6 +185,7 @@ impl ConnectionPool {
         self.decrement_client_usage(client_id);
     }
 
+    #[tracing::instrument(skip(self))]
     async fn create_new_connection(
         &self,
         addr: &str,
@@ -220,7 +223,7 @@ impl ConnectionPool {
 
     /// Clean up dead connections periodically
     /// Should be called by a background task every few minutes
-    #[crate::wide_instrument(name = "connection_pool_cleanup")]
+    #[tracing::instrument(skip(self))]
     pub async fn cleanup_dead_connections(&self) {
         for entry in self.pools.iter() {
             let pool = entry.value();
@@ -254,16 +257,19 @@ impl ConnectionPool {
     }
 
     /// Get the total number of pooled connections across all keys
+    #[tracing::instrument(skip(self))]
     pub fn len(&self) -> usize {
         self.pools.len()
     }
 
     /// Check if the pool is empty
+    #[tracing::instrument(skip(self))]
     pub fn is_empty(&self) -> bool {
         self.pools.is_empty()
     }
 
     /// Get statistics about the connection pool
+    #[tracing::instrument(skip(self))]
     pub async fn stats(&self) -> ConnectionPoolStats {
         let mut total_connections = 0;
         let mut pools_count = 0;
@@ -282,6 +288,7 @@ impl ConnectionPool {
     }
 
     /// Get total number of connections across all pools
+    #[tracing::instrument(skip(self))]
     fn total_connections(&self) -> usize {
         let mut total = 0;
         for entry in self.pools.iter() {
@@ -293,11 +300,13 @@ impl ConnectionPool {
     }
 
     /// Check if we can create a new connection without exceeding limits
+    #[tracing::instrument(skip(self))]
     fn can_create_connection(&self) -> bool {
         self.total_connections() < self.max_total_connections
     }
 
     /// Check if a client can create another connection
+    #[tracing::instrument(skip(self))]
     fn can_client_create_connection(&self, client_id: &str) -> bool {
         if let Some(usage) = self.client_usage.get(client_id) {
             usage.connection_count.load(Ordering::Relaxed) < self.max_connections_per_client
@@ -307,6 +316,7 @@ impl ConnectionPool {
     }
 
     /// Apply rate limiting to prevent abuse
+    #[tracing::instrument(skip(self))]
     fn apply_rate_limit(&self, client_id: &str) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -339,6 +349,7 @@ impl ConnectionPool {
     }
 
     /// Increment client connection usage
+    #[tracing::instrument(skip(self))]
     fn increment_client_usage(&self, client_id: &str) {
         let usage = self
             .client_usage
@@ -348,6 +359,7 @@ impl ConnectionPool {
     }
 
     /// Decrement client connection usage when connection is returned
+    #[tracing::instrument(skip(self))]
     fn decrement_client_usage(&self, client_id: &str) {
         if let Some(usage) = self.client_usage.get(client_id) {
             usage.connection_count.fetch_sub(1, Ordering::Relaxed);
@@ -355,6 +367,7 @@ impl ConnectionPool {
     }
 
     /// Force cleanup of excess connections if memory limits are exceeded
+    #[tracing::instrument(skip(self))]
     async fn enforce_memory_limits(&self) {
         let total = self.total_connections();
         if total > self.max_total_connections {

@@ -2,7 +2,6 @@ use serde::Deserialize;
 use std::net::IpAddr;
 use std::str::FromStr;
 use thiserror::Error;
-use wide_events::wide_debug;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -72,6 +71,7 @@ pub struct IpNet {
 }
 
 impl IpNet {
+    #[tracing::instrument()]
     pub fn contains(&self, ip: &IpAddr) -> bool {
         match (self.addr, ip) {
             (IpAddr::V4(a), IpAddr::V4(b)) => {
@@ -106,6 +106,8 @@ impl IpNet {
 
 impl FromStr for IpNet {
     type Err = String;
+
+    #[tracing::instrument()]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (ip_part, prefix_part) = s
             .split_once('/')
@@ -125,6 +127,7 @@ impl FromStr for IpNet {
     }
 }
 
+#[tracing::instrument()]
 fn default_debug_allowed_nets() -> Vec<IpNet> {
     [
         "127.0.0.1/32",
@@ -147,6 +150,7 @@ fn default_debug_allowed_nets() -> Vec<IpNet> {
 /// the file value. A future iteration may introduce a prefix (e.g. `APP__`).
 ///
 /// Returns a `ConfigError` instead of panicking so the caller can decide how to fail.
+#[tracing::instrument()]
 pub fn load_config() -> Result<AppConfig, ConfigError> {
     use config::{Config, Environment, File};
     let cfg = Config::builder()
@@ -184,12 +188,13 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
 }
 
 /// Convenience helper for binaries wanting the old panic-on-error behaviour.
+#[tracing::instrument()]
 pub fn load_config_or_panic() -> AppConfig {
-    wide_debug!("config.load", "Loading configuration");
-    match load_config() {
+    let span = tracing::debug_span!("Loading configuration");
+    span.in_scope(|| match load_config() {
         Ok(c) => c,
         Err(e) => panic!("Failed to load configuration: {e}"),
-    }
+    })
 }
 
 #[cfg(test)]

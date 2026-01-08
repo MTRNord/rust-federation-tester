@@ -10,7 +10,6 @@ use utoipa::{
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
-use wide_events::{wide_debug, wide_info};
 
 const MISC_TAG: &str = "Miscellaneous";
 const FEDERATION_TAG: &str = "Federation Tester API";
@@ -36,7 +35,6 @@ pub mod federation_tester_api {
     use std::sync::Arc;
     use utoipa::IntoParams;
     use utoipa_axum::{router::OpenApiRouter, routes};
-    use wide_events::wide_info;
 
     #[derive(Deserialize, IntoParams, Debug)]
     pub struct ApiParams {
@@ -52,7 +50,7 @@ pub mod federation_tester_api {
         pub connection_pool: ConnectionPool,
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(state))]
     pub(crate) fn router<P: ConnectionProvider>(
         state: AppState<P>,
         debug_mode: bool,
@@ -70,7 +68,7 @@ pub mod federation_tester_api {
         r.with_state(state)
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(state))]
     #[utoipa::path(
         get,
         path = "/report",
@@ -88,12 +86,6 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.get_report",
-            "Received request for federation report",
-            server_name = &params.server_name
-        );
-        let _wide_evt_enter = evt.enter();
         if params.server_name.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
@@ -164,7 +156,7 @@ pub mod federation_tester_api {
         }
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(state))]
     #[utoipa::path(
         get,
         path = "/federation-ok",
@@ -182,13 +174,6 @@ pub mod federation_tester_api {
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.get_fed_ok",
-            "Received request for federation status",
-            server_name = &params.server_name
-        );
-        let _wide_evt_enter = evt.enter();
-
         if params.server_name.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
@@ -262,18 +247,12 @@ pub mod federation_tester_api {
     }
 
     // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(state))]
     async fn cache_stats<P: ConnectionProvider>(
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
         axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.cache_stats",
-            "Received request for cache statistics",
-            client_addr = addr.ip()
-        );
-        let _wide_evt_enter = evt.enter();
         use serde::Serialize;
         if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
             return (
@@ -294,7 +273,7 @@ pub mod federation_tester_api {
         (hyper::StatusCode::OK, axum::Json(value))
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument()]
     fn is_allowed_ip(addr: &std::net::SocketAddr, nets: &[crate::config::IpNet]) -> bool {
         let ip = addr.ip();
         nets.iter().any(|net| net.contains(&ip))
@@ -317,7 +296,6 @@ pub mod alert_api {
     use time::OffsetDateTime;
     use utoipa::{IntoParams, ToSchema};
     use utoipa_axum::{router::OpenApiRouter, routes};
-    use wide_events::wide_info;
 
     #[derive(Serialize, Deserialize)]
     pub struct MagicClaims {
@@ -350,7 +328,7 @@ pub mod alert_api {
         pub task_manager: Arc<AlertTaskManager>,
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip_all)]
     pub(crate) fn router(alert_state: AlertAppState) -> OpenApiRouter {
         OpenApiRouter::new()
             .routes(routes!(register_alert, delete_alert))
@@ -359,7 +337,7 @@ pub mod alert_api {
             .with_state(alert_state)
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(resources, payload), fields(server_name = payload.server_name, email_len = payload.email.len()))]
     #[utoipa::path(
         post,
         path = "/register",
@@ -376,13 +354,6 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<RegisterAlert>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.register_alert",
-            "Received request to register alert",
-            server_name = &payload.server_name
-        );
-        let _wide_evt_enter = evt.enter();
-
         // JWT magic token
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
         let claims = MagicClaims {
@@ -562,7 +533,7 @@ pub mod alert_api {
         alerts: Vec<alert::Model>,
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(resources, params), fields(token_len = params.token.len()))]
     #[utoipa::path(
         get,
         path = "/verify",
@@ -588,13 +559,6 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Query(params): Query<VerifyParams>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.verify_alert",
-            "Got request to verify alert",
-            token_len = params.token.len()
-        );
-        let _wide_evt_enter = evt.enter();
-
         let secret = resources.config.magic_token_secret.as_bytes();
         let mut validation = Validation::default();
         validation.validate_exp = true;
@@ -739,7 +703,7 @@ pub mod alert_api {
         }
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(resources, payload), fields(email_len = payload.email.len()))]
     #[utoipa::path(
         post,
         path = "/list",
@@ -754,13 +718,6 @@ pub mod alert_api {
         Extension(resources): Extension<AppResources>,
         Json(payload): Json<ListAlerts>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.list_alerts",
-            "Got request to list alerts",
-            email_len = payload.email.len()
-        );
-        let _wide_evt_enter = evt.enter();
-
         let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
         let claims = MagicClaims {
             exp,
@@ -828,7 +785,7 @@ The Federation Tester Team"#
         )
     }
 
-    #[wide_instrument_macro::wide_instrument]
+    #[tracing::instrument(skip(resources))]
     #[utoipa::path(
         delete,
         path = "/{id}",
@@ -852,12 +809,6 @@ The Federation Tester Team"#
         Extension(resources): Extension<AppResources>,
         Path(id): Path<i32>,
     ) -> impl IntoResponse {
-        let evt = wide_info!(
-            "api.delete_alert",
-            "Got request to delete alert",
-            alert_id = id
-        );
-        let _wide_evt_enter = evt.enter();
         let found = alert::Entity::find()
             .filter(alert::Column::Id.eq(id))
             .one(resources.db.as_ref())
@@ -953,7 +904,7 @@ The Federation Tester Team"#,
     }
 }
 
-#[wide_instrument_macro::wide_instrument]
+#[tracing::instrument()]
 #[utoipa::path(
     method(get, head),
     path = "/healthz",
@@ -967,7 +918,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
-#[wide_instrument_macro::wide_instrument]
+#[tracing::instrument(skip(resources))]
 #[utoipa::path(
     get,
     path = "/metrics",
@@ -988,60 +939,99 @@ async fn metrics(
     (hyper::StatusCode::OK, body)
 }
 
-/// Middleware that collects/wires wide-event metadata and propagates traceparent header.
+/// Middleware that collects/wires trace metadata and propagates traceparent header.
 ///
 /// Behavior:
-/// - If the incoming request includes a `traceparent` header, we record it onto the WideEvent
+/// - If the incoming request includes a `traceparent` header, we record it onto the span
 ///   and echo it back in the response headers so capable frontends can correlate logs.
-/// - We always create a per-request `WideEvent` span and enter it for the request lifetime so
-///   recorded attributes and child events are attached to a request-scoped span.
-/// - This middleware is defensive: if the client doesn't send trace headers (older versions),
-///   we still create the request span and carry on.
+/// - We create a per-request `tracing::Span` (literal name `request`) and enter it for the
+///   request lifetime so recorded attributes and child events are attached to a request-scoped span.
+/// - This implementation uses plain `tracing` APIs (span creation + `span.record`) instead of
+///   WideEvent helpers so instrumentation works with standard tracing macros.
 async fn propagate_trace(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    // Create a request-scoped WideEvent using the canonical macro so the span name is literal in backends.
-    // The macro returns a `WideEvent` which we can enter for the request lifetime.
-    let evt = wide_debug!("request", "Propagating trace info");
-
-    // Generate a server-side request_id and attach it to the event and response.
+    // Generate a server-side request_id early so it's available for both the span and response.
     let request_id = uuid::Uuid::new_v4().to_string();
-    evt.add("request_id", &request_id);
 
-    // Add HTTP method and path using the WideEvent helper so OTel semantic names are used.
+    // Create a literal-named span so backends show "request" rather than a runtime-generated name.
+    let span = tracing::span!(
+        tracing::Level::DEBUG,
+        "request",
+        // we still attach a request_id field; concrete exporting may surface more fields.
+        request_id = tracing::field::Empty
+    );
+
+    // Record basic fields onto the span using `record` (no WideEvent helpers).
+    span.record("request_id", request_id.as_str());
+
+    // Add HTTP method and path as attributes.
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
-    evt.attach_http_request(&method, &path);
+    span.record("http.method", method.as_str());
+    span.record("http.target", path.as_str());
 
     // Record a few headers that may be useful (if present). Keep it small.
     if let Some(hv) = req.headers().get(axum::http::header::USER_AGENT)
         && let Ok(s) = hv.to_str()
     {
-        evt.add("http.user_agent", s);
-    }
-    // Client IP is available through ConnectInfo; try to grab it from extensions if present.
-    if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
-        evt.add("client.ip", addr.ip().to_string());
+        span.record("http.user_agent", s);
     }
 
-    // Extract incoming traceparent header if present and attach to the event.
+    // Client IP is available through ConnectInfo; try to grab it from extensions if present.
+    if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
+        span.record("client.ip", addr.ip().to_string().as_str());
+    }
+
+    // Extract incoming traceparent header if present and attach to the span.
     let incoming_traceparent = req
         .headers()
         .get("traceparent")
         .and_then(|hv| hv.to_str().ok())
         .map(|s| s.to_string());
+
     if let Some(tp) = incoming_traceparent.as_deref() {
-        // Record and parse incoming traceparent header into structured attributes.
-        evt.record_traceparent(tp);
+        // Record raw traceparent header
+        span.record("traceparent", tp);
+
+        // Try to parse the W3C traceparent to extract trace/span/flags (best-effort).
+        // Expected format: "version-traceid-spanid-flags"
+        if let Some(parts) = tp.split('-').collect::<Vec<_>>().as_slice().get(1..4)
+            && parts.len() == 3
+        {
+            let trace_id = parts[0];
+            let span_id = parts[1];
+            let flags = parts[2];
+            span.record("trace.trace_id", trace_id);
+            span.record("trace.span_id", span_id);
+            span.record("trace.trace_flags", flags);
+        }
     }
 
     // Enter the request span so downstream code logs/records attach to it.
-    let _enter = evt.enter();
+    let _enter = span.enter();
 
-    // Record the current tracing span context (trace/span ids) onto the event when available.
+    // Record the current tracing span context (trace/span ids) onto the span when available.
     // This is a no-op when `tracing-opentelemetry` feature is not enabled so it's safe to call.
-    evt.record_current_span_context();
+    #[cfg(feature = "tracing-opentelemetry")]
+    {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        // Extract the OpenTelemetry Context from the current tracing span (if available).
+        let cx = tracing::Span::current().context();
+        let span_ref = cx.span();
+        let span_ctx = span_ref.span_context();
+        if span_ctx.is_valid() {
+            span.record("trace.trace_id", span_ctx.trace_id().to_string().as_str());
+            span.record("trace.span_id", span_ctx.span_id().to_string().as_str());
+            span.record(
+                "trace.trace_flags",
+                format!("{:02x}", span_ctx.trace_flags().to_u8()).as_str(),
+            );
+        }
+    }
 
     // Call the next service in the stack.
     let mut response = next.run(req).await;
@@ -1062,17 +1052,12 @@ async fn propagate_trace(
             );
         }
     } else {
-        // If tracing-opentelemetry is enabled and a span was created, we can attempt to
-        // return the current span's traceparent for clients that can accept it.
-        // This is optional and guarded by the tracing-opentelemetry feature at compile time.
         #[cfg(feature = "tracing-opentelemetry")]
         {
             use opentelemetry::trace::TraceContextExt;
             use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-            // Extract the OpenTelemetry Context from the current tracing span (if available).
             let cx = tracing::Span::current().context();
-            // Keep a SpanRef alive while we extract its SpanContext so we don't borrow a temporary.
             let span_ref = cx.span();
             let span_ctx = span_ref.span_context();
             if span_ctx.is_valid() {
@@ -1091,22 +1076,27 @@ async fn propagate_trace(
         }
     }
 
-    // Record response metadata using the WideEvent helper so numeric status and OTel semantics are used.
+    // Record response metadata onto the span so numeric status and OTel semantics are available.
     let status_u16 = response.status().as_u16();
-    evt.attach_http_response_status(status_u16);
+    // record as numeric string; tracing fields are textual here — exporters may convert as needed.
+    span.record("http.status_code", status_u16);
+    // hint OTel status based on numeric code
+    if status_u16 >= 500 {
+        span.record("otel.status_code", "ERROR");
+    } else {
+        span.record("otel.status_code", "OK");
+    }
 
     response
 }
 
+#[tracing::instrument(skip(app_state, alert_state, app_resources))]
 pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
     alert_state: AlertAppState,
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
-    let webserver_wide_event = wide_info!("server.start_webserver", "Starting webserver");
-    let _webserver_span = webserver_wide_event.enter();
-
     // Build the router and attach middleware layers. The propagate_trace middleware is applied
     // so incoming trace headers are recorded and propagated back to clients when available.
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -1127,7 +1117,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
     let router = router.merge(Redoc::with_url("/api-docs", api));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    wide_info!("server.started", "Server running", addr = "0.0.0.0:8080");
+    tracing::info_span!("Server running", addr = "0.0.0.0:8080");
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -1141,6 +1131,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
+    #[tracing::instrument(skip(self, openapi))]
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         if let Some(components) = openapi.components.as_mut() {
             let bearer = HttpBuilder::new()

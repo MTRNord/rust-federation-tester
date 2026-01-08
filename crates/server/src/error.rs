@@ -69,6 +69,7 @@ pub enum FederationError {
 }
 
 impl FederationError {
+    #[tracing::instrument(skip(self))]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -78,6 +79,7 @@ impl FederationError {
         )
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn phase(&self) -> Option<Phase> {
         match self {
             FederationError::Fetch(FetchError::WellKnown(_)) => Some(Phase::WellKnown),

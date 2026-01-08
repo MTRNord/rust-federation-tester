@@ -1,7 +1,6 @@
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;
-use crate::wide_instrument;
 use ::time as time_crate;
 use futures::{StreamExt, stream::FuturesUnordered};
 use hickory_resolver::proto::rr::RecordType;
@@ -13,6 +12,7 @@ use url::Url;
 pub const NETWORK_TIMEOUT_SECS: u64 = 3;
 
 /// Validate well-known response for security issues
+#[tracing::instrument()]
 fn validate_well_known_security(original_server: &str, m_server: &str) -> Result<(), Error> {
     // 1. Prevent empty server names
     if m_server.is_empty() {
@@ -68,6 +68,7 @@ fn validate_well_known_security(original_server: &str, m_server: &str) -> Result
 }
 
 /// Check if an IP address is private or internal to prevent SSRF
+#[tracing::instrument()]
 fn is_private_or_internal_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -100,7 +101,7 @@ pub struct WellKnownPhaseResult {
     pub error: Option<Error>,
 }
 
-#[wide_instrument(name = "lookup_server_well_known", server_name = server_name)]
+#[tracing::instrument(skip(resolver))]
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
@@ -191,7 +192,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     }
 }
 
-#[crate::wide_instrument(name = "federation_fetch_with_redirects", addr = addr, host = host, sni = sni, max_redirects = max_redirects)]
+#[tracing::instrument()]
 async fn fetch_url_with_redirects(
     addr: &str,
     host: &str,

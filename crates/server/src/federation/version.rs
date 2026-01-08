@@ -19,7 +19,7 @@ pub struct VersionResp {
     pub server: Version,
 }
 
-#[crate::wide_instrument(name = "query_server_version_pooled", addr = addr, server_name = server_name, sni = sni)]
+#[tracing::instrument(skip(connection_pool))]
 pub async fn query_server_version_pooled(
     addr: &str,
     server_name: &str,
@@ -68,7 +68,7 @@ pub async fn query_server_version_pooled(
     }
 }
 
-#[crate::wide_instrument(name = "fetch_url_pooled_simple", level = "debug", path = path)]
+#[tracing::instrument(skip(connection_pool))]
 pub async fn fetch_url_pooled_simple(
     path: &str,
     addr: &str,

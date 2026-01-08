@@ -3,7 +3,7 @@ use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
 use crate::response::{ConnectionReportData, Error, ErrorCode};
 
-#[crate::wide_instrument(name = "connection_check", addr = addr, server_name = server_name, sni = sni)]
+#[tracing::instrument(skip(connection_pool))]
 pub async fn connection_check(
     addr: &str,
     server_name: &str,

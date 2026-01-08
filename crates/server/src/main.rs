@@ -15,8 +15,6 @@ use sea_orm::Database;
 use std::env;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use wide_events::wide_debug;
-use wide_events::wide_info;
 
 // Logging guidelines due to otel:
 // Use the correct log levels!
@@ -173,6 +171,7 @@ fn initialize_layered_tracing() {
         .init();
 }
 
+#[tracing::instrument()]
 fn is_debug_mode() -> bool {
     env::var("RUST_LOG").unwrap_or_default().contains("debug")
         || env::var("RUST_LOG").unwrap_or_default().contains("trace")
@@ -223,12 +222,12 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Load config
     let config = Arc::new(load_config_or_panic());
 
-    wide_debug!("config.setup_ring", "Loading ring");
+    tracing::debug!("Loading ring");
     let ring_provider = crypto::ring::default_provider();
     CryptoProvider::install_default(ring_provider).expect("Failed to install crypto provider");
 
     // Set up SeaORM database connection
-    wide_debug!("config.setup_database", "Loading database");
+    tracing::debug!("Loading database");
     let db = Arc::new(
         Database::connect(&config.database_url)
             .await
@@ -236,7 +235,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     );
 
     // Set up lettre SMTP client
-    wide_debug!("config.setup_smtp", "Loading SMTP client");
+    tracing::debug!("Loading SMTP client");
     let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
     let mailer = Arc::new(
         AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
@@ -247,7 +246,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     );
 
     // Set up resolver and caches
-    wide_debug!("config.setup_resolver", "Loading resolver");
+    tracing::debug!("Loading resolver");
     let resolver = Arc::new(Resolver::builder_tokio()?.build());
     let connection_pool = ConnectionPool::default();
     let task_manager = Arc::new(AlertTaskManager::new());
@@ -269,8 +268,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let retention_days = resources.config.statistics.raw_retention_days;
     let salt_set = !resources.config.statistics.anonymization_salt.is_empty();
 
-    wide_info!(
-        "config.statistics",
+    tracing::debug_span!(
         "Checking statistics configuration",
         enabled = stats_enabled,
         prometheus = prometheus_enabled,
@@ -284,10 +282,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Start background cleanup task for connection pool
     {
         let pool = connection_pool.clone();
-        wide_debug!(
-            "config.start_cleanup_connection_pool",
-            "Starting background cleanup task for connection pool"
-        );
+        tracing::debug!("Starting background cleanup task for connection pool");
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(300)); // 5 minutes
             loop {
@@ -302,10 +297,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let task_manager_for_checks = task_manager.clone();
     let resolver_for_checks = state.resolver.clone();
     let connection_pool_for_checks = state.connection_pool.clone();
-    wide_debug!(
-        "config.start_recurring_alert_checks",
-        "Starting recurring alert checks"
-    );
+    tracing::debug!("Starting recurring alert checks");
     tokio::spawn(async move {
         recurring_alert_checks(
             resources_for_checks,

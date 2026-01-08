@@ -13,6 +13,7 @@ static TLS_CONFIG: OnceCell<Arc<ClientConfig>> = OnceCell::new();
 
 /// Get a shared TLS client configuration
 /// This avoids rebuilding the root certificate store and config on every connection
+#[tracing::instrument(skip_all)]
 pub fn get_shared_tls_config() -> Arc<ClientConfig> {
     TLS_CONFIG
         .get_or_init(|| {
@@ -33,11 +34,13 @@ pub mod string_ops {
     use std::borrow::Cow;
 
     /// Convert to string only if needed, avoiding unnecessary allocations
+    #[tracing::instrument(skip_all)]
     pub fn to_string_if_needed(s: &str) -> Cow<'_, str> {
         Cow::Borrowed(s)
     }
 
     /// More efficient string concatenation for known small strings
+    #[tracing::instrument()]
     pub fn format_addr_port(addr: &str, port: u16) -> String {
         let mut result = String::with_capacity(addr.len() + 6); // addr + ':' + port (max 5 digits)
         result.push_str(addr);
@@ -47,6 +50,7 @@ pub mod string_ops {
     }
 
     /// Format IPv6 address with port efficiently
+    #[tracing::instrument()]
     pub fn format_ipv6_port(addr: &str, port: u16) -> String {
         let mut result = String::with_capacity(addr.len() + 8); // '[' + addr + ']:' + port
         result.push('[');

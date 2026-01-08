@@ -40,6 +40,7 @@ pub enum JsonSecurityError {
 
 impl SecureJsonParser {
     /// Parse JSON from bytes with size and structure limits
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn parse_from_slice(&self, data: &[u8]) -> Result<Value, JsonSecurityError> {
         // First limit: total size
         if data.len() > self.max_size {
@@ -55,6 +56,7 @@ impl SecureJsonParser {
     }
 
     /// Parse JSON from a reader with size limits
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn parse_from_reader<R: Read>(&self, reader: R) -> Result<Value, JsonSecurityError> {
         let mut buffer = Vec::new();
         let bytes_read = reader
@@ -78,6 +80,7 @@ impl SecureJsonParser {
     }
 
     /// Recursively validate JSON structure to prevent bombs
+    #[tracing::instrument(level = "debug", skip(self, value))]
     fn validate_structure(&self, value: &Value, depth: usize) -> Result<(), JsonSecurityError> {
         if depth > self.max_depth {
             return Err(JsonSecurityError::TooDeep {
@@ -131,12 +134,14 @@ impl SecureJsonParser {
 }
 
 /// Convenience function for secure JSON parsing from bytes
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn secure_parse_json_slice(data: &[u8]) -> Result<Value, JsonSecurityError> {
     let parser = SecureJsonParser::default();
     parser.parse_from_slice(data)
 }
 
 /// Convenience function for secure JSON parsing from reader
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn secure_parse_json_reader<R: Read>(reader: R) -> Result<Value, JsonSecurityError> {
     let parser = SecureJsonParser::default();
     parser.parse_from_reader(reader)

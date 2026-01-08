@@ -29,5 +29,3 @@ pub use version::{VersionResp, fetch_url_pooled_simple, query_server_version_poo
 pub use keys::{FullKeysResponse, fetch_keys, verify_keys};
 
 pub use connection::connection_check;
-
-// Remaining: connection

@@ -14,6 +14,7 @@ struct WellKnown {
     pub m_homeserver: Option<HomeserverInfo>,
 }
 
+#[tracing::instrument()]
 pub async fn resolve_client_side_api(server_name: &str) -> String {
     // Fetch the well-known configuration
     let url = format!("https://{}/.well-known/matrix/client", server_name);
@@ -62,6 +63,7 @@ pub struct ClientVersions {
     pub server: Option<ServerVersionInfo>,
 }
 
+#[tracing::instrument()]
 pub async fn fetch_client_server_versions(cs_server_address: &str) -> ClientVersions {
     let url = format!("{}/_matrix/client/versions", cs_server_address);
     tracing::info!(

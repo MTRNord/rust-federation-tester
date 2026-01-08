@@ -16,6 +16,7 @@ use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{ResolveErrorKind, Resolver, name_server::ConnectionProvider};
 use tokio::time::{Duration, timeout};
 
+#[tracing::instrument()]
 pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     if target.ends_with('.') {
         target.to_string()
@@ -24,7 +25,7 @@ pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     }
 }
 
-#[crate::wide_instrument(name = "lookup_server", server_name = server_name)]
+#[tracing::instrument(skip(resolver))]
 pub async fn lookup_server<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
