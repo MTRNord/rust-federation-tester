@@ -67,6 +67,7 @@ fn initialize_otel_console_tracing() {
         use opentelemetry_otlp::Protocol;
         use opentelemetry_otlp::SpanExporter;
         use opentelemetry_otlp::WithExportConfig;
+        use opentelemetry_sdk::trace::Sampler;
 
         // Create a span exporter and install a tracer provider for traces (OTLP)
         let exporter = SpanExporter::builder()
@@ -78,6 +79,7 @@ fn initialize_otel_console_tracing() {
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_batch_exporter(exporter)
             .with_resource(resource.clone())
+            .with_sampler(Sampler::AlwaysOn)
             .build();
         global::set_tracer_provider(provider);
 
@@ -102,6 +104,7 @@ fn initialize_otel_console_tracing() {
         let logging_provider = SdkLoggerProvider::builder()
             .with_simple_exporter(exporter)
             .with_resource(resource.clone())
+            .with_sampler(Sampler::AlwaysOn)
             .build();
     };
 

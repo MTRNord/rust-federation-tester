@@ -30,7 +30,7 @@ pub mod federation_tester_api {
         response::IntoResponse,
     };
     use hickory_resolver::{Resolver, name_server::ConnectionProvider};
-    use hyper::StatusCode;
+    use hyper::{HeaderMap, StatusCode};
     use serde::Deserialize;
     use serde_json::json;
     use std::sync::Arc;
@@ -69,7 +69,7 @@ pub mod federation_tester_api {
         r.with_state(state)
     }
 
-    #[tracing::instrument(skip(state))]
+    #[tracing::instrument(skip(state, headers, resources))]
     #[utoipa::path(
         get,
         path = "/report",
@@ -84,77 +84,94 @@ pub mod federation_tester_api {
     )]
     async fn get_report<P: ConnectionProvider>(
         Query(params): Query<ApiParams>,
+        headers: HeaderMap,
         State(state): State<AppState<P>>,
         axum::Extension(resources): axum::Extension<crate::AppResources>,
     ) -> impl IntoResponse {
-        if params.server_name.is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "server_name parameter is required" })),
-            );
-        }
-
-        match generate_json_report(
-            &params.server_name.to_lowercase(),
-            state.resolver.as_ref(),
-            &state.connection_pool,
-        )
-        .await
-        {
-            Ok(report) => {
-                if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
-                    // Fetch client-server versions for unstable features tracking
-                    let (unstable_enabled, unstable_announced) = if report.federation_ok {
-                        let cs_address = resolve_client_side_api(&params.server_name).await;
-                        let cs_versions = fetch_client_server_versions(&cs_address).await;
-
-                        if let Some(features) = cs_versions.unstable_features {
-                            let enabled: Vec<String> = features
-                                .iter()
-                                .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
-                                .collect();
-                            let announced: Vec<String> = features.keys().cloned().collect();
-                            (Some(enabled), Some(announced))
-                        } else {
-                            (None, None)
-                        }
-                    } else {
-                        (None, None)
-                    };
-
-                    stats::record_event(
-                        &resources,
-                        StatEvent {
-                            server_name: &params.server_name,
-                            federation_ok: report.federation_ok,
-                            version_name: Some(&report.version.name),
-                            version_string: Some(&report.version.version),
-                            unstable_features_enabled: unstable_enabled.as_deref(),
-                            unstable_features_announced: unstable_announced.as_deref(),
-                        },
-                    )
-                    .await;
-                }
-                // Convert the report to a Value for JSON serialization
-                let report = serde_json::to_value(report)
-                    .unwrap_or_else(|_| json!({ "error": "Failed to serialize report" }));
-                (StatusCode::OK, Json(report))
-            }
-            Err(e) => {
-                tracing::error!(
-                    name = "api.get_report.failed",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    error = ?e,
-                    message = "Error generating report"
+        let span = tracing::span!(
+            tracing::Level::INFO,
+            "Received request for federation report"
+        );
+        return span
+            .in_scope(async move || {
+                tracing::info!(
+                    "Received request for federation report with headers: {:?}",
+                    headers
                 );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": format!("Failed to generate report: {}", e)
-                    })),
+                if params.server_name.is_empty() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "server_name parameter is required" })),
+                    );
+                }
+
+                match generate_json_report(
+                    &params.server_name.to_lowercase(),
+                    state.resolver.as_ref(),
+                    &state.connection_pool,
                 )
-            }
-        }
+                .await
+                {
+                    Ok(report) => {
+                        if params.stats_opt_in.unwrap_or(false)
+                            && resources.config.statistics.enabled
+                        {
+                            // Fetch client-server versions for unstable features tracking
+                            let (unstable_enabled, unstable_announced) = if report.federation_ok {
+                                let cs_address = resolve_client_side_api(&params.server_name).await;
+                                let cs_versions = fetch_client_server_versions(&cs_address).await;
+
+                                if let Some(features) = cs_versions.unstable_features {
+                                    let enabled: Vec<String> = features
+                                        .iter()
+                                        .filter_map(
+                                            |(k, v)| if *v { Some(k.clone()) } else { None },
+                                        )
+                                        .collect();
+                                    let announced: Vec<String> = features.keys().cloned().collect();
+                                    (Some(enabled), Some(announced))
+                                } else {
+                                    (None, None)
+                                }
+                            } else {
+                                (None, None)
+                            };
+
+                            stats::record_event(
+                                &resources,
+                                StatEvent {
+                                    server_name: &params.server_name,
+                                    federation_ok: report.federation_ok,
+                                    version_name: Some(&report.version.name),
+                                    version_string: Some(&report.version.version),
+                                    unstable_features_enabled: unstable_enabled.as_deref(),
+                                    unstable_features_announced: unstable_announced.as_deref(),
+                                },
+                            )
+                            .await;
+                        }
+                        // Convert the report to a Value for JSON serialization
+                        let report = serde_json::to_value(report)
+                            .unwrap_or_else(|_| json!({ "error": "Failed to serialize report" }));
+                        (StatusCode::OK, Json(report))
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            name = "api.get_report.failed",
+                            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                            error = ?e,
+                            message = "Error generating report"
+                        );
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "error": format!("Failed to generate report: {}", e)
+                            })),
+                        )
+                    }
+                }
+            })
+            .await;
     }
 
     #[tracing::instrument(skip(state))]
@@ -959,7 +976,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
         // include trace context as header into the response
         .layer(OtelInResponseLayer)
         // start OpenTelemetry trace on incoming request
-        .layer(OtelAxumLayer::default())
+        .layer(OtelAxumLayer::default().try_extract_client_ip(true))
         .routes(routes!(health))
         // Attach application resources, CORS, our trace propagation middleware and the standard TraceLayer.
         .layer(axum::Extension(app_resources))
