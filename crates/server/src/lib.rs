@@ -10,6 +10,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::config::AppConfig;
 
+pub mod alerts;
 pub mod api;
 pub mod client;
 pub mod config;
@@ -19,11 +20,15 @@ pub mod entity;
 pub mod error;
 pub mod federation;
 pub mod optimization;
-pub mod recurring_alerts;
 pub mod response;
 pub mod security;
 pub mod stats;
 pub mod validation;
+
+// Backward compatibility: re-export from alerts module
+pub mod recurring_alerts {
+    pub use crate::alerts::*;
+}
 
 #[derive(Clone, Debug)]
 pub struct AppResources {

@@ -1,92 +1,28 @@
+//! Recurring federation check execution.
+//!
+//! Contains the main background loop for checking federation status
+//! and the state machine logic for determining when to send emails.
+
 use crate::AppResources;
-use crate::api::alert_api::MagicClaims;
+use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
+use crate::alerts::task_manager::AlertTaskManager;
 use crate::connection_pool::ConnectionPool;
-use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate};
 use crate::entity::alert;
-use crate::entity::email_log;
 use crate::response::generate_json_report;
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
-use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
-use lettre::AsyncTransport;
-use lettre::message::header::HeaderName;
-use lettre::message::header::{Header, HeaderValue};
-use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
-use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::info;
-type AlertCheckTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Email sending policy configuration
-const REMINDER_EMAIL_INTERVAL: Duration = Duration::from_secs(12 * 3600); // 12 hours
-const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes - check frequently
+/// Check interval - how frequently each alert is checked.
+pub const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
-pub struct AlertTaskManager {
-    running: RwLock<HashMap<i32, Arc<AtomicBool>>>,
-}
-
-impl Default for AlertTaskManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AlertTaskManager {
-    pub fn new() -> Self {
-        Self {
-            running: RwLock::new(HashMap::new()),
-        }
-    }
-
-    #[tracing::instrument(skip(self, f))]
-    pub async fn start_or_restart_task<F>(&self, alert_id: i32, f: F)
-    where
-        F: FnOnce(Arc<AtomicBool>) -> AlertCheckTask + Send + 'static,
-    {
-        let mut running = self.running.write().await;
-        if let Some(flag) = running.get(&alert_id) {
-            flag.store(false, Ordering::SeqCst); // stop old
-        }
-        let flag = Arc::new(AtomicBool::new(true));
-        running.insert(alert_id, flag.clone());
-        let task = f(flag.clone());
-        tokio::spawn(task);
-    }
-
-    /// Check if a task is already running for this alert
-    #[tracing::instrument(skip(self))]
-    pub async fn is_running(&self, alert_id: i32) -> bool {
-        let running = self.running.read().await;
-        running.contains_key(&alert_id)
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn stop_task(&self, alert_id: i32) {
-        let mut running = self.running.write().await;
-        if let Some(flag) = running.remove(&alert_id) {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn stop_all(&self) {
-        let mut running = self.running.write().await;
-        for flag in running.values() {
-            flag.store(false, Ordering::SeqCst);
-        }
-        running.clear();
-    }
-}
-
-/// Determine if we should send a failure email based on alert state and timing
+/// Determine if we should send a failure email based on alert state and timing.
 #[tracing::instrument(skip_all)]
-fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool {
+pub fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool {
     // If server just started failing, send immediately
     if !alert.is_currently_failing {
         return true;
@@ -103,240 +39,10 @@ fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool 
     time_since_last_email >= reminder_threshold
 }
 
-/// Send a failure notification email
-#[tracing::instrument(skip(mailer, config, db, email))]
-async fn send_failure_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
-    config: &Arc<crate::config::AppConfig>,
-    db: &Arc<sea_orm::DatabaseConnection>,
-    email: &str,
-    server_name: &str,
-    alert_id: i32,
-    failure_count: i32,
-) {
-    let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
-
-    // Convert REMINDER_EMAIL_INTERVAL to hours for display
-    let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
-    let reminder_interval_text = if reminder_hours >= 24 {
-        let days = reminder_hours / 24;
-        if days == 1 {
-            "24 hours".to_string()
-        } else {
-            format!("{} days", days)
-        }
-    } else if reminder_hours == 1 {
-        "1 hour".to_string()
-    } else {
-        format!("{} hours", reminder_hours)
-    };
-
-    let unsubscribe_url = generate_list_unsubscribe_url(
-        &config.magic_token_secret,
-        email,
-        server_name,
-        alert_id,
-        &config.frontend_url,
-    );
-
-    let template = FailureEmailTemplate {
-        server_name: server_name.to_string(),
-        check_url: check_url.clone(),
-        is_reminder: failure_count > 1,
-        failure_count,
-        reminder_interval: reminder_interval_text,
-        unsubscribe_url: unsubscribe_url.clone(),
-    };
-
-    let subject = format!("Federation Alert: {server_name} is not healthy");
-
-    // Render both HTML and plain text versions
-    let html_body = match template.render_html() {
-        Ok(html) => html,
-        Err(e) => {
-            tracing::error!(
-                name = "alerts.send_failure_email.template_render_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to render HTML email template"
-            );
-            return;
-        }
-    };
-    let text_body = template.render_text();
-
-    // Create multipart email with both HTML and plain text
-    let email_msg = lettre::Message::builder()
-        .from(config.smtp.from.parse().unwrap())
-        .to(email.parse().unwrap())
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .header(UnsubscribeHeader::from(unsubscribe_url))
-        .message_id(None)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .unwrap();
-
-    if let Err(e) = mailer.send(email_msg).await {
-        tracing::error!(
-            name = "alerts.send_failure_email.email_send_failed",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = %e,
-            server_name = %server_name,
-            alert_id = alert_id,
-            message = "Failed to send failure alert email"
-        );
-    } else {
-        info!(
-            target: "rust-federation-tester",
-            "Sent failure alert email #{} to {} for server {}",
-            failure_count, email, server_name
-        );
-
-        // Log the email to database
-        let email_log_entry = email_log::ActiveModel {
-            id: ActiveValue::NotSet,
-            alert_id: ActiveValue::Set(alert_id),
-            email: ActiveValue::Set(email.to_string()),
-            server_name: ActiveValue::Set(server_name.to_string()),
-            email_type: ActiveValue::Set("failure".to_string()),
-            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
-            failure_count: ActiveValue::Set(Some(failure_count)),
-        };
-
-        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            tracing::error!(
-                name = "alerts.send_failure_email.log_insert_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to log failure email to database"
-            );
-        }
-    }
-}
-
-/// Send a recovery notification email
-#[tracing::instrument(skip(mailer, config, db, email))]
-async fn send_recovery_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
-    config: &Arc<crate::config::AppConfig>,
-    db: &Arc<sea_orm::DatabaseConnection>,
-    email: &str,
-    server_name: &str,
-    alert_id: i32,
-) {
-    let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
-
-    let unsubscribe_url = generate_list_unsubscribe_url(
-        &config.magic_token_secret,
-        email,
-        server_name,
-        alert_id,
-        &config.frontend_url,
-    );
-
-    let template = RecoveryEmailTemplate {
-        server_name: server_name.to_string(),
-        check_url: check_url.clone(),
-        unsubscribe_url: unsubscribe_url.clone(),
-    };
-
-    let subject = format!("Federation Alert: {server_name} has recovered!");
-
-    // Render both HTML and plain text versions
-    let html_body = match template.render_html() {
-        Ok(html) => html,
-        Err(e) => {
-            tracing::error!(
-                name = "alerts.send_recovery_email.template_render_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to render HTML email template for recovery"
-            );
-            return;
-        }
-    };
-    let text_body = template.render_text();
-
-    // Create multipart email with both HTML and plain text
-    let email_msg = lettre::Message::builder()
-        .from(config.smtp.from.parse().unwrap())
-        .to(email.parse().unwrap())
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .header(UnsubscribeHeader::from(unsubscribe_url))
-        .message_id(None)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .unwrap();
-
-    if let Err(e) = mailer.send(email_msg).await {
-        tracing::error!(
-            name = "alerts.send_recovery_email.email_send_failed",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = %e,
-            server_name = %server_name,
-            alert_id = alert_id,
-            message = "Failed to send recovery email"
-        );
-    } else {
-        info!(
-            "Sent recovery email to {} for server {}",
-            email, server_name
-        );
-
-        // Log the email to database
-        let email_log_entry = email_log::ActiveModel {
-            id: ActiveValue::NotSet,
-            alert_id: ActiveValue::Set(alert_id),
-            email: ActiveValue::Set(email.to_string()),
-            server_name: ActiveValue::Set(server_name.to_string()),
-            email_type: ActiveValue::Set("recovery".to_string()),
-            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
-            failure_count: ActiveValue::NotSet,
-        };
-
-        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            tracing::error!(
-                name = "alerts.send_recovery_email.log_insert_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to log recovery email to database"
-            );
-        }
-    }
-}
-
+/// Main loop for recurring alert checks.
+///
+/// This function runs indefinitely, periodically checking all verified alerts
+/// and spawning individual check tasks for each one.
 #[tracing::instrument(skip_all)]
 pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'static>(
     resources: Arc<AppResources>,
@@ -420,7 +126,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
 
                                         if !report.federation_ok {
                                             // Server is failing
-                                            let should_send_email =
+                                            let send_email =
                                                 should_send_failure_email(&alert_model, now);
 
                                             // Update failure state
@@ -449,7 +155,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                             // Save state before potentially sending email
                                             if let Ok(updated_alert) =
                                                 alert_active.update(db.as_ref()).await
-                                                && should_send_email
+                                                && send_email
                                             {
                                                 send_failure_email(
                                                     &mailer,
@@ -568,60 +274,5 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
 
         // 5. Wait for a while before next full scan
         tokio::time::sleep(Duration::from_secs(300)).await; // 5 min
-    }
-}
-
-#[tracing::instrument(skip_all)]
-fn generate_list_unsubscribe_url(
-    magic_token_secret: &str,
-    email: &str,
-    server_name: &str,
-    alert_id: i32,
-    frontend_url: &str,
-) -> String {
-    let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
-    let claims = MagicClaims {
-        exp,
-        email: email.to_string(),
-        server_name: Some(server_name.to_string()),
-        action: "delete".to_string(),
-        alert_id: Some(alert_id.to_string()),
-    };
-    let secret = magic_token_secret.as_bytes();
-    let token = encode(
-        &JwtHeader::default(),
-        &claims,
-        &EncodingKey::from_secret(secret),
-    )
-    .unwrap_or_default();
-    format!("{frontend_url}/verify?token={token}")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct UnsubscribeHeader(String);
-
-impl Header for UnsubscribeHeader {
-    fn name() -> lettre::message::header::HeaderName {
-        HeaderName::new_from_ascii_str("List-Unsubscribe")
-    }
-
-    fn parse(s: &str) -> Result<Self, Box<dyn core::error::Error + Send + Sync>> {
-        Ok(Self(s.into()))
-    }
-
-    fn display(&self) -> lettre::message::header::HeaderValue {
-        HeaderValue::new(Self::name(), self.0.clone())
-    }
-}
-
-impl From<String> for UnsubscribeHeader {
-    fn from(content: String) -> Self {
-        Self(content)
-    }
-}
-
-impl AsRef<str> for UnsubscribeHeader {
-    fn as_ref(&self) -> &str {
-        &self.0
     }
 }
