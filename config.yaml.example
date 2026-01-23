@@ -10,16 +10,26 @@ frontend_url: "https://your-frontend.com"
 magic_token_secret: "CHANGE_ME"
 
 ## OAuth2 Authorization Server settings
+## See docs/oauth2-setup.md for full documentation
 oauth2:
   # Whether OAuth2 authentication is enabled
   enabled: false
-  # Base URL for the OAuth2 issuer (used in tokens and discovery document)
-  # Should match your public-facing URL, e.g., "https://federation-tester.example.com"
-  issuer_url: "https://your-frontend.com"
+
+  # Base URL where THIS API SERVER is publicly reachable (not the frontend!)
+  # This is used in the OpenID discovery document and token validation.
+  # Examples:
+  #   - Same domain as frontend: "https://federation-tester.example.com"
+  #   - API on subdomain: "https://api.federation-tester.example.com"
+  #   - API at subpath: "https://federation-tester.example.com/api"
+  #   - Local dev: "http://localhost:8080"
+  issuer_url: "https://api.your-domain.com"
+
   # Access token lifetime in seconds (default: 3600 = 1 hour)
   access_token_lifetime: 3600
+
   # Refresh token lifetime in seconds (default: 604800 = 7 days)
   refresh_token_lifetime: 604800
+
   # Whether legacy magic link authentication is still enabled
   # Set to false to force all users to use OAuth2
   magic_links_enabled: true
