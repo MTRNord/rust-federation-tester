@@ -267,17 +267,6 @@ async fn register_alert(
     )
 }
 
-#[derive(Serialize, ToSchema)]
-struct VerificatonResponseData {
-    /// The result status of the verification
-    status: String,
-}
-
-#[derive(Serialize, ToSchema)]
-struct AlertsList {
-    alerts: Vec<alert::Model>,
-}
-
 #[tracing::instrument(skip(resources, params), fields(token_len = params.token.len()))]
 #[utoipa::path(
     get,
