@@ -31,6 +31,51 @@ pub struct AppConfig {
     pub debug_allowed_nets: Vec<IpNet>,
     #[serde(default)]
     pub statistics: StatisticsConfig,
+    #[serde(default)]
+    pub oauth2: OAuth2Config,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OAuth2Config {
+    /// Whether OAuth2 is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL for the OAuth2 issuer (e.g., "https://federation-tester.example.com")
+    #[serde(default)]
+    pub issuer_url: String,
+    /// Access token lifetime in seconds (default: 3600 = 1 hour)
+    #[serde(default = "default_access_token_lifetime")]
+    pub access_token_lifetime: i64,
+    /// Refresh token lifetime in seconds (default: 604800 = 7 days)
+    #[serde(default = "default_refresh_token_lifetime")]
+    pub refresh_token_lifetime: i64,
+    /// Whether legacy magic link authentication is enabled (default: true for backward compatibility)
+    #[serde(default = "default_magic_links_enabled")]
+    pub magic_links_enabled: bool,
+}
+
+impl Default for OAuth2Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer_url: String::new(),
+            access_token_lifetime: default_access_token_lifetime(),
+            refresh_token_lifetime: default_refresh_token_lifetime(),
+            magic_links_enabled: default_magic_links_enabled(),
+        }
+    }
+}
+
+fn default_magic_links_enabled() -> bool {
+    true // Enabled by default for backward compatibility
+}
+
+fn default_access_token_lifetime() -> i64 {
+    3600 // 1 hour
+}
+
+fn default_refresh_token_lifetime() -> i64 {
+    604800 // 7 days
 }
 
 #[derive(Debug, Deserialize, Clone)]

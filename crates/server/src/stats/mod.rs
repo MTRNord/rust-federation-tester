@@ -550,7 +550,7 @@ pub async fn build_prometheus_metrics_cached(resources: &AppResources) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, SmtpConfig, StatisticsConfig};
+    use crate::config::{AppConfig, OAuth2Config, SmtpConfig, StatisticsConfig};
     use sea_orm::{Database, DbBackend, Statement};
     use std::sync::Arc;
 
@@ -573,6 +573,7 @@ mod tests {
                 anonymization_salt: salt.into(),
                 raw_retention_days: 30,
             },
+            oauth2: OAuth2Config::default(),
         }
     }
 

@@ -8,6 +8,22 @@ smtp:
   from: "alerts@example.com"
 frontend_url: "https://your-frontend.com"
 magic_token_secret: "CHANGE_ME"
+
+## OAuth2 Authorization Server settings
+oauth2:
+  # Whether OAuth2 authentication is enabled
+  enabled: false
+  # Base URL for the OAuth2 issuer (used in tokens and discovery document)
+  # Should match your public-facing URL, e.g., "https://federation-tester.example.com"
+  issuer_url: "https://your-frontend.com"
+  # Access token lifetime in seconds (default: 3600 = 1 hour)
+  access_token_lifetime: 3600
+  # Refresh token lifetime in seconds (default: 604800 = 7 days)
+  refresh_token_lifetime: 604800
+  # Whether legacy magic link authentication is still enabled
+  # Set to false to force all users to use OAuth2
+  magic_links_enabled: true
+
 ## Optional anonymized, opt-in statistics & Prometheus metrics
 statistics:
   # Master switch. When false, no events are recorded even if clients pass stats_opt_in.

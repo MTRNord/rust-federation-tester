@@ -8,6 +8,7 @@
 //! - `openapi` - OpenAPI/Utoipa configuration
 
 pub mod alerts;
+pub mod debug;
 pub mod federation;
 pub mod health;
 pub mod metrics;
@@ -55,6 +56,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
             federation::router::<P>(app_state, debug_mode),
         )
         .nest("/api/alerts", alerts::router(alert_state))
+        .nest("/debug", debug::router())
         .routes(routes!(metrics::metrics))
         // include trace context as header into the response
         .layer(OtelInResponseLayer)

@@ -19,6 +19,7 @@ pub mod email_templates;
 pub mod entity;
 pub mod error;
 pub mod federation;
+pub mod oauth2;
 pub mod optimization;
 pub mod response;
 pub mod security;

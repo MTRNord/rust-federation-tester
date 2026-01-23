@@ -8,6 +8,8 @@ mod m20250922_174734_fix_uniqueness;
 mod m20251002_120000_add_alert_state_tracking;
 mod m20251004_120000_add_email_log;
 mod m20260123_120000_optimize_stats_tables;
+mod m20260123_150000_add_oauth2_tables;
+mod m20260123_160000_link_alerts_to_oauth2;
 
 pub struct Migrator;
 
@@ -23,6 +25,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20251002_120000_add_alert_state_tracking::Migration),
             Box::new(m20251004_120000_add_email_log::Migration),
             Box::new(m20260123_120000_optimize_stats_tables::Migration),
+            Box::new(m20260123_150000_add_oauth2_tables::Migration),
+            Box::new(m20260123_160000_link_alerts_to_oauth2::Migration),
         ]
     }
 }

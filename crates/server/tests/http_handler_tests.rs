@@ -7,7 +7,7 @@ use axum_test::TestServer;
 use rust_federation_tester::{
     AppResources,
     api::{health, metrics},
-    config::{AppConfig, SmtpConfig, StatisticsConfig},
+    config::{AppConfig, OAuth2Config, SmtpConfig, StatisticsConfig},
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 use std::sync::Arc;
@@ -69,7 +69,8 @@ async fn create_test_db() -> DatabaseConnection {
             last_success_at TEXT NULL,
             last_email_sent_at TEXT NULL,
             failure_count INTEGER NOT NULL DEFAULT 0,
-            is_currently_failing BOOLEAN NOT NULL DEFAULT 0
+            is_currently_failing BOOLEAN NOT NULL DEFAULT 0,
+            user_id TEXT NULL
         );"#,
     ))
     .await
@@ -98,6 +99,7 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
             anonymization_salt: "test_salt".into(),
             raw_retention_days: 30,
         },
+        oauth2: OAuth2Config::default(),
     }
 }
 

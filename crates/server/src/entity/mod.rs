@@ -2,3 +2,8 @@ pub mod alert;
 pub mod email_log;
 pub mod federation_stat_aggregate;
 pub mod federation_stat_raw;
+pub mod oauth2_authorization;
+pub mod oauth2_client;
+pub mod oauth2_identity;
+pub mod oauth2_token;
+pub mod oauth2_user;
