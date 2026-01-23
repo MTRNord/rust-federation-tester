@@ -3,12 +3,16 @@
 //! This module is organized into submodules:
 //! - `federation` - Federation tester endpoints (/api/federation/*)
 //! - `alerts` - Alert management endpoints (/api/alerts/*)
+//! - `alerts_v2` - v2 Alert management endpoints with OAuth2 (/api/v2/alerts/*)
+//! - `auth` - Authentication extractors for OAuth2
 //! - `health` - Health check endpoint (/healthz)
 //! - `metrics` - Prometheus metrics endpoint (/metrics)
 //! - `oauth2` - OAuth2 authentication endpoints (/oauth2/*)
 //! - `openapi` - OpenAPI/Utoipa configuration
 
 pub mod alerts;
+pub mod alerts_v2;
+pub mod auth;
 pub mod debug;
 pub mod federation;
 pub mod health;
@@ -68,8 +72,10 @@ pub async fn start_webserver<P: ConnectionProvider>(
             app_resources.db.clone(),
             &app_resources.config.oauth2,
         );
-        router = router.nest("/oauth2", oauth2::router(oauth2_state));
-        tracing::info!("OAuth2 endpoints enabled at /oauth2/*");
+        router = router
+            .nest("/oauth2", oauth2::router(oauth2_state))
+            .nest("/api/v2/alerts", alerts_v2::router());
+        tracing::info!("OAuth2 endpoints enabled at /oauth2/* and /api/v2/alerts/*");
     }
 
     // Apply middleware layers and finalize router

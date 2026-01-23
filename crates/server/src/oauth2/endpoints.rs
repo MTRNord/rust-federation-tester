@@ -641,6 +641,8 @@ pub async fn openid_configuration(State(state): State<OAuth2State>) -> Json<Open
             "openid".to_string(),
             "profile".to_string(),
             "email".to_string(),
+            "alerts:read".to_string(),
+            "alerts:write".to_string(),
         ],
         token_endpoint_auth_methods_supported: vec![
             "client_secret_basic".to_string(),
