@@ -1,17 +1,43 @@
-FROM --platform=$BUILDPLATFORM rustlang/rust:nightly AS builder
-ARG TARGETPLATFORM
+# Stage 1: Chef - Create a dependency-only layer for caching
+FROM --platform=$BUILDPLATFORM rustlang/rust:nightly AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
+
+# Stage 2: Plan - Analyze dependencies
+FROM chef AS planner
 COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Stage 3: Build - Build with cached dependencies
+FROM chef AS builder
+ARG TARGETPLATFORM
 
 # Install cross-compiler if needed for ARM
-RUN if [ \"$TARGETPLATFORM\" = \"linux/arm64\" ]; then \
-      apt-get update && apt-get install -y gcc-aarch64-linux-gnu; \
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+      apt-get update && apt-get install -y gcc-aarch64-linux-gnu && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Add Rust target for cross-compiling
+# Add Rust targets for cross-compiling
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
-# Build for the target platform
+# Copy recipe and build dependencies only (this layer gets cached!)
+COPY --from=planner /app/recipe.json recipe.json
+
+# Build dependencies based on target platform
+RUN case "$TARGETPLATFORM" in \
+      "linux/amd64") TARGET_TRIPLE=x86_64-unknown-linux-gnu; \
+        cargo chef cook --release --target $TARGET_TRIPLE --recipe-path recipe.json ;; \
+      "linux/arm64") TARGET_TRIPLE=aarch64-unknown-linux-gnu; \
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+        CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+        cargo chef cook --release --target $TARGET_TRIPLE --recipe-path recipe.json ;; \
+      *) echo "Unsupported platform: $TARGETPLATFORM"; exit 1 ;; \
+    esac
+
+# Copy source and build the actual project (dependencies already cached)
+COPY . .
+
 RUN case "$TARGETPLATFORM" in \
       "linux/amd64") TARGET_TRIPLE=x86_64-unknown-linux-gnu; \
         cargo build --release --package rust-federation-tester --target $TARGET_TRIPLE && \
@@ -30,14 +56,15 @@ RUN case "$TARGETPLATFORM" in \
 
 # Copy the binaries to a common location
 RUN mkdir -p /app/target/dist
-RUN case \"$TARGETPLATFORM\" in \
-      \"linux/amd64\") TARGET_TRIPLE=x86_64-unknown-linux-gnu ;; \
-      \"linux/arm64\") TARGET_TRIPLE=aarch64-unknown-linux-gnu ;; \
-      *) echo \"Unsupported platform: $TARGETPLATFORM\"; exit 1 ;; \
+RUN case "$TARGETPLATFORM" in \
+      "linux/amd64") TARGET_TRIPLE=x86_64-unknown-linux-gnu ;; \
+      "linux/arm64") TARGET_TRIPLE=aarch64-unknown-linux-gnu ;; \
+      *) echo "Unsupported platform: $TARGETPLATFORM"; exit 1 ;; \
     esac && \
     cp /app/target/$TARGET_TRIPLE/release/rust-federation-tester /app/target/dist/rust-federation-tester && \
     cp /app/target/$TARGET_TRIPLE/release/migration /app/target/dist/migration
 
+# Stage 4: Runtime - Minimal final image
 FROM debian:trixie-slim
 ARG TARGETPLATFORM
 

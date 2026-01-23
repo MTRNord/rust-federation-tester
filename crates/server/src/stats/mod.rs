@@ -1,7 +1,6 @@
 //! Statistics collection & anonymization (per-request opt-in based)
 use crate::AppResources;
 use blake3::Hasher;
-use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait,
@@ -231,7 +230,6 @@ pub fn spawn_retention_task(resources: std::sync::Arc<AppResources>) {
     });
 }
 
-static ANON_CACHE: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
 static PROM_CACHE: Lazy<RwLock<PromCache>> = Lazy::new(|| {
     RwLock::new(PromCache {
         generated_at: Instant::now() - Duration::from_secs(3600),
@@ -246,30 +244,18 @@ struct PromCache {
 
 /// Compute a stable anonymized id for a server name using the provided salt.
 /// Returns None if salt is empty (feature disabled for anonymized export).
+/// Note: blake3 is extremely fast (~1ns per hash), so no caching needed.
 #[tracing::instrument(skip(salt, server_name))]
 pub fn stable_anon_id(salt: &str, server_name: &str) -> Option<String> {
     if salt.is_empty() {
         return None;
-    }
-    // Include salt in the cache key so different salts produce different anonymized ids
-    let key = format!("{}::{}", salt, server_name);
-    if let Some(existing) = ANON_CACHE.get(&key) {
-        return Some(existing.clone());
     }
     let mut hasher = Hasher::new();
     hasher.update(salt.as_bytes());
     hasher.update(b"::");
     hasher.update(server_name.as_bytes());
     let hash = hasher.finalize();
-    let hex = hash.to_hex().to_string();
-    ANON_CACHE.insert(key, hex.clone());
-    Some(hex)
-}
-
-/// Clear the anonymization cache (e.g. if salt changes at runtime)
-#[tracing::instrument()]
-pub fn clear_cache() {
-    ANON_CACHE.clear();
+    Some(hash.to_hex().to_string())
 }
 
 #[tracing::instrument()]
@@ -310,18 +296,20 @@ fn escape_label(val: &str) -> String {
 }
 
 /// Build Prometheus exposition text for federation stats.
-/// Calculate unique features across all servers from raw data
+/// Calculate unique features across all servers from raw data (using latest entry per server)
 #[tracing::instrument(skip(db))]
 async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
     use crate::entity::federation_stat_raw as raw;
+    use sea_orm::QueryOrder;
 
-    // Get the most recent entry for each server (latest features state)
+    // Get entries ordered by timestamp DESC so newest entries come first
     let rows: Vec<(String, Option<String>, Option<String>)> = raw::Entity::find()
         .select_only()
         .column(raw::Column::ServerName)
         .column(raw::Column::UnstableFeaturesEnabled)
         .column(raw::Column::UnstableFeaturesAnnounced)
         .filter(raw::Column::UnstableFeaturesEnabled.is_not_null())
+        .order_by_desc(raw::Column::Ts)
         .into_tuple()
         .all(db)
         .await
@@ -331,9 +319,12 @@ async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
     let mut unique_announced_features: HashSet<String> = HashSet::new();
     let mut latest_per_server: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
 
-    // Get the latest features for each server
+    // Get the latest features for each server (first occurrence wins since ordered by ts DESC)
     for (server_name, enabled_json, announced_json) in rows {
-        latest_per_server.insert(server_name, (enabled_json, announced_json));
+        // Only insert if we haven't seen this server yet (i.e., keep the first/newest entry)
+        latest_per_server
+            .entry(server_name)
+            .or_insert((enabled_json, announced_json));
     }
 
     // Collect unique features across all servers
@@ -363,12 +354,13 @@ async fn calculate_unique_features(db: &DatabaseConnection) -> (i64, i64) {
     )
 }
 
-/// Build per-feature metrics by analyzing raw data
+/// Build per-feature metrics by analyzing raw data (using only the latest entry per server)
 #[tracing::instrument(skip(db))]
 async fn build_feature_metrics(db: &DatabaseConnection) -> String {
     use crate::entity::federation_stat_raw as raw;
+    use sea_orm::QueryOrder;
 
-    // Get all raw entries with unstable features data from the last 30 days
+    // Get raw entries ordered by timestamp DESC so newest entries come first
     let thirty_days_ago = OffsetDateTime::now_utc() - time::Duration::days(30);
     let rows: Vec<(String, Option<String>, Option<String>)> = raw::Entity::find()
         .select_only()
@@ -377,23 +369,31 @@ async fn build_feature_metrics(db: &DatabaseConnection) -> String {
         .column(raw::Column::UnstableFeaturesAnnounced)
         .filter(raw::Column::Ts.gte(thirty_days_ago))
         .filter(raw::Column::UnstableFeaturesEnabled.is_not_null())
+        .order_by_desc(raw::Column::Ts)
         .into_tuple()
         .all(db)
         .await
         .unwrap_or_default();
 
-    let mut feature_enabled_counts: HashMap<String, i32> = HashMap::new();
-    let mut feature_announced_counts: HashMap<String, i32> = HashMap::new();
+    // First, collect only the latest entry per server
+    let mut latest_per_server: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    for (server_name, enabled_json, announced_json) in rows {
+        // Only insert if we haven't seen this server yet (first = newest since ordered DESC)
+        latest_per_server
+            .entry(server_name)
+            .or_insert((enabled_json, announced_json));
+    }
+
+    // Now count features based on latest state per server
     let mut servers_with_feature_enabled: HashMap<String, HashSet<String>> = HashMap::new();
     let mut servers_with_feature_announced: HashMap<String, HashSet<String>> = HashMap::new();
 
-    for (server_name, enabled_json, announced_json) in rows {
+    for (server_name, (enabled_json, announced_json)) in latest_per_server {
         // Parse enabled features
         if let Some(enabled_str) = enabled_json
             && let Ok(enabled_features) = serde_json::from_str::<Vec<String>>(&enabled_str)
         {
             for feature in enabled_features {
-                *feature_enabled_counts.entry(feature.clone()).or_insert(0) += 1;
                 servers_with_feature_enabled
                     .entry(feature)
                     .or_default()
@@ -406,7 +406,6 @@ async fn build_feature_metrics(db: &DatabaseConnection) -> String {
             && let Ok(announced_features) = serde_json::from_str::<Vec<String>>(&announced_str)
         {
             for feature in announced_features {
-                *feature_announced_counts.entry(feature.clone()).or_insert(0) += 1;
                 servers_with_feature_announced
                     .entry(feature)
                     .or_default()
@@ -418,37 +417,31 @@ async fn build_feature_metrics(db: &DatabaseConnection) -> String {
     let mut buf = String::new();
 
     // Add per-feature enabled metrics
-    if !feature_enabled_counts.is_empty() {
+    if !servers_with_feature_enabled.is_empty() {
         buf.push_str("# HELP federation_unstable_feature_enabled_servers Count of servers with each unstable feature enabled.\n");
         buf.push_str("# TYPE federation_unstable_feature_enabled_servers gauge\n");
 
-        for (feature, _count) in feature_enabled_counts.iter() {
-            let servers = servers_with_feature_enabled
-                .get(feature)
-                .map(|s| s.len())
-                .unwrap_or(0);
+        for (feature, servers) in servers_with_feature_enabled.iter() {
             let feature_label = escape_label(feature);
             buf.push_str(&format!(
                 "federation_unstable_feature_enabled_servers{{feature=\"{}\"}} {}\n",
-                feature_label, servers
+                feature_label,
+                servers.len()
             ));
         }
     }
 
     // Add per-feature announced metrics
-    if !feature_announced_counts.is_empty() {
+    if !servers_with_feature_announced.is_empty() {
         buf.push_str("# HELP federation_unstable_feature_announced_servers Count of servers with each unstable feature announced.\n");
         buf.push_str("# TYPE federation_unstable_feature_announced_servers gauge\n");
 
-        for (feature, _count) in feature_announced_counts.iter() {
-            let servers = servers_with_feature_announced
-                .get(feature)
-                .map(|s| s.len())
-                .unwrap_or(0);
+        for (feature, servers) in servers_with_feature_announced.iter() {
             let feature_label = escape_label(feature);
             buf.push_str(&format!(
                 "federation_unstable_feature_announced_servers{{feature=\"{}\"}} {}\n",
-                feature_label, servers
+                feature_label,
+                servers.len()
             ));
         }
     }
@@ -531,10 +524,10 @@ pub async fn build_prometheus_metrics(resources: &AppResources) -> String {
     buf
 }
 
-/// Cached variant (TTL 5 seconds) to reduce DB load under frequent scrapes.
+/// Cached variant (TTL 30 seconds) to reduce DB load under frequent scrapes.
 #[tracing::instrument(skip(resources))]
 pub async fn build_prometheus_metrics_cached(resources: &AppResources) -> String {
-    const TTL: Duration = Duration::from_secs(5);
+    const TTL: Duration = Duration::from_secs(30);
     if !resources.config.statistics.enabled || !resources.config.statistics.prometheus_enabled {
         return String::new();
     }
@@ -747,7 +740,6 @@ mod tests {
     }
     #[test]
     fn test_stable_anon_id_same_for_same_inputs() {
-        clear_cache();
         let a = stable_anon_id("saltX", "example.org").unwrap();
         let b = stable_anon_id("saltX", "example.org").unwrap();
         assert_eq!(a, b);

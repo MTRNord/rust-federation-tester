@@ -5,6 +5,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Federation Alert: {{ server_name }} Recovered</title>
+    <!--[if mso]>
+    <noscript>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    </noscript>
+    <![endif]-->
 </head>
 
 <body>
@@ -14,50 +23,31 @@
         </div>
 
         <div class="email-body">
-            <h1>✅ Good News!</h1>
-
-            <div class="govuk-notification-banner govuk-notification-banner--success" role="alert"
-                aria-labelledby="govuk-notification-banner-title">
-                <div class="govuk-notification-banner__header">
-                    <h2 class="govuk-notification-banner__title" id="govuk-notification-banner-title">
-                        Success
-                    </h2>
-                </div>
-                <div class="govuk-notification-banner__content">
-                    <h3 class="govuk-notification-banner__heading">
-                        Your server has recovered
-                    </h3>
-                    <p class="govuk-body">Server <strong>{{ server_name }}</strong> is now passing federation health
-                        checks.</p>
+            <div class="govuk-panel govuk-panel--confirmation">
+                <h1 class="govuk-panel__title">Server recovered</h1>
+                <div class="govuk-panel__body">
+                    Server: <strong>{{ server_name }}</strong>
                 </div>
             </div>
 
-            <p>Your Matrix homeserver is federating successfully again. All tests are passing.</p>
+            <p class="govuk-body">Your Matrix homeserver is now passing federation health checks. All tests are successful.</p>
 
-            <a href="{{ check_url }}" class="cta-button">View Current Status</a>
+            <a href="{{ check_url }}" class="cta-button" role="button" draggable="false">
+                View current status
+            </a>
 
-            <div class="govuk-notification-banner" role="region" aria-labelledby="govuk-notification-banner-title-2">
-                <div class="govuk-notification-banner__header">
-                    <h2 class="govuk-notification-banner__title" id="govuk-notification-banner-title-2">
-                        Information
-                    </h2>
-                </div>
-                <div class="govuk-notification-banner__content">
-                    <h3 class="govuk-notification-banner__heading">
-                        What happens next?
-                    </h3>
-                    <p class="govuk-body">We'll continue monitoring your server and will notify you immediately if any
-                        issues arise again.</p>
-                </div>
+            <div class="govuk-inset-text">
+                <h2 class="govuk-heading-s">What happens next</h2>
+                <p class="govuk-body">We will continue monitoring your server and notify you immediately if any issues arise again.</p>
             </div>
 
-            <p>Thank you for using Matrix Federation Tester to keep your homeserver healthy.</p>
+            <p class="govuk-body">Thank you for using Matrix Federation Tester to keep your homeserver healthy.</p>
         </div>
 
         <div class="email-footer">
             <p><strong>Matrix Federation Tester</strong></p>
             <p>Automated monitoring for Matrix homeserver federation.</p>
-            <p><a href="{{ unsubscribe_url }}">Unsubscribe from alerts</a></p>
+            <p><a href="{{ unsubscribe_url }}">Unsubscribe from these alerts</a></p>
         </div>
     </div>
 </body>
