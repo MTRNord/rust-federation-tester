@@ -49,9 +49,14 @@ fn is_allowed(resources: &AppResources, addr: &SocketAddr, headers: &HeaderMap) 
     path = "/email/verification",
     tag = DEBUG_TAG,
     operation_id = "Preview Verification Email",
+    summary = "Preview verification email template",
+    description = "Renders the email verification template with sample data for preview purposes.\n\n\
+                   **Access control:** Only accessible from allowed networks (localhost, internal IPs). \
+                   Configure allowed networks via `debug_allowed_nets` in the server configuration.",
     responses(
-        (status = 200, description = "HTML preview of verification email"),
-        (status = 403, description = "Access denied"),
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
     )
 )]
 pub async fn preview_verification_email(
@@ -84,9 +89,15 @@ pub async fn preview_verification_email(
     path = "/email/failure",
     tag = DEBUG_TAG,
     operation_id = "Preview Failure Email",
+    summary = "Preview failure notification email template",
+    description = "Renders the federation failure notification email template with sample data.\n\n\
+                   Shows the email users receive when their monitored server has federation issues. \
+                   Template includes reminder count and unsubscribe link.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
     responses(
-        (status = 200, description = "HTML preview of failure email"),
-        (status = 403, description = "Access denied"),
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
     )
 )]
 pub async fn preview_failure_email(
@@ -123,9 +134,14 @@ pub async fn preview_failure_email(
     path = "/email/recovery",
     tag = DEBUG_TAG,
     operation_id = "Preview Recovery Email",
+    summary = "Preview recovery notification email template",
+    description = "Renders the federation recovery notification email template with sample data.\n\n\
+                   Shows the email users receive when their monitored server recovers from federation issues.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
     responses(
-        (status = 200, description = "HTML preview of recovery email"),
-        (status = 403, description = "Access denied"),
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
     )
 )]
 pub async fn preview_recovery_email(

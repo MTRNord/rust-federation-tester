@@ -66,10 +66,20 @@ pub fn router<P: ConnectionProvider>(state: AppState<P>, debug_mode: bool) -> Op
     params(ApiParams),
     tag = FEDERATION_TAG,
     operation_id = "Get Federation Report as JSON",
+    summary = "Get detailed federation test report",
+    description = "Performs a comprehensive Matrix federation compatibility test for the specified server and returns a detailed JSON report.\n\n\
+                   **Tests performed:**\n\
+                   - DNS resolution (SRV records, well-known delegation)\n\
+                   - TLS certificate validation\n\
+                   - Server signing key verification\n\
+                   - Matrix Server-Server API version check\n\
+                   - Connection and response timing\n\n\
+                   **Statistics opt-in:** Set `stats_opt_in=true` to contribute anonymized statistics \
+                   that help improve the service. No personally identifiable information is collected.",
     responses(
-        (status = 200, description = "JSON report of the federation test", body = Root, content_type = "application/json"),
-        (status = 400, description = "Invalid request parameters", content_type = "application/json"),
-        (status = 500, description = "Internal server error", content_type = "application/json")
+        (status = 200, description = "Detailed federation test report with all check results", body = Root, content_type = "application/json"),
+        (status = 400, description = "Invalid request (e.g., missing or invalid server_name)", content_type = "application/json"),
+        (status = 500, description = "Internal server error during test execution", content_type = "application/json")
     ),
 )]
 async fn get_report<P: ConnectionProvider>(
@@ -169,10 +179,17 @@ async fn get_report<P: ConnectionProvider>(
     params(ApiParams),
     tag = FEDERATION_TAG,
     operation_id = "Check Federation Status",
+    summary = "Quick federation status check",
+    description = "Performs a quick federation compatibility check and returns a simple status.\n\n\
+                   **Response values:**\n\
+                   - `GOOD`: The server passes basic federation checks\n\
+                   - `BAD`: The server has federation issues\n\n\
+                   This endpoint is useful for monitoring and health checks. \
+                   For detailed diagnostics, use the `/report` endpoint instead.",
     responses(
-        (status = 200, description = "Returns 'GOOD' if federation is ok, 'BAD' otherwise", body = inline(String), example = "GOOD"),
-        (status = 400, description = "Invalid request parameters"),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Federation status: 'GOOD' or 'BAD'", body = inline(String), content_type = "text/plain", example = "GOOD"),
+        (status = 400, description = "Invalid request (e.g., missing server_name parameter)"),
+        (status = 500, description = "Internal server error during test")
     ),
 )]
 async fn get_fed_ok<P: ConnectionProvider>(

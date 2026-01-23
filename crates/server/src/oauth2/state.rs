@@ -34,6 +34,17 @@ impl OAuth2State {
         }
     }
 
+    /// Create OAuth2State from application config
+    pub fn from_config(db: Arc<DatabaseConnection>, config: &crate::config::OAuth2Config) -> Self {
+        Self {
+            registrar: DbRegistrar::new(db.clone()),
+            db,
+            issuer_url: config.issuer_url.clone(),
+            access_token_lifetime: config.access_token_lifetime,
+            refresh_token_lifetime: config.refresh_token_lifetime,
+        }
+    }
+
     /// Generate a secure random token
     pub fn generate_token() -> String {
         use base64::Engine;

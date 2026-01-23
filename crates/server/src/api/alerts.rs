@@ -76,11 +76,23 @@ pub fn router(alert_state: AlertAppState) -> OpenApiRouter {
     path = "/register",
     operation_id = "Register Alert",
     tag = ALERTS_TAG,
-    request_body = RegisterAlert,
+    summary = "Register a new federation alert subscription",
+    description = "Creates a new alert subscription to monitor a Matrix server's federation status.\n\n\
+                   **Process:**\n\
+                   1. A verification email is sent to the provided address\n\
+                   2. The user must click the verification link to activate the alert\n\
+                   3. Once verified, the system periodically checks the server's federation status\n\
+                   4. If issues are detected, notification emails are sent\n\n\
+                   **Note:** If an alert already exists for this email/server combination and is verified, \
+                   no new verification email is sent.",
+    request_body(
+        content = RegisterAlert,
+        description = "Alert subscription details"
+    ),
     responses(
-        (status = 200, description = "Verification email sent", content_type = "application/json" , example = json!({"status": "verification email sent"})),
-        (status = 400, description = "Invalid request parameters", content_type = "application/json"),
-        (status = 500, description = "Internal server error", content_type = "application/json")
+        (status = 200, description = "Verification email sent successfully", content_type = "application/json", example = json!({"status": "verification email sent"})),
+        (status = 400, description = "Invalid request (e.g., invalid email format or server name)", content_type = "application/json"),
+        (status = 500, description = "Internal server error (e.g., email delivery failed)", content_type = "application/json")
     )
 )]
 async fn register_alert(
@@ -272,19 +284,25 @@ struct AlertsList {
     path = "/verify",
     tag = ALERTS_TAG,
     operation_id = "Verify Alert Email",
-    params(VerifyParams),
+    summary = "Verify email and complete pending action",
+    description = "Verifies an email address and completes the pending action (register, list, or delete alert).\n\n\
+                   **Actions:**\n\
+                   - `register`: Activates the alert subscription and starts monitoring\n\
+                   - `list`: Returns all alert subscriptions for the verified email\n\
+                   - `delete`: Removes the specified alert subscription\n\n\
+                   **Token:** The JWT token is sent via email and expires after 1 hour.",
     params(
         (
             "token" = String,
             Query,
-            description = "JWT token for email verification",
-            example = "123e4567-e89b-12d3-a456-426"
+            description = "JWT token received via email. Contains the action type and associated data.",
+            example = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
         ),
     ),
     responses(
-        (status = 200, description = "Email verified successfully", content_type = "application/json", body = VerificatonResponseData),
-        (status = 200, description = "List of alerts for the email", content_type = "application/json", body = AlertsList),
+        (status = 200, description = "Action completed successfully. Response body depends on action type.", content_type = "application/json"),
         (status = 400, description = "Invalid or expired token", content_type = "application/json"),
+        (status = 404, description = "Alert not found (for delete action)", content_type = "application/json"),
         (status = 500, description = "Internal server error", content_type = "application/json")
     )
 )]
@@ -442,9 +460,21 @@ async fn verify_alert(
     path = "/list",
     tag = ALERTS_TAG,
     operation_id = "List Alerts",
+    summary = "Request list of alert subscriptions",
+    description = "Requests a list of all alert subscriptions for an email address.\n\n\
+                   **Process:**\n\
+                   1. A verification email is sent to the provided address\n\
+                   2. The user clicks the verification link\n\
+                   3. The list of alerts is returned in the verification response\n\n\
+                   This two-step process ensures only the email owner can view their subscriptions.",
+    request_body(
+        content = ListAlerts,
+        description = "Email address to list alerts for"
+    ),
     responses(
-        (status = 200, description = "Verification email has successfully been sent", content_type = "application/json", example = json!({"status": "verification email sent"})),
-        (status = 500, description = "Internal server error", content_type = "application/json")
+        (status = 200, description = "Verification email sent successfully", content_type = "application/json", example = json!({"status": "verification email sent"})),
+        (status = 400, description = "Invalid email format", content_type = "application/json"),
+        (status = 500, description = "Internal server error (e.g., email delivery failed)", content_type = "application/json")
     )
 )]
 async fn list_alerts(
@@ -524,18 +554,25 @@ The Federation Tester Team"#
     path = "/{id}",
     tag = ALERTS_TAG,
     operation_id = "Delete Alert",
+    summary = "Request deletion of an alert subscription",
+    description = "Initiates the deletion process for an alert subscription.\n\n\
+                   **Process:**\n\
+                   1. A verification email is sent to the alert's registered email address\n\
+                   2. The user clicks the verification link to confirm deletion\n\
+                   3. The alert is permanently removed and monitoring stops\n\n\
+                   This two-step process prevents unauthorized deletion of alerts.",
     params(
         (
             "id" = i32,
             Path,
-            description = "ID of the alert to delete",
-            example = "123e4567-e89b-12d3-a456-426"
+            description = "Numeric ID of the alert subscription to delete",
+            example = 42
         ),
     ),
     responses(
-        (status = 200, description = "Alert deletion verification flow has been started", content_type = "application/json", example = json!({"status": "verification email sent"})),
-        (status = 404, description = "Alert not found", content_type = "application/json"),
-        (status = 500, description = "Internal server error", content_type = "application/json")
+        (status = 200, description = "Deletion verification email sent", content_type = "application/json", example = json!({"status": "verification email sent"})),
+        (status = 404, description = "Alert with the specified ID not found", content_type = "application/json"),
+        (status = 500, description = "Internal server error (e.g., email delivery failed)", content_type = "application/json")
     )
 )]
 async fn delete_alert(

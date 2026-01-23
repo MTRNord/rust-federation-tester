@@ -5,6 +5,7 @@
 //! - `alerts` - Alert management endpoints (/api/alerts/*)
 //! - `health` - Health check endpoint (/healthz)
 //! - `metrics` - Prometheus metrics endpoint (/metrics)
+//! - `oauth2` - OAuth2 authentication endpoints (/oauth2/*)
 //! - `openapi` - OpenAPI/Utoipa configuration
 
 pub mod alerts;
@@ -13,6 +14,9 @@ pub mod federation;
 pub mod health;
 pub mod metrics;
 pub mod openapi;
+
+// Re-export oauth2 module from crate root
+pub use crate::oauth2;
 
 // Re-export for backward compatibility with existing code
 pub use alerts::AlertAppState;
@@ -48,16 +52,28 @@ pub async fn start_webserver<P: ConnectionProvider>(
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
-    // Build the router and attach middleware layers. The propagate_trace middleware is applied
-    // so incoming trace headers are recorded and propagated back to clients when available.
-    let (router, api) = OpenApiRouter::with_openapi(openapi::ApiDoc::openapi())
+    // Build the base router with core endpoints
+    let mut router = OpenApiRouter::with_openapi(openapi::ApiDoc::openapi())
         .nest(
             "/api/federation",
             federation::router::<P>(app_state, debug_mode),
         )
         .nest("/api/alerts", alerts::router(alert_state))
         .nest("/debug", debug::router())
-        .routes(routes!(metrics::metrics))
+        .routes(routes!(metrics::metrics));
+
+    // Conditionally add OAuth2 endpoints if enabled
+    if app_resources.config.oauth2.enabled {
+        let oauth2_state = oauth2::OAuth2State::from_config(
+            app_resources.db.clone(),
+            &app_resources.config.oauth2,
+        );
+        router = router.nest("/oauth2", oauth2::router(oauth2_state));
+        tracing::info!("OAuth2 endpoints enabled at /oauth2/*");
+    }
+
+    // Apply middleware layers and finalize router
+    let (router, api) = router
         // include trace context as header into the response
         .layer(OtelInResponseLayer)
         // start OpenTelemetry trace on incoming request

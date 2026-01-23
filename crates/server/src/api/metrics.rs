@@ -10,9 +10,17 @@ use crate::api::health::MISC_TAG;
     path = "/metrics",
     tag = MISC_TAG,
     operation_id = "Prometheus Metrics",
+    summary = "Get Prometheus metrics",
+    description = "Returns anonymized federation statistics in Prometheus text exposition format.\n\n\
+                   **Available metrics:**\n\
+                   - `federation_tester_checks_total`: Total federation checks performed\n\
+                   - `federation_tester_success_rate`: Success rate by server (anonymized)\n\
+                   - `federation_tester_features_enabled`: Count of servers with specific features\n\n\
+                   **Configuration required:** Both `statistics.enabled` and `statistics.prometheus_enabled` \
+                   must be `true` in the server configuration. Results are cached for performance.",
     responses(
-        (status = 200, description = "Prometheus metrics in text exposition format", body = String, content_type = "text/plain"),
-        (status = 404, description = "Metrics disabled via configuration")
+        (status = 200, description = "Prometheus metrics in text exposition format", body = String, content_type = "text/plain; version=0.0.4"),
+        (status = 404, description = "Metrics endpoint disabled (statistics.enabled or statistics.prometheus_enabled is false)")
     )
 )]
 pub async fn metrics(

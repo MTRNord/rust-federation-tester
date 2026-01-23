@@ -36,17 +36,26 @@ pub fn router(state: OAuth2State) -> OpenApiRouter {
 // Request/Response Types
 // =============================================================================
 
+/// OAuth2 authorization request parameters.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AuthorizeRequest {
+    /// Must be "code" for Authorization Code flow
     pub response_type: String,
+    /// Client identifier issued during registration
     pub client_id: String,
+    /// Redirect URI (must match registered URI)
     pub redirect_uri: Option<String>,
+    /// Space-separated list of requested scopes
     pub scope: Option<String>,
+    /// Opaque value for CSRF protection
     pub state: Option<String>,
+    /// String for replay protection (included in ID token)
     pub nonce: Option<String>,
+    /// PKCE code challenge (base64url-encoded)
     pub code_challenge: Option<String>,
+    /// PKCE method: "S256" or "plain"
     pub code_challenge_method: Option<String>,
-    /// Login hint (email) - used for magic link flow
+    /// Email hint to pre-fill login form
     pub login_hint: Option<String>,
 }
 
@@ -126,19 +135,27 @@ pub struct OpenIdConfiguration {
     path = "/authorize",
     tag = OAUTH2_TAG,
     operation_id = "OAuth2 Authorize",
+    summary = "Initiate OAuth2 authorization flow",
+    description = "Starts the OAuth2 Authorization Code flow. The user is redirected to the login page \
+                   where they verify their identity via email magic link. After verification, the user \
+                   is redirected back to the client's redirect_uri with an authorization code.\n\n\
+                   **PKCE Support:** For public clients (SPAs), use code_challenge and code_challenge_method \
+                   parameters. S256 method is recommended.\n\n\
+                   **Supported scopes:** `openid`, `profile`, `email`",
     params(
-        ("response_type" = String, Query, description = "Must be 'code'"),
-        ("client_id" = String, Query, description = "Client ID"),
-        ("redirect_uri" = Option<String>, Query, description = "Redirect URI"),
-        ("scope" = Option<String>, Query, description = "Requested scopes"),
-        ("state" = Option<String>, Query, description = "State parameter"),
-        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge"),
-        ("code_challenge_method" = Option<String>, Query, description = "PKCE method (S256 or plain)"),
-        ("login_hint" = Option<String>, Query, description = "Email hint for login"),
+        ("response_type" = String, Query, description = "OAuth2 response type. Must be `code` for Authorization Code flow."),
+        ("client_id" = String, Query, description = "The client identifier issued during client registration."),
+        ("redirect_uri" = Option<String>, Query, description = "URI to redirect the user after authorization. Must match a registered redirect URI for the client."),
+        ("scope" = Option<String>, Query, description = "Space-separated list of requested scopes (e.g., `openid profile email`)."),
+        ("state" = Option<String>, Query, description = "Opaque value for CSRF protection. Returned unchanged in the redirect."),
+        ("nonce" = Option<String>, Query, description = "String value for replay protection. Included in the ID token if provided."),
+        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge. Required for public clients. Base64url-encoded SHA256 hash of code_verifier."),
+        ("code_challenge_method" = Option<String>, Query, description = "PKCE challenge method. Either `S256` (recommended) or `plain`."),
+        ("login_hint" = Option<String>, Query, description = "Email address hint to pre-fill the login form."),
     ),
     responses(
-        (status = 302, description = "Redirect to login or back to client"),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 303, description = "Redirect to login page or back to client with authorization code"),
+        (status = 400, description = "Invalid request parameters (e.g., unknown client_id, invalid redirect_uri)", body = ErrorResponse),
     )
 )]
 pub async fn authorize(
@@ -259,11 +276,24 @@ pub async fn authorize(
     path = "/token",
     tag = OAUTH2_TAG,
     operation_id = "OAuth2 Token",
-    request_body(content = TokenRequest, content_type = "application/x-www-form-urlencoded"),
+    summary = "Exchange authorization code or refresh token for access token",
+    description = "Exchanges an authorization code for tokens, or refreshes an existing access token.\n\n\
+                   **Supported grant types:**\n\
+                   - `authorization_code`: Exchange an authorization code for access and refresh tokens\n\
+                   - `refresh_token`: Use a refresh token to obtain a new access token\n\n\
+                   **Client authentication:**\n\
+                   - Public clients: Include `client_id` in the request body\n\
+                   - Confidential clients: Use HTTP Basic auth or include `client_id` and `client_secret` in the body\n\n\
+                   **PKCE:** If the authorization request included a code_challenge, you must provide the code_verifier.",
+    request_body(
+        content = TokenRequest,
+        content_type = "application/x-www-form-urlencoded",
+        description = "Token request parameters"
+    ),
     responses(
-        (status = 200, description = "Token response", body = TokenResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 401, description = "Invalid client credentials", body = ErrorResponse),
+        (status = 200, description = "Tokens issued successfully", body = TokenResponse),
+        (status = 400, description = "Invalid request (missing parameters, invalid code, PKCE mismatch)", body = ErrorResponse),
+        (status = 401, description = "Invalid client credentials or unknown client", body = ErrorResponse),
     )
 )]
 pub async fn token(
@@ -361,10 +391,22 @@ pub async fn token(
     path = "/revoke",
     tag = OAUTH2_TAG,
     operation_id = "OAuth2 Revoke Token",
-    request_body(content = RevokeRequest, content_type = "application/x-www-form-urlencoded"),
+    summary = "Revoke an access or refresh token",
+    description = "Revokes an access token or refresh token, preventing further use. \
+                   Implements RFC 7009 (OAuth 2.0 Token Revocation).\n\n\
+                   **Behavior:**\n\
+                   - Returns 200 OK even if the token was already revoked or doesn't exist (per RFC 7009)\n\
+                   - When `token_type_hint` is provided, tries that token type first for efficiency\n\
+                   - Unknown `token_type_hint` values are ignored per RFC 7009\n\n\
+                   **Note:** Revoking a refresh token also invalidates associated access tokens.",
+    request_body(
+        content = RevokeRequest,
+        content_type = "application/x-www-form-urlencoded",
+        description = "Token revocation request"
+    ),
     responses(
-        (status = 200, description = "Token revoked"),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 200, description = "Token revoked successfully (or was already invalid)"),
+        (status = 400, description = "Invalid request (missing token parameter)", body = ErrorResponse),
     )
 )]
 pub async fn revoke(
@@ -456,9 +498,20 @@ pub async fn revoke(
     path = "/userinfo",
     tag = OAUTH2_TAG,
     operation_id = "OpenID Connect UserInfo",
+    summary = "Get authenticated user's profile information",
+    description = "Returns claims about the authenticated user. Requires a valid access token with the `openid` scope.\n\n\
+                   **Returned claims depend on granted scopes:**\n\
+                   - `openid`: `sub` (subject identifier)\n\
+                   - `email`: `email`, `email_verified`\n\
+                   - `profile`: `name`\n\n\
+                   **Authentication:** Include the access token as a Bearer token in the Authorization header.",
+    security(
+        ("bearer_auth" = [])
+    ),
     responses(
-        (status = 200, description = "User info", body = UserInfoResponse),
-        (status = 401, description = "Invalid or missing token"),
+        (status = 200, description = "User profile information", body = UserInfoResponse),
+        (status = 401, description = "Missing or invalid access token", body = ErrorResponse),
+        (status = 403, description = "Token does not have required `openid` scope", body = ErrorResponse),
     )
 )]
 pub async fn userinfo(State(state): State<OAuth2State>, headers: HeaderMap) -> Response {
@@ -558,8 +611,17 @@ pub async fn userinfo(State(state): State<OAuth2State>, headers: HeaderMap) -> R
     path = "/.well-known/openid-configuration",
     tag = OAUTH2_TAG,
     operation_id = "OpenID Connect Discovery",
+    summary = "OpenID Connect Discovery document",
+    description = "Returns the OpenID Connect Discovery document containing metadata about the OAuth2/OIDC provider.\n\n\
+                   This document provides:\n\
+                   - Endpoint URLs (authorization, token, userinfo, revocation)\n\
+                   - Supported grant types and response types\n\
+                   - Supported scopes and claims\n\
+                   - Supported authentication methods\n\
+                   - PKCE support information\n\n\
+                   Clients should use this endpoint to dynamically discover the provider's capabilities.",
     responses(
-        (status = 200, description = "OpenID Configuration", body = OpenIdConfiguration),
+        (status = 200, description = "OpenID Connect configuration document", body = OpenIdConfiguration),
     )
 )]
 pub async fn openid_configuration(State(state): State<OAuth2State>) -> Json<OpenIdConfiguration> {
