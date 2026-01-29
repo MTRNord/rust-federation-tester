@@ -29,7 +29,7 @@ pub async fn send_failure_email(
     alert_id: i32,
     failure_count: i32,
 ) {
-    let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
+    let check_url = format!("{}results?serverName={}", config.frontend_url, server_name);
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;

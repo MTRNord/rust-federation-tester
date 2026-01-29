@@ -168,7 +168,7 @@ mod tests {
     fn test_failure_email_template() {
         let template = FailureEmailTemplate {
             server_name: "example.org".to_string(),
-            check_url: "https://test.example.com/?serverName=example.org".to_string(),
+            check_url: "https://test.example.com/results?serverName=example.org".to_string(),
             is_reminder: false,
             failure_count: 1,
             reminder_interval: "12 hours".to_string(),
@@ -187,7 +187,7 @@ mod tests {
     fn test_recovery_email_template() {
         let template = RecoveryEmailTemplate {
             server_name: "example.org".to_string(),
-            check_url: "https://test.example.com/?serverName=example.org".to_string(),
+            check_url: "https://test.example.com/results?serverName=example.org".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         };
 
