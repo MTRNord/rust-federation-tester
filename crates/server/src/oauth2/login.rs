@@ -265,16 +265,17 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
     // Authentication successful - redirect to consent screen
     tracing::info!(email = %email, client_id = %form.client_id, "User authenticated successfully");
 
-    let consent_url = super::consent::create_consent_redirect(
-        &user,
-        &form.client_id,
-        &form.redirect_uri,
-        &form.scope,
-        &form.state,
-        form.nonce.as_deref(),
-        form.code_challenge.as_deref(),
-        form.code_challenge_method.as_deref(),
-    );
+    let consent_url =
+        super::consent::create_consent_redirect(super::consent::ConsentRedirectParams {
+            user: &user,
+            client_id: &form.client_id,
+            redirect_uri: &form.redirect_uri,
+            scope: &form.scope,
+            state: &form.state,
+            nonce: form.nonce.as_deref(),
+            code_challenge: form.code_challenge.as_deref(),
+            code_challenge_method: form.code_challenge_method.as_deref(),
+        });
 
     Redirect::to(&consent_url).into_response()
 }

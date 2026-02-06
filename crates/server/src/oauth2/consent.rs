@@ -83,32 +83,6 @@ pub struct ConsentData {
 }
 
 impl ConsentData {
-    /// Create a new consent data with 10 minute expiry.
-    pub fn new(
-        user_id: String,
-        user_email: String,
-        client_id: String,
-        redirect_uri: String,
-        scope: String,
-        state: String,
-        nonce: Option<String>,
-        code_challenge: Option<String>,
-        code_challenge_method: Option<String>,
-    ) -> Self {
-        Self {
-            user_id,
-            user_email,
-            client_id,
-            redirect_uri,
-            scope,
-            state,
-            nonce,
-            code_challenge,
-            code_challenge_method,
-            expires_at: (OffsetDateTime::now_utc() + time::Duration::minutes(10)).unix_timestamp(),
-        }
-    }
-
     /// Encode consent data to a base64 token.
     pub fn encode(&self) -> String {
         let json = serde_json::to_string(self).unwrap_or_default();
@@ -385,28 +359,32 @@ fn render_error(message: &str) -> Response {
     Html(html).into_response()
 }
 
+/// Parameters for creating a consent redirect.
+pub struct ConsentRedirectParams<'a> {
+    pub user: &'a oauth2_user::Model,
+    pub client_id: &'a str,
+    pub redirect_uri: &'a str,
+    pub scope: &'a str,
+    pub state: &'a str,
+    pub nonce: Option<&'a str>,
+    pub code_challenge: Option<&'a str>,
+    pub code_challenge_method: Option<&'a str>,
+}
+
 /// Helper to create a consent token and redirect URL for use after authentication.
-pub fn create_consent_redirect(
-    user: &oauth2_user::Model,
-    client_id: &str,
-    redirect_uri: &str,
-    scope: &str,
-    state: &str,
-    nonce: Option<&str>,
-    code_challenge: Option<&str>,
-    code_challenge_method: Option<&str>,
-) -> String {
-    let consent_data = ConsentData::new(
-        user.id.clone(),
-        user.email.clone(),
-        client_id.to_string(),
-        redirect_uri.to_string(),
-        scope.to_string(),
-        state.to_string(),
-        nonce.map(String::from),
-        code_challenge.map(String::from),
-        code_challenge_method.map(String::from),
-    );
+pub fn create_consent_redirect(params: ConsentRedirectParams<'_>) -> String {
+    let consent_data = ConsentData {
+        user_id: params.user.id.clone(),
+        user_email: params.user.email.clone(),
+        client_id: params.client_id.to_string(),
+        redirect_uri: params.redirect_uri.to_string(),
+        scope: params.scope.to_string(),
+        state: params.state.to_string(),
+        nonce: params.nonce.map(String::from),
+        code_challenge: params.code_challenge.map(String::from),
+        code_challenge_method: params.code_challenge_method.map(String::from),
+        expires_at: (OffsetDateTime::now_utc() + time::Duration::minutes(10)).unix_timestamp(),
+    };
 
     format!("/oauth2/consent?token={}", consent_data.encode())
 }
