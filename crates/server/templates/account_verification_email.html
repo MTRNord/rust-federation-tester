@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Verify Your Email - Federation Tester</title>
+    <!--[if mso]>
+    <noscript>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    </noscript>
+    <![endif]-->
+    <style type="text/css">
+        /* Reset styles */
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+        table { border-collapse: collapse !important; }
+        body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; }
+        a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
+        @media only screen and (max-width: 620px) {
+            .email-container { width: 100% !important; }
+            .mobile-padding { padding: 15px !important; }
+        }
+    </style>
+</head>
+
+<body style="margin: 0; padding: 0; background-color: #f3f2f1; font-family: Arial, sans-serif;">
+    <!-- Wrapper table for full-width background -->
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f3f2f1;">
+        <tr>
+            <td align="center" style="padding: 0;">
+                <!-- Main container -->
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" class="email-container" style="background-color: #ffffff;">
+                    <!-- Header - Blue rebrand -->
+                    <tr>
+                        <td style="padding: 20px; background-color: #1d70b8;">
+                            <span style="color: #ffffff; font-size: 24px; font-weight: 700; text-decoration: none;">Federation Tester</span>
+                        </td>
+                    </tr>
+                    <!-- Phase Banner -->
+                    <tr>
+                        <td style="padding: 10px 20px; background-color: #ffffff; border-bottom: 1px solid #b1b4b6;">
+                            <span style="display: inline-block; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #ffffff; background-color: #1d70b8; padding: 4px 8px 3px; margin-right: 10px;">Beta</span>
+                            <span style="color: #0b0c0c; font-size: 14px;">This is a community service for testing Matrix federation.</span>
+                        </td>
+                    </tr>
+                    <!-- Main Content -->
+                    <tr>
+                        <td style="padding: 40px 20px; background-color: #ffffff;" class="mobile-padding">
+                            <h1 style="color: #0b0c0c; font-size: 36px; font-weight: 700; line-height: 1.1; margin: 0 0 30px 0;">
+                                Verify your email address
+                            </h1>
+
+                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0 0 20px 0;">
+                                Thanks for creating an account with Federation Tester.
+                            </p>
+
+                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0 0 30px 0;">
+                                Click the button below to verify your email address and activate your account. This link is valid for 24 hours.
+                            </p>
+
+                            <!-- Button -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                                <tr>
+                                    <td style="background-color: #00703c;">
+                                        <a href="{{ verify_url }}" target="_blank" style="display: inline-block; padding: 12px 20px 10px 20px; font-size: 19px; font-weight: 700; color: #ffffff; text-decoration: none; box-shadow: 0 2px 0 #002d18;">
+                                            Verify email address
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Inset Box -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 30px 0;">
+                                <tr>
+                                    <td style="padding: 15px 15px 15px 25px; border-left: 10px solid #1d70b8; background-color: #ffffff;">
+                                        <h2 style="color: #0b0c0c; font-size: 24px; font-weight: 700; line-height: 1.25; margin: 0 0 15px 0;">
+                                            What happens after verification
+                                        </h2>
+                                        <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0;">
+                                            Once verified, you'll be able to sign in and manage your federation alert subscriptions.
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="color: #505a5f; font-size: 16px; line-height: 1.25; margin: 20px 0;">
+                                If the button does not work, copy and paste this link into your browser:
+                            </p>
+                            <p style="color: #1d70b8; font-size: 14px; line-height: 1.4; margin: 0 0 20px 0; word-break: break-all;">
+                                {{ verify_url }}
+                            </p>
+
+                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 30px 0 0 0;">
+                                If you did not create this account, you can safely ignore this email.
+                            </p>
+                        </td>
+                    </tr>
+                    <!-- Footer - Light blue rebrand with blue top border -->
+                    <tr>
+                        <td style="padding: 30px 20px; background-color: #f0f4f5; border-top: 10px solid #1d70b8;">
+                            <p style="color: #0b0c0c; font-size: 16px; line-height: 1.25; margin: 0;">
+                                Federation Tester is a community project for testing Matrix homeserver federation.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+
+</html>

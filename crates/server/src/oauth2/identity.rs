@@ -4,6 +4,16 @@
 //! - Linking existing alerts to OAuth2 users when they authenticate
 //! - Creating/linking external identity provider accounts
 //! - Managing the transition from magic links to OAuth2
+//!
+//! ## Security: Email Verification Requirement
+//!
+//! To prevent account takeover, legacy alerts are ONLY linked to an OAuth2 user
+//! when the user's email address has been verified. This prevents an attacker
+//! from creating an OAuth2 account with someone else's email and gaining access
+//! to their existing alerts.
+//!
+//! - `authenticate_user()` only links alerts if `email_verified = true`
+//! - `get_user_alerts()` only returns legacy alerts (user_id = NULL) if `email_verified = true`
 
 use crate::entity::{alert, oauth2_identity, oauth2_user};
 use sea_orm::{
@@ -60,6 +70,9 @@ impl IdentityService {
             name: Set(None),
             created_at: Set(now),
             last_login_at: Set(None),
+            password_hash: Set(None),
+            email_verification_token: Set(None),
+            email_verification_expires_at: Set(None),
         };
 
         user.insert(self.db.as_ref()).await
@@ -96,6 +109,18 @@ impl IdentityService {
     }
 
     /// Complete user authentication: get/create user, link alerts, update last login.
+    ///
+    /// ## Security: Email Verification Required for Linking
+    ///
+    /// Legacy alerts are ONLY linked to the OAuth2 user if `email_verified = true`.
+    /// This prevents account takeover where an attacker creates an OAuth2 account
+    /// with someone else's email to access their existing alerts.
+    ///
+    /// If email is not verified:
+    /// - User account is created/updated normally
+    /// - Legacy alerts are NOT linked (remain with user_id = NULL)
+    /// - User can only see alerts they create via OAuth2 (with their user_id)
+    /// - Once email is verified on a subsequent login, alerts will be linked
     #[tracing::instrument(skip(self))]
     pub async fn authenticate_user(
         &self,
@@ -105,8 +130,26 @@ impl IdentityService {
         // Get or create the user
         let user = self.get_or_create_user(email).await?;
 
-        // Link any existing alerts
-        self.link_existing_alerts(&user.id, email).await?;
+        // SECURITY: Only link legacy alerts if email is verified
+        // This prevents account takeover where an attacker creates an OAuth2 account
+        // with someone else's email to hijack their existing alerts
+        if email_verified {
+            let linked_count = self.link_existing_alerts(&user.id, email).await?;
+            if linked_count > 0 {
+                tracing::info!(
+                    email = email,
+                    user_id = %user.id,
+                    count = linked_count,
+                    "Linked legacy alerts to verified OAuth2 user"
+                );
+            }
+        } else {
+            tracing::debug!(
+                email = email,
+                user_id = %user.id,
+                "Skipping alert linking - email not verified (security protection)"
+            );
+        }
 
         // Update user record
         let mut active: oauth2_user::ActiveModel = user.clone().into();
@@ -219,21 +262,46 @@ impl IdentityService {
     }
 
     /// Get all alerts for a user (by user_id or email for backward compatibility).
+    ///
+    /// ## Security: Email Verification Required for Legacy Alerts
+    ///
+    /// Legacy alerts (those with `user_id = NULL`) are ONLY returned if
+    /// `email_verified = true`. This prevents an attacker from seeing another
+    /// user's alerts by creating an OAuth2 account with their email.
+    ///
+    /// - If `email_verified = true`: Returns alerts by user_id OR email match
+    /// - If `email_verified = false`: Returns ONLY alerts explicitly linked by user_id
     #[tracing::instrument(skip(self))]
     pub async fn get_user_alerts(
         &self,
         user_id: &str,
         email: &str,
+        email_verified: bool,
     ) -> Result<Vec<alert::Model>, sea_orm::DbErr> {
-        // Get alerts linked to user_id OR matching email (for backward compat)
-        alert::Entity::find()
-            .filter(
-                alert::Column::UserId.eq(user_id).or(alert::Column::Email
-                    .eq(email)
-                    .and(alert::Column::UserId.is_null())),
-            )
-            .all(self.db.as_ref())
-            .await
+        if email_verified {
+            // User's email is verified - return alerts by user_id OR email match (backward compat)
+            alert::Entity::find()
+                .filter(
+                    alert::Column::UserId.eq(user_id).or(alert::Column::Email
+                        .eq(email)
+                        .and(alert::Column::UserId.is_null())),
+                )
+                .all(self.db.as_ref())
+                .await
+        } else {
+            // SECURITY: Email not verified - only return alerts explicitly linked to this user_id
+            // This prevents account takeover where an attacker creates an OAuth2 account
+            // with someone else's email to view their alerts
+            tracing::debug!(
+                user_id = user_id,
+                email = email,
+                "Returning only user_id-linked alerts - email not verified (security protection)"
+            );
+            alert::Entity::find()
+                .filter(alert::Column::UserId.eq(user_id))
+                .all(self.db.as_ref())
+                .await
+        }
     }
 }
 
@@ -254,7 +322,10 @@ mod tests {
                 email_verified INTEGER NOT NULL DEFAULT 0,
                 name TEXT NULL,
                 created_at TEXT NOT NULL,
-                last_login_at TEXT NULL
+                last_login_at TEXT NULL,
+                password_hash TEXT NULL,
+                email_verification_token TEXT NULL,
+                email_verification_expires_at TEXT NULL
             );"#,
         ))
         .await
@@ -409,5 +480,161 @@ mod tests {
             .await
             .unwrap();
         assert!(not_found.is_none());
+    }
+
+    // =========================================================================
+    // Security Tests: Email Verification Required for Alert Linking
+    // =========================================================================
+
+    async fn create_legacy_alert(
+        db: &DatabaseConnection,
+        email: &str,
+        server_name: &str,
+    ) -> alert::Model {
+        let now = OffsetDateTime::now_utc();
+        let alert = alert::ActiveModel {
+            email: Set(email.to_string()),
+            server_name: Set(server_name.to_string()),
+            verified: Set(true),
+            magic_token: Set(String::new()),
+            created_at: Set(now),
+            user_id: Set(None), // Legacy alert - no user_id
+            ..Default::default()
+        };
+        alert
+            .insert(db)
+            .await
+            .expect("Failed to create legacy alert")
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_user_links_alerts_when_verified() {
+        let db = setup_test_db().await;
+        let service = IdentityService::new(db.clone());
+
+        // Create a legacy alert
+        create_legacy_alert(db.as_ref(), "test@example.com", "matrix.org").await;
+
+        // Authenticate with verified email
+        let user = service
+            .authenticate_user("test@example.com", true)
+            .await
+            .unwrap();
+
+        // Alert should be linked
+        let alerts = alert::Entity::find()
+            .filter(alert::Column::Email.eq("test@example.com"))
+            .all(db.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].user_id, Some(user.id));
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_user_does_not_link_alerts_when_unverified() {
+        let db = setup_test_db().await;
+        let service = IdentityService::new(db.clone());
+
+        // Create a legacy alert
+        create_legacy_alert(db.as_ref(), "test@example.com", "matrix.org").await;
+
+        // Authenticate with unverified email
+        let _user = service
+            .authenticate_user("test@example.com", false)
+            .await
+            .unwrap();
+
+        // Alert should NOT be linked (security protection)
+        let alerts = alert::Entity::find()
+            .filter(alert::Column::Email.eq("test@example.com"))
+            .all(db.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].user_id, None); // Still unlinked
+    }
+
+    #[tokio::test]
+    async fn test_get_user_alerts_returns_legacy_when_verified() {
+        let db = setup_test_db().await;
+        let service = IdentityService::new(db.clone());
+
+        // Create user
+        let user = service
+            .get_or_create_user("test@example.com")
+            .await
+            .unwrap();
+
+        // Create a legacy alert (not linked to user_id)
+        create_legacy_alert(db.as_ref(), "test@example.com", "matrix.org").await;
+
+        // With email_verified=true, should see legacy alert
+        let alerts = service
+            .get_user_alerts(&user.id, "test@example.com", true)
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].server_name, "matrix.org");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_alerts_hides_legacy_when_unverified() {
+        let db = setup_test_db().await;
+        let service = IdentityService::new(db.clone());
+
+        // Create user
+        let user = service
+            .get_or_create_user("test@example.com")
+            .await
+            .unwrap();
+
+        // Create a legacy alert (not linked to user_id)
+        create_legacy_alert(db.as_ref(), "test@example.com", "matrix.org").await;
+
+        // With email_verified=false, should NOT see legacy alert (security protection)
+        let alerts = service
+            .get_user_alerts(&user.id, "test@example.com", false)
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 0); // Legacy alert hidden
+    }
+
+    #[tokio::test]
+    async fn test_get_user_alerts_always_returns_user_linked_alerts() {
+        let db = setup_test_db().await;
+        let service = IdentityService::new(db.clone());
+
+        // Create user
+        let user = service
+            .get_or_create_user("test@example.com")
+            .await
+            .unwrap();
+
+        // Create an alert explicitly linked to user_id
+        let now = OffsetDateTime::now_utc();
+        let linked_alert = alert::ActiveModel {
+            email: Set("test@example.com".to_string()),
+            server_name: Set("linked.server.com".to_string()),
+            verified: Set(true),
+            magic_token: Set(String::new()),
+            created_at: Set(now),
+            user_id: Set(Some(user.id.clone())),
+            ..Default::default()
+        };
+        linked_alert.insert(db.as_ref()).await.unwrap();
+
+        // Even with email_verified=false, should see user_id-linked alerts
+        let alerts = service
+            .get_user_alerts(&user.id, "test@example.com", false)
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].server_name, "linked.server.com");
     }
 }

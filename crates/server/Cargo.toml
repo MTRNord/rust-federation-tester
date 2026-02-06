@@ -10,6 +10,7 @@ keywords = ["matrix", "federation", "testing"]
 categories = ["api-bindings", "network-programming"]
 
 [dependencies]
+argon2 = "0.5"
 askama = "0.15.1"
 axum = "0.8.4"
 axum-tracing-opentelemetry = {version="0.32.2", features=["tracing_level_info"]}

@@ -62,9 +62,18 @@ pub async fn start_webserver<P: ConnectionProvider>(
             "/api/federation",
             federation::router::<P>(app_state, debug_mode),
         )
-        .nest("/api/alerts", alerts::router(alert_state))
         .nest("/debug", debug::router())
         .routes(routes!(metrics::metrics));
+
+    // Conditionally add legacy magic link alerts API
+    if app_resources.config.oauth2.magic_links_enabled {
+        router = router.nest("/api/alerts", alerts::router(alert_state));
+        tracing::info!("Legacy magic link alerts API enabled at /api/alerts/*");
+    } else {
+        tracing::info!(
+            "Legacy magic link alerts API disabled (oauth2.magic_links_enabled = false)"
+        );
+    }
 
     // Conditionally add OAuth2 endpoints if enabled
     if app_resources.config.oauth2.enabled {
@@ -94,7 +103,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
     let router = router.merge(Redoc::with_url("/api-docs", api));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    tracing::info_span!("Server running", addr = "0.0.0.0:8080");
+    tracing::info!("Server running at 0.0.0.0:8080");
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),

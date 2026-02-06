@@ -46,7 +46,17 @@ authUrl.searchParams.set('code_challenge_method', 'S256');
 window.location.href = authUrl.toString();
 ```
 
-### 2. Handle Callback
+### 2. User Authentication & Consent
+
+After redirecting to `/authorize`, the user will:
+1. See the **login page** - enter email and password (or click "Create an account" to register)
+2. See the **consent screen** - showing the application name and requested permissions
+3. Click **Authorize** to approve, or **Deny** to reject
+
+On approval, the user is redirected back to your `redirect_uri` with an authorization code.
+On denial, the redirect includes `error=access_denied`.
+
+### 3. Handle Callback
 
 ```javascript
 // User returns with authorization code
@@ -76,7 +86,7 @@ const tokens = await tokenResponse.json();
 // { access_token, refresh_token, expires_in, token_type, scope }
 ```
 
-### 3. Store Tokens Securely
+### 4. Store Tokens Securely
 
 ```javascript
 // Store tokens securely (example using sessionStorage for SPAs)

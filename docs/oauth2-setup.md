@@ -144,6 +144,8 @@ INSERT INTO oauth2_client (
 
 Once configured, the following endpoints are available:
 
+### Core OAuth2/OIDC Endpoints
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/.well-known/openid-configuration` | GET | OpenID Connect Discovery |
@@ -151,6 +153,90 @@ Once configured, the following endpoints are available:
 | `/oauth2/token` | POST | Token endpoint |
 | `/oauth2/revoke` | POST | Token revocation (RFC 7009) |
 | `/oauth2/userinfo` | GET | OpenID Connect UserInfo |
+
+### Authentication & Registration Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/oauth2/login` | GET | Login page (rendered during authorization flow) |
+| `/oauth2/login` | POST | Submit login credentials (email + password) |
+| `/oauth2/register` | GET | Registration page |
+| `/oauth2/register` | POST | Submit registration (email + password) |
+| `/oauth2/verify-email` | GET | Email verification link handler |
+| `/oauth2/consent` | GET | Consent screen (approve/deny permissions) |
+| `/oauth2/consent` | POST | Submit consent decision |
+
+## Available Scopes
+
+| Scope | Description | UserInfo Claims |
+|-------|-------------|-----------------|
+| `openid` | Verify the user's identity (required for OIDC) | `sub` |
+| `email` | Access the user's email address | `email`, `email_verified` |
+| `profile` | Access the user's profile information | `name` |
+| `alerts:read` | View alert subscriptions | — |
+| `alerts:write` | Create and delete alert subscriptions | — |
+
+- `openid` is required for all authorization requests.
+- `alerts:read` and `alerts:write` are needed for the v2 alerts API (`/api/v2/alerts`).
+- Clients can only request scopes that are listed in their `scopes` field in the database.
+- The consent screen shows each requested scope with a human-readable description so the user knows what they are granting.
+
+## Authentication Flow
+
+The full authorization flow works as follows:
+
+```
+Client App          Authorization Server          User
+    │                       │                       │
+    │  /authorize           │                       │
+    │──────────────────────▶│                       │
+    │                       │  302 → /login         │
+    │                       │──────────────────────▶│
+    │                       │                       │ Enter email + password
+    │                       │  POST /login          │
+    │                       │◀──────────────────────│
+    │                       │                       │
+    │                       │  302 → /consent       │
+    │                       │──────────────────────▶│
+    │                       │                       │ Approve/Deny permissions
+    │                       │  POST /consent        │
+    │                       │◀──────────────────────│
+    │                       │                       │
+    │  302 → redirect_uri   │                       │
+    │  ?code=AUTH_CODE       │                       │
+    │◀──────────────────────│                       │
+    │                       │                       │
+    │  POST /token          │                       │
+    │  (code + PKCE)        │                       │
+    │──────────────────────▶│                       │
+    │  { access_token, ... }│                       │
+    │◀──────────────────────│                       │
+```
+
+Key security properties:
+- The authorization code is **only** created when the user clicks "Authorize" on the consent screen
+- If the user clicks "Deny", the client receives an `access_denied` error
+- The consent token expires after 10 minutes
+- PKCE prevents authorization code interception
+
+## User Registration
+
+Users register during the OAuth2 flow by clicking "Create an account" on the login page:
+
+1. User is redirected to `/oauth2/register` with OAuth2 flow parameters preserved
+2. User enters email and password (minimum 8 characters)
+3. A verification email is sent with a 24-hour expiry link
+4. User clicks the link in the email, which verifies their account
+5. User is redirected to the login page to sign in with their new credentials
+6. After login, the consent screen is shown before redirecting to the client
+
+### Registration Edge Cases
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Email already registered & verified | Error: "already exists, please sign in" |
+| Email registered, unverified, token still valid | Verification email resent |
+| Email registered, unverified, token expired | Password updated, new verification email sent |
 
 ## Frontend Integration
 
@@ -321,7 +407,8 @@ If you have existing users using magic link authentication:
 
 1. **Both systems work in parallel** - Set `magic_links_enabled: true`
 2. **Existing alerts remain functional** - No immediate migration required
-3. **User accounts are linked by email** - When a user authenticates via OAuth2, their existing alerts are automatically associated
+3. **User accounts are linked by email** - When a user authenticates via OAuth2, their existing alerts are automatically associated (only if their email is verified, as a security measure)
+4. **Users need to register** - Existing magic link users must create an OAuth2 account via the registration page. Once they verify their email, their legacy alerts are automatically linked.
 
 To disable magic links after migration:
 ```yaml

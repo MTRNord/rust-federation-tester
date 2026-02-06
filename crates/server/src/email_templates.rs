@@ -160,6 +160,41 @@ The Federation Tester Team"#,
     }
 }
 
+/// Template for account verification emails (OAuth2 registration)
+#[derive(Template)]
+#[template(path = "account_verification_email.html")]
+pub struct AccountVerificationEmailTemplate {
+    pub verify_url: String,
+}
+
+impl AccountVerificationEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        format!(
+            r#"Hello,
+
+Thanks for creating an account with Federation Tester.
+
+Please verify your email address by clicking the link below (valid for 24 hours):
+{}
+
+Once verified, you'll be able to sign in and manage your federation alert subscriptions.
+
+If you did not create this account, you can safely ignore this email.
+
+Best regards,
+The Federation Tester Team"#,
+            self.verify_url
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

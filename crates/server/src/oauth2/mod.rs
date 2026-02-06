@@ -16,13 +16,18 @@
 //! - `GET /oauth2/userinfo` - OpenID Connect UserInfo
 //! - `GET /.well-known/openid-configuration` - OpenID Connect Discovery
 
+pub mod consent;
 pub mod endpoints;
 pub mod identity;
+pub mod login;
+pub mod password;
+pub mod register;
 mod registrar;
 mod state;
 
 pub use endpoints::router;
 pub use identity::IdentityService;
+pub use password::{generate_verification_token, hash_password, verify_password};
 pub use state::OAuth2State;
 
 /// OpenAPI tag for OAuth2 endpoints

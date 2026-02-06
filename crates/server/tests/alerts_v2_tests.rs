@@ -26,7 +26,10 @@ async fn setup_test_db() -> Arc<DatabaseConnection> {
             email_verified INTEGER NOT NULL DEFAULT 0,
             name TEXT NULL,
             created_at TEXT NOT NULL,
-            last_login_at TEXT NULL
+            last_login_at TEXT NULL,
+            password_hash TEXT NULL,
+            email_verification_token TEXT NULL,
+            email_verification_expires_at TEXT NULL
         );"#,
     ))
     .await
@@ -110,6 +113,9 @@ async fn create_test_user(
         name: Set(None),
         created_at: Set(now),
         last_login_at: Set(None),
+        password_hash: Set(None),
+        email_verification_token: Set(None),
+        email_verification_expires_at: Set(None),
     };
     user.insert(db).await.expect("Failed to create test user")
 }
@@ -286,8 +292,9 @@ async fn test_identity_service_get_user_alerts_by_user_id() {
     .await;
 
     let service = IdentityService::new(db.clone());
+    // email_verified=true allows seeing user_id linked alerts (always allowed)
     let alerts = service
-        .get_user_alerts(&user.id, "test@example.com")
+        .get_user_alerts(&user.id, "test@example.com", true)
         .await
         .expect("Failed to get alerts");
 
@@ -313,8 +320,9 @@ async fn test_identity_service_get_user_alerts_by_email_legacy() {
     .await;
 
     let service = IdentityService::new(db.clone());
+    // email_verified=true allows seeing legacy alerts by email match
     let alerts = service
-        .get_user_alerts(&user.id, "test@example.com")
+        .get_user_alerts(&user.id, "test@example.com", true)
         .await
         .expect("Failed to get alerts");
 
@@ -350,12 +358,52 @@ async fn test_identity_service_get_user_alerts_combined() {
     .await;
 
     let service = IdentityService::new(db.clone());
+    // email_verified=true allows seeing both user_id-linked and legacy alerts
     let alerts = service
-        .get_user_alerts(&user.id, "test@example.com")
+        .get_user_alerts(&user.id, "test@example.com", true)
         .await
         .expect("Failed to get alerts");
 
     assert_eq!(alerts.len(), 2);
+}
+
+#[tokio::test]
+async fn test_identity_service_hides_legacy_alerts_when_unverified() {
+    use rust_federation_tester::oauth2::IdentityService;
+
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "test@example.com", false).await;
+
+    // Create alert linked to user_id
+    create_test_alert(
+        db.as_ref(),
+        "test@example.com",
+        "linked.server.com",
+        Some(&user.id),
+        true,
+    )
+    .await;
+
+    // Create legacy alert (no user_id)
+    create_test_alert(
+        db.as_ref(),
+        "test@example.com",
+        "legacy.server.com",
+        None,
+        true,
+    )
+    .await;
+
+    let service = IdentityService::new(db.clone());
+    // SECURITY: email_verified=false should ONLY return user_id-linked alerts
+    let alerts = service
+        .get_user_alerts(&user.id, "test@example.com", false)
+        .await
+        .expect("Failed to get alerts");
+
+    // Only the user_id-linked alert should be visible, legacy hidden for security
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].server_name, "linked.server.com");
 }
 
 // =============================================================================

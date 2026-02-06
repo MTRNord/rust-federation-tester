@@ -15,6 +15,41 @@ pub struct Model {
     pub name: Option<String>,
     pub created_at: OffsetDateTime,
     pub last_login_at: Option<OffsetDateTime>,
+    /// Argon2 hashed password (NULL for magic link only users)
+    #[serde(skip_serializing)]
+    pub password_hash: Option<String>,
+    /// Token for email verification (used during registration)
+    #[serde(skip_serializing)]
+    pub email_verification_token: Option<String>,
+    /// When the email verification token expires
+    #[serde(skip_serializing)]
+    pub email_verification_expires_at: Option<OffsetDateTime>,
+}
+
+impl Model {
+    /// Check if user has a password set (can use password login)
+    pub fn has_password(&self) -> bool {
+        self.password_hash.is_some()
+    }
+
+    /// Check if there's a pending email verification that hasn't expired
+    pub fn has_pending_verification(&self) -> bool {
+        match (
+            &self.email_verification_token,
+            &self.email_verification_expires_at,
+        ) {
+            (Some(_), Some(expires_at)) => *expires_at > OffsetDateTime::now_utc(),
+            _ => false,
+        }
+    }
+
+    /// Check if the email verification token has expired
+    pub fn is_verification_expired(&self) -> bool {
+        match &self.email_verification_expires_at {
+            Some(expires_at) => *expires_at <= OffsetDateTime::now_utc(),
+            None => true,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

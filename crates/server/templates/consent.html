@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en" class="govuk-template govuk-template--rebranded">
+    <head>
+        <meta charset="utf-8" />
+        <title>Authorize application - Federation Tester</title>
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#1d70b8" />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.css"
+        />
+        <style>
+            /* Custom styles for consent page */
+            .app-panel {
+                padding: 20px;
+                margin-bottom: 30px;
+                background-color: #fff;
+                border: 1px solid #b1b4b6;
+            }
+
+            .app-panel__header {
+                display: flex;
+                align-items: center;
+                margin-bottom: 15px;
+            }
+
+            .app-panel__icon {
+                width: 48px;
+                height: 48px;
+                margin-right: 15px;
+                background-color: #1d70b8;
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+                font-size: 24px;
+                font-weight: 700;
+            }
+
+            .app-panel__name {
+                font-size: 1.5rem;
+                font-weight: 700;
+                margin: 0;
+            }
+
+            .app-panel__url {
+                font-size: 0.875rem;
+                color: #505a5f;
+                margin: 0;
+            }
+
+            .scope-list {
+                margin: 0;
+                padding: 0;
+                list-style: none;
+            }
+
+            .scope-list__item {
+                padding: 15px 0;
+                border-bottom: 1px solid #b1b4b6;
+                display: flex;
+                align-items: flex-start;
+            }
+
+            .scope-list__item:last-child {
+                border-bottom: none;
+            }
+
+            .scope-list__icon {
+                width: 24px;
+                height: 24px;
+                margin-right: 15px;
+                flex-shrink: 0;
+                color: #1d70b8;
+            }
+
+            .scope-list__content {
+                flex: 1;
+            }
+
+            .scope-list__name {
+                font-weight: 700;
+                margin-bottom: 5px;
+            }
+
+            .scope-list__description {
+                font-size: 0.875rem;
+                color: #505a5f;
+                margin: 0;
+            }
+
+            .button-group {
+                display: flex;
+                gap: 15px;
+                flex-wrap: wrap;
+            }
+
+            .user-info {
+                font-size: 0.875rem;
+                color: #505a5f;
+                margin-bottom: 30px;
+            }
+        </style>
+    </head>
+
+    <body class="govuk-template__body">
+        <script>
+            document.body.className +=
+                " js-enabled" +
+                ("noModule" in HTMLScriptElement.prototype
+                    ? " govuk-frontend-supported"
+                    : "");
+        </script>
+
+        <a
+            href="#main-content"
+            class="govuk-skip-link"
+            data-module="govuk-skip-link"
+            >Skip to main content</a
+        >
+
+        <header class="govuk-header" data-module="govuk-header">
+            <div class="govuk-header__container govuk-width-container">
+                <div class="govuk-header__logo">
+                    <a
+                        href="/"
+                        class="govuk-header__link govuk-header__link--homepage"
+                    >
+                        <span class="govuk-header__logotype">
+                            <span class="govuk-header__logotype-text">
+                                Federation Tester
+                            </span>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <div class="govuk-width-container">
+            <div class="govuk-phase-banner">
+                <p class="govuk-phase-banner__content">
+                    <strong class="govuk-tag govuk-phase-banner__content__tag"
+                        >Beta</strong
+                    >
+                    <span class="govuk-phase-banner__text"
+                        >This is a community service for testing Matrix
+                        federation.</span
+                    >
+                </p>
+            </div>
+
+            <main class="govuk-main-wrapper" id="main-content" role="main">
+                <div class="govuk-grid-row">
+                    <div class="govuk-grid-column-two-thirds">
+                        <h1 class="govuk-heading-l">Authorize application</h1>
+
+                        <p class="user-info">
+                            Signed in as <strong>{{ user_email }}</strong>
+                        </p>
+
+                        <div class="app-panel">
+                            <div class="app-panel__header">
+                                <div class="app-panel__icon">
+                                    {{ client_name.chars().next().unwrap_or('A') }}
+                                </div>
+                                <div>
+                                    <h2 class="app-panel__name">{{ client_name }}</h2>
+                                </div>
+                            </div>
+                            <p class="govuk-body">
+                                <strong>{{ client_name }}</strong> wants to access your account.
+                            </p>
+                        </div>
+
+                        <h2 class="govuk-heading-m">This will allow the application to:</h2>
+
+                        <ul class="scope-list">
+                            {% for scope in scopes %}
+                            <li class="scope-list__item">
+                                <svg class="scope-list__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                <div class="scope-list__content">
+                                    <div class="scope-list__name">{{ scope.name }}</div>
+                                    <p class="scope-list__description">{{ scope.description }}</p>
+                                </div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+
+                        <div class="govuk-inset-text">
+                            By authorizing, you allow this application to access your information as described above.
+                            You can revoke access at any time.
+                        </div>
+
+                        <div class="button-group">
+                            <form method="POST" action="/oauth2/consent" style="display: inline;">
+                                <input type="hidden" name="consent_token" value="{{ consent_token }}" />
+                                <input type="hidden" name="action" value="approve" />
+                                <button type="submit" class="govuk-button" data-module="govuk-button">
+                                    Authorize
+                                </button>
+                            </form>
+
+                            <form method="POST" action="/oauth2/consent" style="display: inline;">
+                                <input type="hidden" name="consent_token" value="{{ consent_token }}" />
+                                <input type="hidden" name="action" value="deny" />
+                                <button type="submit" class="govuk-button govuk-button--secondary" data-module="govuk-button">
+                                    Deny
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <footer class="govuk-footer">
+            <div class="govuk-width-container">
+                <div class="govuk-footer__meta">
+                    <div
+                        class="govuk-footer__meta-item govuk-footer__meta-item--grow"
+                    >
+                        <span class="govuk-footer__licence-description">
+                            Federation Tester is a community project for testing
+                            Matrix homeserver federation.
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        <script
+            type="module"
+            src="https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.js"
+        ></script>
+        <script type="module">
+            import { initAll } from "https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.js";
+            initAll();
+        </script>
+    </body>
+</html>

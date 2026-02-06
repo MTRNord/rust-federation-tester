@@ -48,7 +48,10 @@ async fn create_oauth2_test_db() -> DatabaseConnection {
             email_verified INTEGER NOT NULL DEFAULT 0,
             name TEXT NULL,
             created_at TEXT NOT NULL,
-            last_login_at TEXT NULL
+            last_login_at TEXT NULL,
+            password_hash TEXT NULL,
+            email_verification_token TEXT NULL,
+            email_verification_expires_at TEXT NULL
         );"#,
     ))
     .await

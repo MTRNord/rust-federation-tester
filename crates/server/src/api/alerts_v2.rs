@@ -119,10 +119,12 @@ async fn list_alerts_v2(
     }
 
     // Use IdentityService for backward-compatible lookup
+    // SECURITY: email_verified is passed to prevent account takeover
+    // Users with unverified emails only see alerts explicitly linked to their user_id
     let identity_service = IdentityService::new(resources.db.clone());
 
     let alerts = identity_service
-        .get_user_alerts(&auth.user_id, &auth.email)
+        .get_user_alerts(&auth.user_id, &auth.email, auth.email_verified)
         .await
         .map_err(|e| {
             tracing::error!("Database error listing alerts: {}", e);

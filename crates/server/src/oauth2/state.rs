@@ -76,6 +76,9 @@ impl OAuth2State {
             name: Set(None),
             created_at: Set(now),
             last_login_at: Set(None),
+            password_hash: Set(None),
+            email_verification_token: Set(None),
+            email_verification_expires_at: Set(None),
         };
 
         user.insert(self.db.as_ref()).await

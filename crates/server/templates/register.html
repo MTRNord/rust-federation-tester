@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en" class="govuk-template govuk-template--rebranded">
+    <head>
+        <meta charset="utf-8" />
+        <title>Create an account - Federation Tester</title>
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#1d70b8" />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.css"
+        />
+        <style>
+            /* Custom styles for non-GOV.UK components */
+            .client-info-panel {
+                padding: 15px;
+                margin-bottom: 20px;
+                background-color: #fff;
+                border-left: 5px solid #1d70b8;
+            }
+
+            @media (min-width: 641px) {
+                .client-info-panel {
+                    padding: 20px;
+                    margin-bottom: 30px;
+                }
+            }
+
+            .client-info-panel__title {
+                font-size: 1rem;
+                font-weight: 700;
+                margin: 0;
+            }
+
+            @media (min-width: 641px) {
+                .client-info-panel__title {
+                    font-size: 1.1875rem;
+                }
+            }
+
+            .hidden {
+                display: none;
+            }
+        </style>
+    </head>
+
+    <body class="govuk-template__body">
+        <script>
+            document.body.className +=
+                " js-enabled" +
+                ("noModule" in HTMLScriptElement.prototype
+                    ? " govuk-frontend-supported"
+                    : "");
+        </script>
+
+        <a
+            href="#main-content"
+            class="govuk-skip-link"
+            data-module="govuk-skip-link"
+            >Skip to main content</a
+        >
+
+        <header class="govuk-header" data-module="govuk-header">
+            <div class="govuk-header__container govuk-width-container">
+                <div class="govuk-header__logo">
+                    <a
+                        href="/"
+                        class="govuk-header__link govuk-header__link--homepage"
+                    >
+                        <span class="govuk-header__logotype">
+                            <span class="govuk-header__logotype-text">
+                                Federation Tester
+                            </span>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <div class="govuk-width-container">
+            <div class="govuk-phase-banner">
+                <p class="govuk-phase-banner__content">
+                    <strong class="govuk-tag govuk-phase-banner__content__tag"
+                        >Beta</strong
+                    >
+                    <span class="govuk-phase-banner__text"
+                        >This is a community service for testing Matrix
+                        federation.</span
+                    >
+                </p>
+            </div>
+
+            <main class="govuk-main-wrapper" id="main-content" role="main">
+                <div class="govuk-grid-row">
+                    <div class="govuk-grid-column-two-thirds">
+                        <h1 class="govuk-heading-l">Create an account</h1>
+
+                        {% if let Some(client_name) = client_name %}
+                        <div class="client-info-panel">
+                            <p class="client-info-panel__title">
+                                {{ client_name }} wants to access your account
+                            </p>
+                        </div>
+                        {% endif %} {% if let Some(err) = error %}
+                        <div
+                            class="govuk-error-summary"
+                            data-module="govuk-error-summary"
+                        >
+                            <div role="alert">
+                                <h2 class="govuk-error-summary__title">
+                                    There is a problem
+                                </h2>
+                                <div class="govuk-error-summary__body">
+                                    <ul
+                                        class="govuk-list govuk-error-summary__list"
+                                    >
+                                        <li>{{ err }}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %} {% if let Some(msg) = message %}
+                        <div
+                            class="govuk-notification-banner govuk-notification-banner--success"
+                            role="alert"
+                            data-module="govuk-notification-banner"
+                        >
+                            <div class="govuk-notification-banner__header">
+                                <h2
+                                    class="govuk-notification-banner__title"
+                                    id="govuk-notification-banner-title"
+                                >
+                                    Success
+                                </h2>
+                            </div>
+                            <div class="govuk-notification-banner__content">
+                                <p class="govuk-body">{{ msg }}</p>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <form method="POST" action="/oauth2/register">
+                            <input
+                                type="hidden"
+                                name="response_type"
+                                value="{{ response_type }}"
+                            />
+                            <input
+                                type="hidden"
+                                name="client_id"
+                                value="{{ client_id }}"
+                            />
+                            <input
+                                type="hidden"
+                                name="redirect_uri"
+                                value="{{ redirect_uri }}"
+                            />
+                            <input
+                                type="hidden"
+                                name="scope"
+                                value="{{ scope }}"
+                            />
+                            <input
+                                type="hidden"
+                                name="state"
+                                value="{{ state }}"
+                            />
+                            {% if let Some(nonce) = nonce %}
+                            <input
+                                type="hidden"
+                                name="nonce"
+                                value="{{ nonce }}"
+                            />
+                            {% endif %} {% if let Some(challenge) =
+                            code_challenge %}
+                            <input
+                                type="hidden"
+                                name="code_challenge"
+                                value="{{ challenge }}"
+                            />
+                            {% endif %} {% if let Some(method) =
+                            code_challenge_method %}
+                            <input
+                                type="hidden"
+                                name="code_challenge_method"
+                                value="{{ method }}"
+                            />
+                            {% endif %}
+
+                            <div class="govuk-form-group">
+                                <label class="govuk-label" for="email"
+                                    >Email address</label
+                                >
+                                <div class="govuk-hint">
+                                    We'll send a verification link to this address
+                                </div>
+                                <input
+                                    class="govuk-input"
+                                    type="email"
+                                    id="email"
+                                    name="email"
+                                    value="{{ email }}"
+                                    required
+                                    autocomplete="email"
+                                    autofocus
+                                />
+                            </div>
+
+                            <div class="govuk-form-group">
+                                <label class="govuk-label" for="password"
+                                    >Password</label
+                                >
+                                <div class="govuk-hint">
+                                    Must be at least 8 characters
+                                </div>
+                                <input
+                                    class="govuk-input"
+                                    type="password"
+                                    id="password"
+                                    name="password"
+                                    required
+                                    autocomplete="new-password"
+                                    minlength="8"
+                                />
+                            </div>
+
+                            <div class="govuk-form-group">
+                                <label class="govuk-label" for="password_confirm"
+                                    >Confirm password</label
+                                >
+                                <input
+                                    class="govuk-input"
+                                    type="password"
+                                    id="password_confirm"
+                                    name="password_confirm"
+                                    required
+                                    autocomplete="new-password"
+                                    minlength="8"
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                class="govuk-button"
+                                data-module="govuk-button"
+                            >
+                                Create account
+                            </button>
+                        </form>
+
+                        <p class="govuk-body">
+                            <a
+                                class="govuk-link"
+                                href="/oauth2/login?client_id={{ client_id }}&redirect_uri={{ redirect_uri }}&scope={{ scope }}&state={{ state }}"
+                                >Sign in</a
+                            >
+                            if you already have an account.
+                        </p>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <footer class="govuk-footer">
+            <div class="govuk-width-container">
+                <div class="govuk-footer__meta">
+                    <div
+                        class="govuk-footer__meta-item govuk-footer__meta-item--grow"
+                    >
+                        <span class="govuk-footer__licence-description">
+                            Federation Tester is a community project for testing
+                            Matrix homeserver federation.
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        <script
+            type="module"
+            src="https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.js"
+        ></script>
+        <script type="module">
+            import { initAll } from "https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.js";
+            initAll();
+        </script>
+    </body>
+</html>

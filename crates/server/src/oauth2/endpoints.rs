@@ -29,6 +29,9 @@ pub fn router(state: OAuth2State) -> OpenApiRouter {
         .routes(routes!(revoke))
         .routes(routes!(userinfo))
         .routes(routes!(openid_configuration))
+        .merge(super::login::router())
+        .merge(super::register::router())
+        .merge(super::consent::router())
         .with_state(state)
 }
 
