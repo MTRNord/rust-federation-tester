@@ -33,7 +33,7 @@ http-body-util = "0.1.3"
 hyper = { version = "1.6.0", features = ["client", "http1", "http2"] }
 hyper-rustls = { version = "0.27", features = ["http1", "http2"] }
 hyper-util = "0.1.14"
-jsonwebtoken = { version = "10.2.0", features = ["use_pem", "rust_crypto"] }
+jsonwebtoken = { version = "10.3.0", features = ["use_pem", "rust_crypto"] }
 lettre = { version = "0.11.17", default-features = false, features = [
     "tokio1-rustls",
     "hostname",
