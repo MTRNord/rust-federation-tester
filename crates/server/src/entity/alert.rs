@@ -19,6 +19,7 @@ pub struct Model {
     pub last_email_sent_at: Option<OffsetDateTime>,
     pub failure_count: i32,
     pub is_currently_failing: bool,
+    pub last_recovery_at: Option<OffsetDateTime>,
     /// Optional link to OAuth2 user for migrated accounts.
     /// Null for legacy magic-link-only alerts.
     pub user_id: Option<String>,

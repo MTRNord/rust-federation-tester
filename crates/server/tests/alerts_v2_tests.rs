@@ -89,6 +89,7 @@ async fn setup_test_db() -> Arc<DatabaseConnection> {
             last_email_sent_at TEXT NULL,
             failure_count INTEGER NOT NULL DEFAULT 0,
             is_currently_failing INTEGER NOT NULL DEFAULT 0,
+            last_recovery_at TEXT NULL,
             user_id TEXT NULL
         );"#,
     ))

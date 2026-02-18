@@ -11,6 +11,8 @@ mod m20260123_120000_optimize_stats_tables;
 mod m20260123_150000_add_oauth2_tables;
 mod m20260123_160000_link_alerts_to_oauth2;
 mod m20260124_120000_add_password_support;
+mod m20260218_000000_add_alert_status_history;
+mod m20260218_000001_add_last_recovery_at;
 
 pub struct Migrator;
 
@@ -29,6 +31,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260123_150000_add_oauth2_tables::Migration),
             Box::new(m20260123_160000_link_alerts_to_oauth2::Migration),
             Box::new(m20260124_120000_add_password_support::Migration),
+            Box::new(m20260218_000000_add_alert_status_history::Migration),
+            Box::new(m20260218_000001_add_last_recovery_at::Migration),
         ]
     }
 }

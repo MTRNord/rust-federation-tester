@@ -152,6 +152,14 @@ fn create_test_alert(
     is_currently_failing: bool,
     last_email_sent_at: Option<OffsetDateTime>,
 ) -> alert::Model {
+    create_test_alert_with_recovery(is_currently_failing, last_email_sent_at, None)
+}
+
+fn create_test_alert_with_recovery(
+    is_currently_failing: bool,
+    last_email_sent_at: Option<OffsetDateTime>,
+    last_recovery_at: Option<OffsetDateTime>,
+) -> alert::Model {
     alert::Model {
         id: 1,
         email: "test@example.com".to_string(),
@@ -165,6 +173,7 @@ fn create_test_alert(
         last_email_sent_at,
         failure_count: 0,
         is_currently_failing,
+        last_recovery_at,
         user_id: None,
     }
 }
@@ -218,6 +227,87 @@ fn test_should_send_failure_email_exactly_at_threshold() {
 
     // At threshold - should send
     assert!(should_send_failure_email(&alert, now));
+}
+
+// =============================================================================
+// Flapping Detection Tests
+// =============================================================================
+
+#[test]
+fn test_flapping_suppression() {
+    // Scenario: server failed, recovered 10 min ago, now failing again
+    // Should NOT send a new failure email (flapping within 30 min window)
+    let now = OffsetDateTime::now_utc();
+    let last_recovery = now - Duration::minutes(10);
+    let last_email = now - Duration::minutes(15); // email sent 15 min ago
+
+    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
+
+    assert!(
+        !should_send_failure_email(&alert, now),
+        "Should suppress failure email during flapping (recovered 10 min ago, email 15 min ago)"
+    );
+}
+
+#[test]
+fn test_flapping_after_stability_window() {
+    // Scenario: server failed, recovered 35 min ago, now failing again
+    // Should send a new failure email (past the 30 min stability window)
+    let now = OffsetDateTime::now_utc();
+    let last_recovery = now - Duration::minutes(35);
+    let last_email = now - Duration::minutes(40);
+
+    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
+
+    assert!(
+        should_send_failure_email(&alert, now),
+        "Should send failure email after stability window has passed"
+    );
+}
+
+#[test]
+fn test_flapping_still_sends_reminder() {
+    // Scenario: server is flapping, but it's been 13 hours since last email
+    // Should send a reminder email even though we're in the flapping window
+    let now = OffsetDateTime::now_utc();
+    let last_recovery = now - Duration::minutes(10);
+    let last_email = now - Duration::hours(13); // past the 12h reminder interval
+
+    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
+
+    assert!(
+        should_send_failure_email(&alert, now),
+        "Should send reminder email even during flapping when past reminder interval"
+    );
+}
+
+#[test]
+fn test_flapping_no_previous_email_sends_immediately() {
+    // Scenario: server recovered recently but we never sent an email before
+    // Should send because user has never been notified
+    let now = OffsetDateTime::now_utc();
+    let last_recovery = now - Duration::minutes(5);
+
+    let alert = create_test_alert_with_recovery(false, None, Some(last_recovery));
+
+    assert!(
+        should_send_failure_email(&alert, now),
+        "Should send failure email during flapping if no email was ever sent"
+    );
+}
+
+#[test]
+fn test_no_recovery_history_sends_normally() {
+    // Scenario: first failure ever (no last_recovery_at)
+    // Should send immediately - this is a genuine new failure
+    let now = OffsetDateTime::now_utc();
+
+    let alert = create_test_alert_with_recovery(false, None, None);
+
+    assert!(
+        should_send_failure_email(&alert, now),
+        "Should send failure email on first-ever failure"
+    );
 }
 
 // =============================================================================

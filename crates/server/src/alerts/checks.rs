@@ -7,7 +7,7 @@ use crate::AppResources;
 use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
 use crate::alerts::task_manager::AlertTaskManager;
 use crate::connection_pool::ConnectionPool;
-use crate::entity::alert;
+use crate::entity::{alert, alert_status_history};
 use crate::response::generate_json_report;
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
@@ -20,23 +20,78 @@ use tokio::time::Duration;
 /// Check interval - how frequently each alert is checked.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
+/// Stability window for flap detection. If a server recovered less than this
+/// duration ago, a new failure is treated as flapping rather than a new incident.
+pub const FLAP_STABILITY_WINDOW: Duration = Duration::from_secs(30 * 60); // 30 minutes
+
 /// Determine if we should send a failure email based on alert state and timing.
 #[tracing::instrument(skip_all)]
 pub fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> bool {
-    // If server just started failing, send immediately
+    // If server just started failing (transition from OK)
     if !alert.is_currently_failing {
+        // Check if we recently recovered - if so, this is flapping
+        if let Some(last_recovery) = alert.last_recovery_at {
+            let time_since_recovery = now - last_recovery;
+            let stability_window: time::Duration = FLAP_STABILITY_WINDOW.try_into().unwrap();
+            if time_since_recovery < stability_window {
+                // Flapping - don't treat as new incident.
+                // Use last_email_sent_at to decide on reminder timing instead.
+                if let Some(last_email) = alert.last_email_sent_at {
+                    let time_since_last_email = now - last_email;
+                    let reminder_threshold: time::Duration =
+                        REMINDER_EMAIL_INTERVAL.try_into().unwrap();
+                    return time_since_last_email >= reminder_threshold;
+                }
+                // Never sent an email, send now
+                return true;
+            }
+        }
+        // Not flapping - genuine new failure
         return true;
     }
 
-    // If we've never sent an email, send now
+    // Already failing - check reminder interval
     let Some(last_email) = alert.last_email_sent_at else {
         return true;
     };
 
-    // Send reminder emails every REMINDER_EMAIL_INTERVAL
     let time_since_last_email = now - last_email;
     let reminder_threshold: time::Duration = REMINDER_EMAIL_INTERVAL.try_into().unwrap();
     time_since_last_email >= reminder_threshold
+}
+
+/// Log a status event to the alert_status_history table.
+async fn log_status_event(
+    db: &sea_orm::DatabaseConnection,
+    alert_id: i32,
+    server_name: &str,
+    event_type: &str,
+    federation_ok: bool,
+    failure_count: i32,
+    details: Option<String>,
+) {
+    let entry = alert_status_history::ActiveModel {
+        id: ActiveValue::NotSet,
+        alert_id: ActiveValue::Set(alert_id),
+        server_name: ActiveValue::Set(server_name.to_string()),
+        event_type: ActiveValue::Set(event_type.to_string()),
+        federation_ok: ActiveValue::Set(federation_ok),
+        failure_count: ActiveValue::Set(failure_count),
+        created_at: ActiveValue::Set(OffsetDateTime::now_utc()),
+        details: ActiveValue::Set(details),
+    };
+
+    if let Err(e) = entry.insert(db).await {
+        tracing::error!(
+            name = "alerts.status_history.insert_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            alert_id = alert_id,
+            server_name = %server_name,
+            event_type = %event_type,
+            message = "Failed to log status event to alert_status_history"
+        );
+    }
 }
 
 /// Main loop for recurring alert checks.
@@ -129,6 +184,18 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                             let send_email =
                                                 should_send_failure_email(&alert_model, now);
 
+                                            // Log the check failure
+                                            log_status_event(
+                                                db.as_ref(),
+                                                alert_id,
+                                                &server_name,
+                                                "check_fail",
+                                                false,
+                                                alert_model.failure_count + 1,
+                                                None,
+                                            )
+                                            .await;
+
                                             // Update failure state
                                             if !alert_model.is_currently_failing {
                                                 // Transition from OK to FAILING
@@ -157,6 +224,14 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                 alert_active.update(db.as_ref()).await
                                                 && send_email
                                             {
+                                                // Determine email event type
+                                                let email_event_type =
+                                                    if updated_alert.failure_count > 1 {
+                                                        "email_reminder"
+                                                    } else {
+                                                        "email_failure"
+                                                    };
+
                                                 send_failure_email(
                                                     &mailer,
                                                     &config,
@@ -165,6 +240,18 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                     &server_name,
                                                     alert_id,
                                                     updated_alert.failure_count,
+                                                )
+                                                .await;
+
+                                                // Log the email event
+                                                log_status_event(
+                                                    db.as_ref(),
+                                                    alert_id,
+                                                    &server_name,
+                                                    email_event_type,
+                                                    false,
+                                                    updated_alert.failure_count,
+                                                    None,
                                                 )
                                                 .await;
 
@@ -181,9 +268,22 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                 // Transition from FAILING to OK - send recovery email
                                                 alert_active.is_currently_failing =
                                                     ActiveValue::Set(false);
-                                                alert_active.failure_count = ActiveValue::Set(0);
                                                 alert_active.last_success_at =
                                                     ActiveValue::Set(Some(now));
+                                                alert_active.last_recovery_at =
+                                                    ActiveValue::Set(Some(now));
+
+                                                // Log the check success (recovery)
+                                                log_status_event(
+                                                    db.as_ref(),
+                                                    alert_id,
+                                                    &server_name,
+                                                    "check_ok",
+                                                    true,
+                                                    alert_model.failure_count,
+                                                    Some("recovered from failing state".to_string()),
+                                                )
+                                                .await;
 
                                                 if alert_active.update(db.as_ref()).await.is_ok() {
                                                     send_recovery_email(
@@ -193,6 +293,18 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                         &email,
                                                         &server_name,
                                                         alert_id,
+                                                    )
+                                                    .await;
+
+                                                    // Log the recovery email event
+                                                    log_status_event(
+                                                        db.as_ref(),
+                                                        alert_id,
+                                                        &server_name,
+                                                        "email_recovery",
+                                                        true,
+                                                        alert_model.failure_count,
+                                                        None,
                                                     )
                                                     .await;
 
@@ -272,7 +384,14 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
             .exec(resources.db.as_ref())
             .await;
 
-        // 5. Wait for a while before next full scan
+        // 5. Clean up old status history entries (keep 30 days)
+        let history_cutoff = OffsetDateTime::now_utc() - time::Duration::days(30);
+        let _ = alert_status_history::Entity::delete_many()
+            .filter(alert_status_history::Column::CreatedAt.lt(history_cutoff))
+            .exec(resources.db.as_ref())
+            .await;
+
+        // 6. Wait for a while before next full scan
         tokio::time::sleep(Duration::from_secs(300)).await; // 5 min
     }
 }
