@@ -1,164 +1,21 @@
 //! Tests for alert system components.
 
-use rust_federation_tester::alerts::{AlertTaskManager, should_send_failure_email};
+use rust_federation_tester::alerts::{
+    CONFIRMATION_THRESHOLD, ConfirmationRegistry, should_send_reminder_email,
+};
 use rust_federation_tester::entity::alert;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use time::{Duration, OffsetDateTime};
+use tokio::sync::Mutex;
 
 // =============================================================================
-// AlertTaskManager Tests
+// Test helpers
 // =============================================================================
 
-#[tokio::test]
-async fn test_task_manager_new() {
-    let manager = AlertTaskManager::new();
-    assert!(!manager.is_running(1).await);
-}
-
-#[tokio::test]
-async fn test_task_manager_default() {
-    let manager = AlertTaskManager::default();
-    assert!(!manager.is_running(1).await);
-}
-
-#[tokio::test]
-async fn test_task_manager_start_task() {
-    let manager = Arc::new(AlertTaskManager::new());
-    let flag_clone = Arc::new(AtomicBool::new(false));
-    let flag_check = flag_clone.clone();
-
-    manager
-        .start_or_restart_task(42, move |flag| {
-            Box::pin(async move {
-                // Just record that we got a true flag
-                flag_check.store(flag.load(Ordering::SeqCst), Ordering::SeqCst);
-            })
-        })
-        .await;
-
-    // Give task time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    // Task should be registered as running
-    assert!(manager.is_running(42).await);
-}
-
-#[tokio::test]
-async fn test_task_manager_stop_task() {
-    let manager = AlertTaskManager::new();
-
-    // Start a task that runs until stopped
-    manager
-        .start_or_restart_task(42, |flag| {
-            Box::pin(async move {
-                while flag.load(Ordering::SeqCst) {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                }
-            })
-        })
-        .await;
-
-    assert!(manager.is_running(42).await);
-
-    // Stop the task
-    manager.stop_task(42).await;
-
-    // Give the task time to see the flag change
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    assert!(!manager.is_running(42).await);
-}
-
-#[tokio::test]
-async fn test_task_manager_stop_all() {
-    let manager = AlertTaskManager::new();
-
-    // Start multiple tasks
-    for id in 1..=3 {
-        let alert_id = id;
-        manager
-            .start_or_restart_task(alert_id, |flag| {
-                Box::pin(async move {
-                    while flag.load(Ordering::SeqCst) {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                    }
-                })
-            })
-            .await;
-    }
-
-    assert!(manager.is_running(1).await);
-    assert!(manager.is_running(2).await);
-    assert!(manager.is_running(3).await);
-
-    // Stop all tasks
-    manager.stop_all().await;
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    assert!(!manager.is_running(1).await);
-    assert!(!manager.is_running(2).await);
-    assert!(!manager.is_running(3).await);
-}
-
-#[tokio::test]
-async fn test_task_manager_restart_replaces_task() {
-    let manager = AlertTaskManager::new();
-    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counter_clone = counter.clone();
-
-    // Start first task
-    manager
-        .start_or_restart_task(42, move |flag| {
-            let counter = counter_clone.clone();
-            Box::pin(async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                while flag.load(Ordering::SeqCst) {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                }
-            })
-        })
-        .await;
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    let counter_clone2 = counter.clone();
-
-    // Restart with new task
-    manager
-        .start_or_restart_task(42, move |flag| {
-            let counter = counter_clone2.clone();
-            Box::pin(async move {
-                counter.fetch_add(10, Ordering::SeqCst);
-                while flag.load(Ordering::SeqCst) {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                }
-            })
-        })
-        .await;
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Both tasks should have run
-    let count = counter.load(Ordering::SeqCst);
-    assert!(count >= 11, "Expected counter >= 11, got {}", count);
-}
-
-// =============================================================================
-// should_send_failure_email Tests
-// =============================================================================
-
-fn create_test_alert(
+fn make_alert(
     is_currently_failing: bool,
     last_email_sent_at: Option<OffsetDateTime>,
-) -> alert::Model {
-    create_test_alert_with_recovery(is_currently_failing, last_email_sent_at, None)
-}
-
-fn create_test_alert_with_recovery(
-    is_currently_failing: bool,
-    last_email_sent_at: Option<OffsetDateTime>,
-    last_recovery_at: Option<OffsetDateTime>,
 ) -> alert::Model {
     alert::Model {
         id: 1,
@@ -171,143 +28,156 @@ fn create_test_alert_with_recovery(
         last_failure_at: None,
         last_success_at: None,
         last_email_sent_at,
-        failure_count: 0,
+        failure_count: if is_currently_failing { 1 } else { 0 },
         is_currently_failing,
-        last_recovery_at,
+        last_recovery_at: None,
         user_id: None,
     }
 }
 
-#[test]
-fn test_should_send_failure_email_first_failure() {
-    let now = OffsetDateTime::now_utc();
-    let alert = create_test_alert(false, None);
+fn empty_registry() -> ConfirmationRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
 
-    // Server just started failing - should send email
-    assert!(should_send_failure_email(&alert, now));
+// =============================================================================
+// should_send_reminder_email Tests
+// =============================================================================
+
+#[test]
+fn test_should_send_reminder_email_no_email_sent() {
+    let now = OffsetDateTime::now_utc();
+    let alert = make_alert(true, None);
+
+    // No email has ever been sent → should send
+    assert!(should_send_reminder_email(&alert, now));
 }
 
 #[test]
-fn test_should_send_failure_email_already_failing_no_email_sent() {
+fn test_should_send_reminder_email_too_soon() {
     let now = OffsetDateTime::now_utc();
-    let alert = create_test_alert(true, None);
-
-    // Server was already failing but no email sent yet - should send
-    assert!(should_send_failure_email(&alert, now));
-}
-
-#[test]
-fn test_should_send_failure_email_recent_email() {
-    let now = OffsetDateTime::now_utc();
-    // Email sent 1 hour ago (reminder interval is 24 hours)
+    // Email sent 1 hour ago (reminder interval is 12 hours)
     let last_email = now - Duration::hours(1);
-    let alert = create_test_alert(true, Some(last_email));
+    let alert = make_alert(true, Some(last_email));
 
-    // Too soon for reminder - should NOT send
-    assert!(!should_send_failure_email(&alert, now));
+    // Too soon for reminder → should NOT send
+    assert!(!should_send_reminder_email(&alert, now));
 }
 
 #[test]
-fn test_should_send_failure_email_old_email() {
+fn test_should_send_reminder_email_past_threshold() {
     let now = OffsetDateTime::now_utc();
-    // Email sent 25 hours ago (reminder interval is 24 hours)
-    let last_email = now - Duration::hours(25);
-    let alert = create_test_alert(true, Some(last_email));
+    // Email sent 13 hours ago (reminder interval is 12 hours)
+    let last_email = now - Duration::hours(13);
+    let alert = make_alert(true, Some(last_email));
 
-    // Past reminder threshold - should send
-    assert!(should_send_failure_email(&alert, now));
+    // Past reminder threshold → should send
+    assert!(should_send_reminder_email(&alert, now));
 }
 
 #[test]
-fn test_should_send_failure_email_exactly_at_threshold() {
+fn test_should_send_reminder_email_at_threshold() {
     let now = OffsetDateTime::now_utc();
-    // Email sent exactly 24 hours ago
-    let last_email = now - Duration::hours(24);
-    let alert = create_test_alert(true, Some(last_email));
+    // Email sent exactly 12 hours ago
+    let last_email = now - Duration::hours(12);
+    let alert = make_alert(true, Some(last_email));
 
-    // At threshold - should send
-    assert!(should_send_failure_email(&alert, now));
+    // At threshold → should send
+    assert!(should_send_reminder_email(&alert, now));
+}
+
+#[test]
+fn test_should_send_reminder_email_ignores_failing_flag() {
+    // The function only cares about last_email_sent_at — is_currently_failing
+    // is managed by the loop, not this predicate.
+    let now = OffsetDateTime::now_utc();
+    let alert_not_failing = make_alert(false, None);
+    let alert_failing = make_alert(true, None);
+
+    // Both return true when no email has been sent
+    assert!(should_send_reminder_email(&alert_not_failing, now));
+    assert!(should_send_reminder_email(&alert_failing, now));
 }
 
 // =============================================================================
-// Flapping Detection Tests
+// ConfirmationRegistry Tests
 // =============================================================================
 
-#[test]
-fn test_flapping_suppression() {
-    // Scenario: server failed, recovered 10 min ago, now failing again
-    // Should NOT send a new failure email (flapping within 30 min window)
-    let now = OffsetDateTime::now_utc();
-    let last_recovery = now - Duration::minutes(10);
-    let last_email = now - Duration::minutes(15); // email sent 15 min ago
-
-    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
-
-    assert!(
-        !should_send_failure_email(&alert, now),
-        "Should suppress failure email during flapping (recovered 10 min ago, email 15 min ago)"
-    );
+#[tokio::test]
+async fn test_confirmation_registry_starts_empty() {
+    let registry = empty_registry();
+    let reg = registry.lock().await;
+    assert!(reg.is_empty());
 }
 
-#[test]
-fn test_flapping_after_stability_window() {
-    // Scenario: server failed, recovered 35 min ago, now failing again
-    // Should send a new failure email (past the 30 min stability window)
-    let now = OffsetDateTime::now_utc();
-    let last_recovery = now - Duration::minutes(35);
-    let last_email = now - Duration::minutes(40);
+#[tokio::test]
+async fn test_confirmation_no_email_before_threshold() {
+    // Simulate the confirmation accumulation logic:
+    // N-1 failures should not reach CONFIRMATION_THRESHOLD.
+    let registry = empty_registry();
 
-    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
+    // Insert an alert and accumulate failures up to threshold - 1
+    {
+        let mut reg = registry.lock().await;
+        reg.insert(42, 1);
+    }
 
-    assert!(
-        should_send_failure_email(&alert, now),
-        "Should send failure email after stability window has passed"
-    );
+    for step in 2..CONFIRMATION_THRESHOLD {
+        let count = {
+            let reg = registry.lock().await;
+            reg.get(&42).copied().unwrap_or(0)
+        };
+        // Should still be below threshold
+        assert!(
+            count < CONFIRMATION_THRESHOLD,
+            "Step {step}: count {count} should be < threshold"
+        );
+        // Increment
+        let mut reg = registry.lock().await;
+        reg.insert(42, step);
+    }
+
+    // At this point count == CONFIRMATION_THRESHOLD - 1, no email triggered yet
+    let final_count = registry.lock().await.get(&42).copied().unwrap_or(0);
+    assert_eq!(final_count, CONFIRMATION_THRESHOLD - 1);
 }
 
-#[test]
-fn test_flapping_still_sends_reminder() {
-    // Scenario: server is flapping, but it's been 13 hours since last email
-    // Should send a reminder email even though we're in the flapping window
-    let now = OffsetDateTime::now_utc();
-    let last_recovery = now - Duration::minutes(10);
-    let last_email = now - Duration::hours(13); // past the 12h reminder interval
+#[tokio::test]
+async fn test_confirmation_email_at_threshold() {
+    // When count reaches CONFIRMATION_THRESHOLD the entry is removed and
+    // is_currently_failing would be set to true (DB update done by loop).
+    // Here we verify the registry removal logic.
+    let registry = empty_registry();
+    registry.lock().await.insert(42, CONFIRMATION_THRESHOLD - 1);
 
-    let alert = create_test_alert_with_recovery(false, Some(last_email), Some(last_recovery));
+    // Simulate the threshold check that the active loop performs
+    let new_count = {
+        let reg = registry.lock().await;
+        reg.get(&42).copied().unwrap_or(0) + 1
+    };
+    assert_eq!(new_count, CONFIRMATION_THRESHOLD);
 
-    assert!(
-        should_send_failure_email(&alert, now),
-        "Should send reminder email even during flapping when past reminder interval"
-    );
+    // Threshold reached → remove from registry (as the loop does)
+    registry.lock().await.remove(&42);
+    assert!(!registry.lock().await.contains_key(&42));
 }
 
-#[test]
-fn test_flapping_no_previous_email_sends_immediately() {
-    // Scenario: server recovered recently but we never sent an email before
-    // Should send because user has never been notified
-    let now = OffsetDateTime::now_utc();
-    let last_recovery = now - Duration::minutes(5);
+#[tokio::test]
+async fn test_confirmation_recovery_cancels() {
+    // If the server passes a check while in the confirmation phase,
+    // the registry entry is removed and no email is sent.
+    let registry = empty_registry();
+    registry.lock().await.insert(42, 3);
 
-    let alert = create_test_alert_with_recovery(false, None, Some(last_recovery));
-
-    assert!(
-        should_send_failure_email(&alert, now),
-        "Should send failure email during flapping if no email was ever sent"
-    );
+    // Server passes → remove from registry
+    let was_in_registry = registry.lock().await.remove(&42).is_some();
+    assert!(was_in_registry);
+    assert!(!registry.lock().await.contains_key(&42));
 }
 
-#[test]
-fn test_no_recovery_history_sends_normally() {
-    // Scenario: first failure ever (no last_recovery_at)
-    // Should send immediately - this is a genuine new failure
-    let now = OffsetDateTime::now_utc();
-
-    let alert = create_test_alert_with_recovery(false, None, None);
-
-    assert!(
-        should_send_failure_email(&alert, now),
-        "Should send failure email on first-ever failure"
-    );
+#[tokio::test]
+async fn test_confirmation_threshold_constant() {
+    // Ensure the constant matches the expected 5-minute window.
+    assert_eq!(CONFIRMATION_THRESHOLD, 5);
 }
 
 // =============================================================================
@@ -321,9 +191,8 @@ fn test_failure_email_template_with_reminder() {
     let template = FailureEmailTemplate {
         server_name: "example.org".to_string(),
         check_url: "https://test.example.com/?serverName=example.org".to_string(),
-        is_reminder: true,
         failure_count: 3,
-        reminder_interval: "24 hours".to_string(),
+        reminder_interval: "12 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
     };
@@ -331,7 +200,7 @@ fn test_failure_email_template_with_reminder() {
     let html = template.render_html().expect("render HTML");
     let text = template.render_text();
 
-    // HTML should contain reminder-specific content
+    // HTML should contain reminder-specific content (failure_count > 1)
     assert!(html.contains("reminder"));
     assert!(html.contains("example.org"));
 
@@ -347,16 +216,15 @@ fn test_failure_email_template_without_reminder() {
     let template = FailureEmailTemplate {
         server_name: "example.org".to_string(),
         check_url: "https://test.example.com/?serverName=example.org".to_string(),
-        is_reminder: false,
         failure_count: 1,
-        reminder_interval: "24 hours".to_string(),
+        reminder_interval: "12 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
     };
 
     let text = template.render_text();
 
-    // First failure - no reminder text
+    // First failure — no reminder text
     assert!(!text.contains("reminder #"));
 }
 

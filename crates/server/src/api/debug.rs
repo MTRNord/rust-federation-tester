@@ -113,7 +113,6 @@ pub async fn preview_failure_email(
         server_name: "example.matrix.org".to_string(),
         check_url: "https://example.com/report/example.matrix.org".to_string(),
         unsubscribe_url: "https://example.com/unsubscribe?token=sample-token".to_string(),
-        is_reminder: true,
         failure_count: 3,
         reminder_interval: "24 hours".to_string(),
         failure_reason: Some(

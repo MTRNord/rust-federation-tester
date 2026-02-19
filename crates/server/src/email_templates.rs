@@ -44,7 +44,6 @@ fn inline_css(html: &str) -> String {
 pub struct FailureEmailTemplate {
     pub server_name: String,
     pub check_url: String,
-    pub is_reminder: bool,
     pub failure_count: i32,
     pub reminder_interval: String,
     pub unsubscribe_url: String,
@@ -212,7 +211,6 @@ mod tests {
         let template = FailureEmailTemplate {
             server_name: "example.org".to_string(),
             check_url: "https://test.example.com/results?serverName=example.org".to_string(),
-            is_reminder: false,
             failure_count: 1,
             reminder_interval: "12 hours".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),

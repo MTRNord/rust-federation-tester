@@ -1,3 +1,9 @@
+//! Per-recipient email audit log for GDPR compliance.
+//!
+//! Records the email address, type, and timing of every notification sent.
+//! This table can be cleared on a per-user GDPR erasure request.
+//! For internal operational history (without PII), see [`crate::entity::alert_status_history`].
+
 use sea_orm::entity::prelude::*;
 use serde::Serialize;
 use time::OffsetDateTime;

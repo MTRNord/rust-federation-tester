@@ -6,7 +6,7 @@
 //! - `/verify` - Verify email and complete actions
 //! - `/{id}` - Delete an alert
 
-use crate::{AppResources, entity::alert, recurring_alerts::AlertTaskManager};
+use crate::{AppResources, entity::alert};
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -18,7 +18,6 @@ use lettre::AsyncTransport;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -54,20 +53,13 @@ struct VerifyParams {
     token: String,
 }
 
-/// Shared state for alert endpoints.
-#[derive(Clone)]
-pub struct AlertAppState {
-    pub task_manager: Arc<AlertTaskManager>,
-}
-
 /// Creates the alerts API router.
 #[tracing::instrument(skip_all)]
-pub fn router(alert_state: AlertAppState) -> OpenApiRouter {
+pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(register_alert, delete_alert))
         .routes(routes!(list_alerts))
         .routes(routes!(verify_alert))
-        .with_state(alert_state)
 }
 
 #[tracing::instrument(skip(resources, payload), fields(server_name = payload.server_name, email_len = payload.email.len()))]

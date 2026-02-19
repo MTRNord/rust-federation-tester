@@ -1,13 +1,11 @@
 use hickory_resolver::Resolver;
 use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
 use rust_federation_tester::AppResources;
-use rust_federation_tester::api::alert_api::AlertAppState;
+use rust_federation_tester::alerts::{ConfirmationRegistry, active_check_loop, healthy_check_loop};
 use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
-use rust_federation_tester::recurring_alerts::AlertTaskManager;
-use rust_federation_tester::recurring_alerts::recurring_alert_checks;
 
 use rustls::crypto;
 use rustls::crypto::CryptoProvider;
@@ -252,15 +250,10 @@ async fn main() -> color_eyre::eyre::Result<()> {
     tracing::debug!("Loading resolver");
     let resolver = Arc::new(Resolver::builder_tokio()?.build());
     let connection_pool = ConnectionPool::default();
-    let task_manager = Arc::new(AlertTaskManager::new());
 
     let state = AppState {
         resolver,
         connection_pool: connection_pool.clone(),
-    };
-
-    let alert_state = AlertAppState {
-        task_manager: task_manager.clone(),
     };
 
     let resources = std::sync::Arc::new(AppResources { db, mailer, config });
@@ -295,24 +288,26 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    // Start recurring alert checks
-    let resources_for_checks = resources.clone();
-    let task_manager_for_checks = task_manager.clone();
-    let resolver_for_checks = state.resolver.clone();
-    let connection_pool_for_checks = state.connection_pool.clone();
-    tracing::debug!("Starting recurring alert checks");
-    tokio::spawn(async move {
-        recurring_alert_checks(
-            resources_for_checks,
-            task_manager_for_checks,
-            resolver_for_checks,
-            connection_pool_for_checks,
-        )
-        .await;
-    });
+    // Start the two-queue alert check loops
+    let registry: ConfirmationRegistry =
+        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    tracing::debug!("Starting healthy alert check loop (5-min interval)");
+    tokio::spawn(healthy_check_loop(
+        resources.clone(),
+        registry.clone(),
+        state.resolver.clone(),
+        connection_pool.clone(),
+    ));
+    tracing::debug!("Starting active alert check loop (1-min interval)");
+    tokio::spawn(active_check_loop(
+        resources.clone(),
+        registry,
+        state.resolver.clone(),
+        connection_pool.clone(),
+    ));
 
     let debug_mode = is_debug_mode();
 
-    start_webserver(state, alert_state, (*resources).clone(), debug_mode).await?;
+    start_webserver(state, (*resources).clone(), debug_mode).await?;
     Ok(())
 }

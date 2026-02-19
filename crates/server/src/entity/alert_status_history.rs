@@ -1,3 +1,8 @@
+//! Internal operational audit trail for all federation check events.
+//!
+//! Does NOT store recipient email addresses — use [`crate::entity::email_log`] for PII-bearing records.
+//! Retained for 30 days; used for debugging transient failures.
+
 use sea_orm::entity::prelude::*;
 use serde::Serialize;
 use time::OffsetDateTime;

@@ -26,11 +26,6 @@ pub mod security;
 pub mod stats;
 pub mod validation;
 
-// Backward compatibility: re-export from alerts module
-pub mod recurring_alerts {
-    pub use crate::alerts::*;
-}
-
 #[derive(Clone, Debug)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,

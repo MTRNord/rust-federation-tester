@@ -23,7 +23,6 @@ pub mod openapi;
 pub use crate::oauth2;
 
 // Re-export for backward compatibility with existing code
-pub use alerts::AlertAppState;
 pub use federation::AppState;
 
 // Re-export commonly used items
@@ -39,7 +38,6 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
 
-// Backward compatible module aliases
 pub mod alert_api {
     pub use super::alerts::*;
 }
@@ -49,10 +47,9 @@ pub mod federation_tester_api {
 }
 
 /// Starts the web server with all configured routes.
-#[tracing::instrument(skip(app_state, alert_state, app_resources))]
+#[tracing::instrument(skip(app_state, app_resources))]
 pub async fn start_webserver<P: ConnectionProvider>(
     app_state: AppState<P>,
-    alert_state: AlertAppState,
     app_resources: AppResources,
     debug_mode: bool,
 ) -> color_eyre::Result<()> {
@@ -67,7 +64,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
 
     // Conditionally add legacy magic link alerts API
     if app_resources.config.oauth2.magic_links_enabled {
-        router = router.nest("/api/alerts", alerts::router(alert_state));
+        router = router.nest("/api/alerts", alerts::router());
         tracing::info!("Legacy magic link alerts API enabled at /api/alerts/*");
     } else {
         tracing::info!(

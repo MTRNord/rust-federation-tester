@@ -288,13 +288,8 @@ async fn test_alerts_verify_invalid_token() {
     use rust_federation_tester::api::alerts;
 
     let resources = create_test_resources(false).await;
-    let task_manager = Arc::new(rust_federation_tester::recurring_alerts::AlertTaskManager::new());
-    let alert_state = alerts::AlertAppState { task_manager };
-
     // Convert OpenApiRouter to regular Router
-    let app: Router = alerts::router(alert_state)
-        .layer(Extension(resources))
-        .into();
+    let app: Router = alerts::router().layer(Extension(resources)).into();
     let server = TestServer::new(app).expect("create test server");
 
     // Test with invalid token
@@ -318,13 +313,8 @@ async fn test_alerts_verify_missing_token() {
     use rust_federation_tester::api::alerts;
 
     let resources = create_test_resources(false).await;
-    let task_manager = Arc::new(rust_federation_tester::recurring_alerts::AlertTaskManager::new());
-    let alert_state = alerts::AlertAppState { task_manager };
-
     // Convert OpenApiRouter to regular Router
-    let app: Router = alerts::router(alert_state)
-        .layer(Extension(resources))
-        .into();
+    let app: Router = alerts::router().layer(Extension(resources)).into();
     let server = TestServer::new(app).expect("create test server");
 
     // Test without token parameter - should fail
@@ -339,13 +329,8 @@ async fn test_alerts_delete_nonexistent() {
     use rust_federation_tester::api::alerts;
 
     let resources = create_test_resources(false).await;
-    let task_manager = Arc::new(rust_federation_tester::recurring_alerts::AlertTaskManager::new());
-    let alert_state = alerts::AlertAppState { task_manager };
-
     // Convert OpenApiRouter to regular Router
-    let app: Router = alerts::router(alert_state)
-        .layer(Extension(resources))
-        .into();
+    let app: Router = alerts::router().layer(Extension(resources)).into();
     let server = TestServer::new(app).expect("create test server");
 
     // Try to delete a non-existent alert

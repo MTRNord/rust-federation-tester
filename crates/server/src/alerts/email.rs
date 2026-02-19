@@ -18,6 +18,19 @@ use tracing::info;
 /// Email sending policy configuration - reminder interval.
 pub const REMINDER_EMAIL_INTERVAL: Duration = Duration::from_secs(12 * 3600); // 12 hours
 
+/// Error type for email sending operations.
+#[derive(Debug, thiserror::Error)]
+pub enum EmailError {
+    #[error("Invalid email address '{address}': {detail}")]
+    InvalidAddress { address: String, detail: String },
+    #[error("Failed to render email template: {0}")]
+    TemplateFailed(String),
+    #[error("Failed to build email message: {0}")]
+    BuildFailed(#[from] lettre::error::Error),
+    #[error("SMTP transport error: {0}")]
+    SendFailed(#[from] lettre::transport::smtp::Error),
+}
+
 /// Send a failure notification email.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
@@ -30,7 +43,7 @@ pub async fn send_failure_email(
     alert_id: i32,
     failure_count: i32,
     failure_reason: Option<String>,
-) {
+) -> Result<(), EmailError> {
     let check_url = format!("{}results?serverName={}", config.frontend_url, server_name);
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
@@ -59,7 +72,6 @@ pub async fn send_failure_email(
     let template = FailureEmailTemplate {
         server_name: server_name.to_string(),
         check_url: check_url.clone(),
-        is_reminder: failure_count > 1,
         failure_count,
         reminder_interval: reminder_interval_text,
         unsubscribe_url: unsubscribe_url.clone(),
@@ -80,15 +92,41 @@ pub async fn send_failure_email(
                 alert_id = alert_id,
                 message = "Failed to render HTML email template"
             );
-            return;
+            return Err(EmailError::TemplateFailed(e.to_string()));
         }
     };
     let text_body = template.render_text();
 
+    let from_mailbox: lettre::message::Mailbox = config.smtp.from.parse().map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_failure_email.invalid_from_address",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            address = %config.smtp.from,
+            message = "Invalid SMTP from address in configuration"
+        );
+        EmailError::InvalidAddress {
+            address: config.smtp.from.clone(),
+            detail: format!("{e}"),
+        }
+    })?;
+
+    let to_mailbox: lettre::message::Mailbox = email.parse().map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_failure_email.invalid_to_address",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            alert_id = alert_id,
+            message = "Invalid recipient email address"
+        );
+        EmailError::InvalidAddress {
+            address: email.to_string(),
+            detail: format!("{e}"),
+        }
+    })?;
+
     // Create multipart email with both HTML and plain text
     let email_msg = lettre::Message::builder()
-        .from(config.smtp.from.parse().unwrap())
-        .to(email.parse().unwrap())
+        .from(from_mailbox)
+        .to(to_mailbox)
         .subject(subject)
         .header(lettre::message::header::MIME_VERSION_1_0)
         .header(UnsubscribeHeader::from(unsubscribe_url))
@@ -106,9 +144,9 @@ pub async fn send_failure_email(
                         .body(html_body),
                 ),
         )
-        .unwrap();
+        .map_err(EmailError::BuildFailed)?;
 
-    if let Err(e) = mailer.send(email_msg).await {
+    mailer.send(email_msg).await.map_err(|e| {
         tracing::error!(
             name = "alerts.send_failure_email.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -117,35 +155,38 @@ pub async fn send_failure_email(
             alert_id = alert_id,
             message = "Failed to send failure alert email"
         );
-    } else {
-        info!(
-            target: "rust-federation-tester",
-            "Sent failure alert email #{} to {} for server {}",
-            failure_count, email, server_name
+        EmailError::SendFailed(e)
+    })?;
+
+    info!(
+        target: "rust-federation-tester",
+        "Sent failure alert email #{} to {} for server {}",
+        failure_count, email, server_name
+    );
+
+    // Log the email to database
+    let email_log_entry = email_log::ActiveModel {
+        id: ActiveValue::NotSet,
+        alert_id: ActiveValue::Set(alert_id),
+        email: ActiveValue::Set(email.to_string()),
+        server_name: ActiveValue::Set(server_name.to_string()),
+        email_type: ActiveValue::Set("failure".to_string()),
+        sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
+        failure_count: ActiveValue::Set(Some(failure_count)),
+    };
+
+    if let Err(e) = email_log_entry.insert(db.as_ref()).await {
+        tracing::error!(
+            name = "alerts.send_failure_email.log_insert_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            server_name = %server_name,
+            alert_id = alert_id,
+            message = "Failed to log failure email to database"
         );
-
-        // Log the email to database
-        let email_log_entry = email_log::ActiveModel {
-            id: ActiveValue::NotSet,
-            alert_id: ActiveValue::Set(alert_id),
-            email: ActiveValue::Set(email.to_string()),
-            server_name: ActiveValue::Set(server_name.to_string()),
-            email_type: ActiveValue::Set("failure".to_string()),
-            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
-            failure_count: ActiveValue::Set(Some(failure_count)),
-        };
-
-        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            tracing::error!(
-                name = "alerts.send_failure_email.log_insert_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to log failure email to database"
-            );
-        }
     }
+
+    Ok(())
 }
 
 /// Send a recovery notification email.
@@ -157,7 +198,7 @@ pub async fn send_recovery_email(
     email: &str,
     server_name: &str,
     alert_id: i32,
-) {
+) -> Result<(), EmailError> {
     let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
 
     let unsubscribe_url = generate_list_unsubscribe_url(
@@ -188,15 +229,41 @@ pub async fn send_recovery_email(
                 alert_id = alert_id,
                 message = "Failed to render HTML email template for recovery"
             );
-            return;
+            return Err(EmailError::TemplateFailed(e.to_string()));
         }
     };
     let text_body = template.render_text();
 
+    let from_mailbox: lettre::message::Mailbox = config.smtp.from.parse().map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_recovery_email.invalid_from_address",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            address = %config.smtp.from,
+            message = "Invalid SMTP from address in configuration"
+        );
+        EmailError::InvalidAddress {
+            address: config.smtp.from.clone(),
+            detail: format!("{e}"),
+        }
+    })?;
+
+    let to_mailbox: lettre::message::Mailbox = email.parse().map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_recovery_email.invalid_to_address",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            alert_id = alert_id,
+            message = "Invalid recipient email address"
+        );
+        EmailError::InvalidAddress {
+            address: email.to_string(),
+            detail: format!("{e}"),
+        }
+    })?;
+
     // Create multipart email with both HTML and plain text
     let email_msg = lettre::Message::builder()
-        .from(config.smtp.from.parse().unwrap())
-        .to(email.parse().unwrap())
+        .from(from_mailbox)
+        .to(to_mailbox)
         .subject(subject)
         .header(lettre::message::header::MIME_VERSION_1_0)
         .header(UnsubscribeHeader::from(unsubscribe_url))
@@ -214,9 +281,9 @@ pub async fn send_recovery_email(
                         .body(html_body),
                 ),
         )
-        .unwrap();
+        .map_err(EmailError::BuildFailed)?;
 
-    if let Err(e) = mailer.send(email_msg).await {
+    mailer.send(email_msg).await.map_err(|e| {
         tracing::error!(
             name = "alerts.send_recovery_email.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -225,34 +292,37 @@ pub async fn send_recovery_email(
             alert_id = alert_id,
             message = "Failed to send recovery email"
         );
-    } else {
-        info!(
-            "Sent recovery email to {} for server {}",
-            email, server_name
+        EmailError::SendFailed(e)
+    })?;
+
+    info!(
+        "Sent recovery email to {} for server {}",
+        email, server_name
+    );
+
+    // Log the email to database
+    let email_log_entry = email_log::ActiveModel {
+        id: ActiveValue::NotSet,
+        alert_id: ActiveValue::Set(alert_id),
+        email: ActiveValue::Set(email.to_string()),
+        server_name: ActiveValue::Set(server_name.to_string()),
+        email_type: ActiveValue::Set("recovery".to_string()),
+        sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
+        failure_count: ActiveValue::NotSet,
+    };
+
+    if let Err(e) = email_log_entry.insert(db.as_ref()).await {
+        tracing::error!(
+            name = "alerts.send_recovery_email.log_insert_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            server_name = %server_name,
+            alert_id = alert_id,
+            message = "Failed to log recovery email to database"
         );
-
-        // Log the email to database
-        let email_log_entry = email_log::ActiveModel {
-            id: ActiveValue::NotSet,
-            alert_id: ActiveValue::Set(alert_id),
-            email: ActiveValue::Set(email.to_string()),
-            server_name: ActiveValue::Set(server_name.to_string()),
-            email_type: ActiveValue::Set("recovery".to_string()),
-            sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
-            failure_count: ActiveValue::NotSet,
-        };
-
-        if let Err(e) = email_log_entry.insert(db.as_ref()).await {
-            tracing::error!(
-                name = "alerts.send_recovery_email.log_insert_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                server_name = %server_name,
-                alert_id = alert_id,
-                message = "Failed to log recovery email to database"
-            );
-        }
     }
+
+    Ok(())
 }
 
 /// Generates a List-Unsubscribe URL for the given alert.
