@@ -48,6 +48,7 @@ pub struct FailureEmailTemplate {
     pub failure_count: i32,
     pub reminder_interval: String,
     pub unsubscribe_url: String,
+    pub failure_reason: Option<String>,
 }
 
 impl FailureEmailTemplate {
@@ -68,10 +69,16 @@ impl FailureEmailTemplate {
             String::new()
         };
 
+        let reason_text = if let Some(ref reason) = self.failure_reason {
+            format!("\nFailure reason: {}\n", reason)
+        } else {
+            String::new()
+        };
+
         format!(
             r#"Hello,
 
-Your server '{}' failed the federation health check.{}
+Your server '{}' failed the federation health check.{}{}
 
 Please review the latest report at {} and take action if needed.
 
@@ -84,6 +91,7 @@ The Federation Tester Team
 Unsubscribe: {}"#,
             self.server_name,
             reminder_text,
+            reason_text,
             self.check_url,
             self.reminder_interval,
             self.unsubscribe_url
@@ -208,6 +216,7 @@ mod tests {
             failure_count: 1,
             reminder_interval: "12 hours".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
+            failure_reason: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");

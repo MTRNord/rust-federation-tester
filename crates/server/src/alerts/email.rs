@@ -19,6 +19,7 @@ use tracing::info;
 pub const REMINDER_EMAIL_INTERVAL: Duration = Duration::from_secs(12 * 3600); // 12 hours
 
 /// Send a failure notification email.
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
 pub async fn send_failure_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
@@ -28,6 +29,7 @@ pub async fn send_failure_email(
     server_name: &str,
     alert_id: i32,
     failure_count: i32,
+    failure_reason: Option<String>,
 ) {
     let check_url = format!("{}results?serverName={}", config.frontend_url, server_name);
 
@@ -61,6 +63,7 @@ pub async fn send_failure_email(
         failure_count,
         reminder_interval: reminder_interval_text,
         unsubscribe_url: unsubscribe_url.clone(),
+        failure_reason,
     };
 
     let subject = format!("Federation Alert: {server_name} is not healthy");

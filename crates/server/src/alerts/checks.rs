@@ -8,7 +8,7 @@ use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_rec
 use crate::alerts::task_manager::AlertTaskManager;
 use crate::connection_pool::ConnectionPool;
 use crate::entity::{alert, alert_status_history};
-use crate::response::generate_json_report;
+use crate::response::{Root, generate_json_report};
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
@@ -60,7 +60,35 @@ pub fn should_send_failure_email(alert: &alert::Model, now: OffsetDateTime) -> b
     time_since_last_email >= reminder_threshold
 }
 
+/// Extract a human-readable failure reason from a federation report.
+///
+/// Returns the first available error message, preferring the top-level error
+/// (set during server name validation, well-known, or DNS phases) over
+/// per-connection errors.
+///
+/// Example error strings that may be returned:
+/// - `"Invalid server name: ..."` (server name validation failure)
+/// - `"No A/AAAA-Records for example.org found"` (DNS / well-known DNS failure)
+/// - `"A record lookup error for example.org: ..."` (DNS lookup failure)
+/// - `"SRV lookup timeout for example.org"` (DNS timeout)
+/// - `"SRV record for example.org points to CNAME ..., which is not allowed per RFC2782"`
+/// - `"Error fetching well-known URL: 404 Not Found"` (HTTP error during well-known)
+/// - `"Timeout while fetching well-known URL: ..."` (network timeout during well-known)
+/// - `"m.server points to private/internal address: ..."` (SSRF protection triggered)
+/// - `"Error fetching server version from 1.2.3.4:8448: ..."` (connection failure)
+/// - `"Error fetching keys from 1.2.3.4:8448: ..."` (key fetch failure)
+fn extract_failure_reason(report: &Root) -> Option<String> {
+    report.error.as_ref().map(|e| e.error.clone()).or_else(|| {
+        report
+            .connection_errors
+            .values()
+            .next()
+            .map(|e| e.error.clone())
+    })
+}
+
 /// Log a status event to the alert_status_history table.
+#[allow(clippy::too_many_arguments)]
 async fn log_status_event(
     db: &sea_orm::DatabaseConnection,
     alert_id: i32,
@@ -69,6 +97,7 @@ async fn log_status_event(
     federation_ok: bool,
     failure_count: i32,
     details: Option<String>,
+    failure_reason: Option<String>,
 ) {
     let entry = alert_status_history::ActiveModel {
         id: ActiveValue::NotSet,
@@ -79,6 +108,7 @@ async fn log_status_event(
         failure_count: ActiveValue::Set(failure_count),
         created_at: ActiveValue::Set(OffsetDateTime::now_utc()),
         details: ActiveValue::Set(details),
+        failure_reason: ActiveValue::Set(failure_reason),
     };
 
     if let Err(e) = entry.insert(db).await {
@@ -184,6 +214,9 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                             let send_email =
                                                 should_send_failure_email(&alert_model, now);
 
+                                            let failure_reason =
+                                                extract_failure_reason(&report);
+
                                             // Log the check failure
                                             log_status_event(
                                                 db.as_ref(),
@@ -193,6 +226,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                 false,
                                                 alert_model.failure_count + 1,
                                                 None,
+                                                failure_reason.clone(),
                                             )
                                             .await;
 
@@ -240,6 +274,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                     &server_name,
                                                     alert_id,
                                                     updated_alert.failure_count,
+                                                    failure_reason.clone(),
                                                 )
                                                 .await;
 
@@ -251,6 +286,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                     email_event_type,
                                                     false,
                                                     updated_alert.failure_count,
+                                                    None,
                                                     None,
                                                 )
                                                 .await;
@@ -282,6 +318,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                     true,
                                                     alert_model.failure_count,
                                                     Some("recovered from failing state".to_string()),
+                                                    None,
                                                 )
                                                 .await;
 
@@ -304,6 +341,7 @@ pub async fn recurring_alert_checks<P: ConnectionProvider + Send + Sync + 'stati
                                                         "email_recovery",
                                                         true,
                                                         alert_model.failure_count,
+                                                        None,
                                                         None,
                                                     )
                                                     .await;

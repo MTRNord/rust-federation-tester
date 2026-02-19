@@ -116,6 +116,9 @@ pub async fn preview_failure_email(
         is_reminder: true,
         failure_count: 3,
         reminder_interval: "24 hours".to_string(),
+        failure_reason: Some(
+            "Error fetching server version from 1.2.3.4:8448: connection refused".to_string(),
+        ),
     };
 
     match template.render_html() {

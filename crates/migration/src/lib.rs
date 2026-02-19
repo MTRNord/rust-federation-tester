@@ -13,6 +13,7 @@ mod m20260123_160000_link_alerts_to_oauth2;
 mod m20260124_120000_add_password_support;
 mod m20260218_000000_add_alert_status_history;
 mod m20260218_000001_add_last_recovery_at;
+mod m20260219_000000_add_failure_reason_to_status_history;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260124_120000_add_password_support::Migration),
             Box::new(m20260218_000000_add_alert_status_history::Migration),
             Box::new(m20260218_000001_add_last_recovery_at::Migration),
+            Box::new(m20260219_000000_add_failure_reason_to_status_history::Migration),
         ]
     }
 }

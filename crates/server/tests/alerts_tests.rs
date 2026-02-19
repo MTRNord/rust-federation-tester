@@ -325,6 +325,7 @@ fn test_failure_email_template_with_reminder() {
         failure_count: 3,
         reminder_interval: "24 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
+        failure_reason: None,
     };
 
     let html = template.render_html().expect("render HTML");
@@ -350,6 +351,7 @@ fn test_failure_email_template_without_reminder() {
         failure_count: 1,
         reminder_interval: "24 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
+        failure_reason: None,
     };
 
     let text = template.render_text();

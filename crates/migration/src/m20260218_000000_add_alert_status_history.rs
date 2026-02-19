@@ -89,4 +89,5 @@ pub enum AlertStatusHistory {
     FailureCount,
     CreatedAt,
     Details,
+    FailureReason,
 }

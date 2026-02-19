@@ -15,6 +15,7 @@ pub struct Model {
     pub failure_count: i32,
     pub created_at: OffsetDateTime,
     pub details: Option<String>,
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
