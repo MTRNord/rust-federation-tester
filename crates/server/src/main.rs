@@ -288,6 +288,11 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
+    // Separate connection pool for background alert checks.
+    // Per-client limits don't apply to internal batch work, so we use a pool
+    // with no effective per-client cap (all background checks share "anonymous").
+    let alert_pool = ConnectionPool::new_for_background_checks(5, 10);
+
     // Start the two-queue alert check loops
     let registry: ConfirmationRegistry =
         Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
@@ -296,14 +301,14 @@ async fn main() -> color_eyre::eyre::Result<()> {
         resources.clone(),
         registry.clone(),
         state.resolver.clone(),
-        connection_pool.clone(),
+        alert_pool.clone(),
     ));
     tracing::debug!("Starting active alert check loop (1-min interval)");
     tokio::spawn(active_check_loop(
         resources.clone(),
         registry,
         state.resolver.clone(),
-        connection_pool.clone(),
+        alert_pool,
     ));
 
     let debug_mode = is_debug_mode();

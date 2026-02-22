@@ -62,6 +62,23 @@ impl ConnectionPool {
         )
     }
 
+    /// Create a pool intended for internal background checks (alert loops).
+    ///
+    /// Per-client limits are set very high because all background checks share
+    /// the same `"anonymous"` client ID — the per-client concept is meaningful
+    /// only for external API callers identified by IP address.
+    #[tracing::instrument()]
+    pub fn new_for_background_checks(
+        max_connections_per_key: usize,
+        connection_timeout_secs: u64,
+    ) -> Self {
+        Self::new_with_limits(
+            max_connections_per_key,
+            usize::MAX, // No effective per-client cap for internal batch checks
+            connection_timeout_secs,
+        )
+    }
+
     #[tracing::instrument()]
     pub fn new_with_limits(
         max_connections_per_key: usize,
