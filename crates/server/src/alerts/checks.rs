@@ -121,6 +121,13 @@ pub async fn healthy_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
             .filter(|a| !registry_ids.contains(&a.id))
             .collect();
 
+        tracing::debug!(
+            name = "alerts.healthy_loop.iteration",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            alert_count = healthy_alerts.len(),
+            message = "Running healthy check loop iteration"
+        );
+
         // 3. Run all healthy checks concurrently
         let mut join_set: JoinSet<()> = JoinSet::new();
         for a in healthy_alerts {
@@ -202,6 +209,13 @@ pub async fn active_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
 
         // 4. Run all active checks concurrently
         let all_active: Vec<_> = failing_alerts.into_iter().chain(extra_alerts).collect();
+
+        tracing::debug!(
+            name = "alerts.active_loop.iteration",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            alert_count = all_active.len(),
+            message = "Running active check loop iteration"
+        );
         let mut join_set: JoinSet<()> = JoinSet::new();
         for a in all_active {
             let resources = resources.clone();
@@ -233,6 +247,14 @@ async fn run_healthy_check<P: ConnectionProvider>(
     resolver: &Resolver<P>,
     pool: &ConnectionPool,
 ) {
+    tracing::debug!(
+        name = "alerts.healthy_check.running",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        server_name = %a.server_name,
+        alert_id = a.id,
+        message = "Running healthy federation check"
+    );
+
     let report = generate_json_report(&a.server_name, resolver, pool).await;
     let now = OffsetDateTime::now_utc();
     let db = resources.db.as_ref();
@@ -297,6 +319,14 @@ async fn run_active_check<P: ConnectionProvider>(
     resolver: &Resolver<P>,
     pool: &ConnectionPool,
 ) {
+    tracing::debug!(
+        name = "alerts.active_check.running",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        server_name = %a.server_name,
+        alert_id = a.id,
+        message = "Running active federation check"
+    );
+
     let report = generate_json_report(&a.server_name, resolver, pool).await;
     let now = OffsetDateTime::now_utc();
     let db = resources.db.as_ref();
