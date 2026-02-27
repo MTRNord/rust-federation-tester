@@ -85,6 +85,7 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
     AppConfig {
         database_url: "sqlite::memory:".into(),
         smtp: SmtpConfig {
+            enabled: true,
             server: "localhost".into(),
             port: 25,
             username: "test".into(),
@@ -114,7 +115,7 @@ async fn create_test_resources(stats_enabled: bool) -> AppResources {
     );
     AppResources {
         db: Arc::new(db),
-        mailer,
+        mailer: Some(mailer),
         config,
     }
 }

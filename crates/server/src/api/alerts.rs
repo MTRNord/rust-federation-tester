@@ -91,6 +91,13 @@ async fn register_alert(
     Extension(resources): Extension<AppResources>,
     Json(payload): Json<RegisterAlert>,
 ) -> impl IntoResponse {
+    let Some(ref mailer) = resources.mailer else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "SMTP is not configured" })),
+        );
+    };
+
     // JWT magic token
     let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
     let claims = MagicClaims {
@@ -240,7 +247,7 @@ async fn register_alert(
         )
         .unwrap();
 
-    if let Err(e) = resources.mailer.send(email).await {
+    if let Err(e) = mailer.send(email).await {
         tracing::error!(
             name = "api.register_alert.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -462,6 +469,13 @@ async fn list_alerts(
     Extension(resources): Extension<AppResources>,
     Json(payload): Json<ListAlerts>,
 ) -> impl IntoResponse {
+    let Some(ref mailer) = resources.mailer else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "SMTP is not configured" })),
+        );
+    };
+
     let exp = (OffsetDateTime::now_utc() + time::Duration::hours(1)).unix_timestamp() as usize;
     let claims = MagicClaims {
         exp,
@@ -511,7 +525,7 @@ The Federation Tester Team"#
         .message_id(None)
         .body(email_body)
         .unwrap();
-    if let Err(e) = resources.mailer.send(email).await {
+    if let Err(e) = mailer.send(email).await {
         tracing::error!(
             name = "api.list_alerts.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -560,6 +574,13 @@ async fn delete_alert(
     Extension(resources): Extension<AppResources>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
+    let Some(ref mailer) = resources.mailer else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "SMTP is not configured" })),
+        );
+    };
+
     let found = alert::Entity::find()
         .filter(alert::Column::Id.eq(id))
         .one(resources.db.as_ref())
@@ -617,7 +638,7 @@ The Federation Tester Team"#,
                 .message_id(None)
                 .body(email_body)
                 .unwrap();
-            if let Err(e) = resources.mailer.send(email).await {
+            if let Err(e) = mailer.send(email).await {
                 tracing::error!(
                     name = "api.delete_alert.email_send_failed",
                     target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),

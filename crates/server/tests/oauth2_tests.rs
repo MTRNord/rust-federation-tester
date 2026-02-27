@@ -131,6 +131,7 @@ fn create_test_config() -> AppConfig {
     AppConfig {
         database_url: "sqlite::memory:".into(),
         smtp: SmtpConfig {
+            enabled: true,
             server: "localhost".into(),
             port: 25,
             username: "test".into(),
@@ -162,7 +163,7 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
 
     let resources = AppResources {
         db: db.clone(),
-        mailer,
+        mailer: Some(mailer),
         config: config.clone(),
     };
 

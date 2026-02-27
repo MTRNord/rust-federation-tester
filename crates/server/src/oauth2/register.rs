@@ -432,7 +432,8 @@ async fn send_verification_email(
                 ),
         )?;
 
-    resources.mailer.send(email_msg).await?;
+    let mailer = resources.mailer.as_ref().ok_or("SMTP is not configured")?;
+    mailer.send(email_msg).await?;
 
     Ok(())
 }
