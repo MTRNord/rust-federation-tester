@@ -39,11 +39,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Some(end) => {
                 let inner = &server_name[1..end];
                 let rest = &server_name[end + 1..];
-                let port = if rest.starts_with(':') {
-                    &rest[1..]
-                } else {
-                    ""
-                };
+                let port = rest.strip_prefix(':').unwrap_or("");
                 (inner, port)
             }
             None => ("", ""),

@@ -16,11 +16,7 @@ pub fn parse_and_validate_server_name(data: &mut Root, server_name: &str) {
             Some(end) => {
                 let inner = &server_name[1..end];
                 let rest = &server_name[end + 1..];
-                let port = if rest.starts_with(':') {
-                    &rest[1..]
-                } else {
-                    rest
-                };
+                let port = rest.strip_prefix(':').unwrap_or(rest);
                 (inner, port)
             }
             None => {

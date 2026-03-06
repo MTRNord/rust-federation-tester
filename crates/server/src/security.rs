@@ -90,14 +90,13 @@ impl SecureJsonParser {
         }
 
         match value {
-            Value::String(s) => {
-                if s.len() > self.max_string_length {
-                    return Err(JsonSecurityError::StringTooLong {
-                        length: s.len(),
-                        max: self.max_string_length,
-                    });
-                }
+            Value::String(s) if s.len() > self.max_string_length => {
+                return Err(JsonSecurityError::StringTooLong {
+                    length: s.len(),
+                    max: self.max_string_length,
+                });
             }
+            Value::String(_) => {}
             Value::Array(arr) => {
                 if arr.len() > self.max_array_length {
                     return Err(JsonSecurityError::ArrayTooLarge {
