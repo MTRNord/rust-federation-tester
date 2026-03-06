@@ -41,7 +41,7 @@ pub struct WellKnownResult {
     /// well-known phase.  If well-known succeeded these are the resolved IPs of the
     /// delegated m.server; if it failed this is the single port-8448 address for
     /// this IP.  Empty when the per-IP path was not taken (explicit port, no DNS).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connection_addresses: Vec<String>,
 }
 
@@ -256,6 +256,30 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     //
     // Each entry is (connect_addr, host_header, sni).
     let mut connection_targets: Vec<(String, String, String)> = Vec::new();
+
+    // Detect split-brain: different IPs returning different well-known outcomes means
+    // federation is unreliable — remote servers will get different resolution results
+    // depending on which IP they happen to reach.
+    if well_known_phase.per_ip_found_server.len() > 1 {
+        let unique_outcomes: std::collections::HashSet<Option<String>> = well_known_phase
+            .per_ip_found_server
+            .values()
+            .cloned()
+            .collect();
+        if unique_outcomes.len() > 1 {
+            resp_data.federation_ok = false;
+            resp_data.error = Some(Error {
+                error: format!(
+                    "Well-known responses are inconsistent across IPs (split-brain): \
+                     some IPs return different m.server values or fail entirely. \
+                     Remote servers will get different resolution results depending on \
+                     which IP they reach. Unique outcomes: {:?}",
+                    unique_outcomes
+                ),
+                error_code: ErrorCode::Unknown,
+            });
+        }
+    }
 
     if well_known_phase.per_ip_found_server.is_empty() {
         // No per-IP data (e.g. server_name had an explicit port, or no DNS records).
