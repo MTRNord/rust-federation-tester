@@ -14,6 +14,7 @@ use utoipa::ToSchema;
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Root {
+    pub server_name: String,
     pub well_known_result: BTreeMap<String, WellKnownResult>,
     #[serde(rename = "DNSResult")]
     pub dnsresult: Dnsresult,
@@ -209,6 +210,7 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     // Validate server name
     let mut resp_data = Root {
         federation_ok: true,
+        server_name: server_name.to_string(),
         ..Default::default()
     };
     parse_and_validate_server_name(&mut resp_data, server_name);
