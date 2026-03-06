@@ -204,6 +204,7 @@ pub enum ErrorCode {
     NotOk(String),
     NoResponse,
     Timeout,
+    SplitBrain,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -445,19 +446,18 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     // Resolve split-brain: if detected, check whether connections all succeeded.
     // If connections still work → warning only; if any failed → hard failure.
     if let Some(msg) = split_brain_message {
-        if resp_data.connection_errors.is_empty() && resp_data.federation_ok {
-            // All connections succeeded despite inconsistent well-known — warn but stay OK.
+        if resp_data.federation_ok {
+            // At least one connection succeeded despite inconsistent well-known — warn but stay OK.
             resp_data.federation_warning = true;
             resp_data.error = Some(Error {
                 error: msg,
-                error_code: ErrorCode::Unknown,
+                error_code: ErrorCode::SplitBrain,
             });
         } else {
-            // Some connections failed — split-brain is a hard failure.
-            resp_data.federation_ok = false;
+            // No connections succeeded — hard failure.
             resp_data.error = Some(Error {
                 error: msg,
-                error_code: ErrorCode::Unknown,
+                error_code: ErrorCode::SplitBrain,
             });
         }
     }
