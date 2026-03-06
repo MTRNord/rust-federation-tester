@@ -107,16 +107,29 @@ pub struct WellKnownPhaseResult {
     pub error: Option<Error>,
 }
 
+/// Returns true if server_name is an IPv4 literal or starts with `[` (IPv6 in brackets).
+/// When true, well-known lookup must be skipped per the Matrix spec.
+fn is_ip_literal(server_name: &str) -> bool {
+    if server_name.starts_with('[') {
+        return true;
+    }
+    // IPv4: the entire hostname (before any port) is a valid IPv4 address.
+    let host = server_name.split(':').next().unwrap_or(server_name);
+    host.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
 #[tracing::instrument(skip(resolver))]
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
 ) -> WellKnownPhaseResult {
-    if server_name.contains(':') {
+    // Spec step 1: IP literals skip well-known entirely.
+    // Spec step 2: explicit port also skips well-known.
+    if server_name.contains(':') || is_ip_literal(server_name) {
         tracing::info!(
             name = "federation.lookup_server_well_known",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            message = "Skipping well-known lookup for as it contains a port",
+            message = "Skipping well-known lookup (IP literal or explicit port)",
             server_name = %server_name
         );
         return WellKnownPhaseResult {

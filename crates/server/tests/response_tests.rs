@@ -162,6 +162,7 @@ fn test_well_known_result() {
         m_server: "matrix.example.org:443".to_string(),
         cache_expires_at: 1234567890,
         error: None,
+        connection_addresses: vec![],
     };
 
     let json = serde_json::to_string(&result).expect("serialization failed");

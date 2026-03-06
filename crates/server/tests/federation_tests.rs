@@ -162,6 +162,7 @@ mod federation_tests {
             "draupnir.midnightthoughts.space",
             "continuwuity.codestorm.net",
             "continuwuity.org",
+            "159.89.115.225", // IP literal regression test
         ];
         let is_github_actions =
             std::env::var("CI").is_ok() && std::env::var("GITHUB_RUN_ID").is_ok();
@@ -227,6 +228,238 @@ mod federation_tests {
                 server
             );
         }
+    }
+
+    // ── IP literal regression tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_lookup_server_well_known_skips_ipv4_literal() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        // Well-known must be skipped for IP literals (spec step 1)
+        let result = lookup_server_well_known("159.89.115.225", &resolver).await;
+        assert!(
+            result.error.is_none(),
+            "IP literal must not produce a well-known error: {:?}",
+            result.error
+        );
+        assert!(
+            result.well_known_result.is_empty(),
+            "IP literal well-known result should be empty"
+        );
+        assert!(result.found_server.is_none());
+        assert!(result.per_ip_found_server.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_well_known_skips_ipv4_literal_with_port() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let result = lookup_server_well_known("159.89.115.225:8448", &resolver).await;
+        assert!(result.error.is_none());
+        assert!(result.well_known_result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_well_known_skips_ipv6_literal() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let result = lookup_server_well_known("[::1]", &resolver).await;
+        assert!(result.error.is_none());
+        assert!(result.well_known_result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_dns_ipv4_literal_no_port() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        // DNS phase must return the IP directly at port 8448 without doing any DNS lookup
+        let result = lookup_server("159.89.115.225", &resolver).await;
+        assert!(
+            result.errors.is_empty(),
+            "IP literal must not produce DNS errors: {:?}",
+            result.errors
+        );
+        assert!(result.srvskipped, "SRV should be skipped for IP literals");
+        assert_eq!(
+            result.addrs,
+            vec!["159.89.115.225:8448"],
+            "Should directly use IP:8448 without DNS"
+        );
+        assert!(
+            result.srv_targets.is_empty(),
+            "No SRV targets should be created for IP literals"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_dns_ipv4_literal_with_port() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let result = lookup_server("159.89.115.225:8448", &resolver).await;
+        assert!(
+            result.errors.is_empty(),
+            "Should not error: {:?}",
+            result.errors
+        );
+        assert!(result.srvskipped);
+        assert_eq!(result.addrs, vec!["159.89.115.225:8448"]);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_dns_ipv6_literal_no_port() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let result = lookup_server("[::1]", &resolver).await;
+        assert!(
+            result.errors.is_empty(),
+            "Should not error: {:?}",
+            result.errors
+        );
+        assert!(result.srvskipped);
+        assert_eq!(result.addrs, vec!["[::1]:8448"]);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_server_dns_ipv6_literal_with_port() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let result = lookup_server("[::1]:8448", &resolver).await;
+        assert!(
+            result.errors.is_empty(),
+            "Should not error: {:?}",
+            result.errors
+        );
+        assert!(result.srvskipped);
+        assert_eq!(result.addrs, vec!["[::1]:8448"]);
+    }
+
+    #[tokio::test]
+    async fn test_generate_json_report_ipv4_literal_dns_resolves() {
+        // Regression test for 159.89.115.225: the backend must not fail with a DNS
+        // lookup error when an IP literal is submitted.
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let pool = test_connection_pool();
+        let result = generate_json_report("159.89.115.225", &resolver, &pool)
+            .await
+            .unwrap();
+
+        // The DNS phase must succeed and return the IP address directly.
+        assert!(
+            !result.dnsresult.addrs.is_empty(),
+            "IP literal should produce a DNS addr without doing a DNS lookup"
+        );
+        assert_eq!(
+            result.dnsresult.addrs,
+            vec!["159.89.115.225:8448"],
+            "Should use IP:8448 directly"
+        );
+        assert!(
+            result.dnsresult.srvskipped,
+            "SRV should be skipped for IP literals"
+        );
+        // The error must NOT be a DNS lookup error (it may fail at TLS/keys level,
+        // but not at the DNS resolution phase).
+        if let Some(err) = &result.error {
+            assert!(
+                !err.error.contains("A record lookup error"),
+                "Should not have DNS A-record lookup error for IP literal, got: {}",
+                err.error
+            );
+            assert!(
+                !err.error.contains("AAAA record lookup error"),
+                "Should not have DNS AAAA-record lookup error for IP literal, got: {}",
+                err.error
+            );
+        }
+        // Well-known must have been skipped
+        assert!(
+            result.well_known_result.is_empty(),
+            "Well-known must be skipped for IP literals"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_json_report_ipv4_literal_with_port_dns_resolves() {
+        install_crypto_provider_once();
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        let pool = test_connection_pool();
+        let result = generate_json_report("159.89.115.225:8448", &resolver, &pool)
+            .await
+            .unwrap();
+
+        assert!(
+            !result.dnsresult.addrs.is_empty(),
+            "IP literal with port should resolve directly"
+        );
+        assert_eq!(result.dnsresult.addrs, vec!["159.89.115.225:8448"]);
+        if let Some(err) = &result.error {
+            assert!(
+                !err.error.contains("record lookup error"),
+                "Should not have DNS lookup error for IP literal, got: {}",
+                err.error
+            );
+        }
+    }
+
+    // ── Validation regression tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_ipv4_literal() {
+        use rust_federation_tester::response::Root;
+        use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
+        let mut root = Root::default();
+        parse_and_validate_server_name(&mut root, "159.89.115.225");
+        assert!(root.error.is_none(), "IPv4 literal should be valid");
+    }
+
+    #[test]
+    fn test_validate_ipv4_literal_with_port() {
+        use rust_federation_tester::response::Root;
+        use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
+        let mut root = Root::default();
+        parse_and_validate_server_name(&mut root, "159.89.115.225:8448");
+        assert!(
+            root.error.is_none(),
+            "IPv4 literal with port should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_ipv6_literal_with_brackets() {
+        use rust_federation_tester::response::Root;
+        use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
+        let mut root = Root::default();
+        parse_and_validate_server_name(&mut root, "[::1]");
+        assert!(
+            root.error.is_none(),
+            "IPv6 literal in brackets should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_ipv6_literal_with_brackets_and_port() {
+        use rust_federation_tester::response::Root;
+        use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
+        let mut root = Root::default();
+        parse_and_validate_server_name(&mut root, "[::1]:8448");
+        assert!(
+            root.error.is_none(),
+            "IPv6 literal with port should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_ipv6_literal_missing_closing_bracket() {
+        use rust_federation_tester::response::Root;
+        use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
+        let mut root = Root::default();
+        parse_and_validate_server_name(&mut root, "[::1");
+        assert!(
+            root.error.is_some(),
+            "IPv6 literal missing closing bracket should be invalid"
+        );
     }
 
     #[tokio::test]

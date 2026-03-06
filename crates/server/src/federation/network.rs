@@ -29,8 +29,17 @@ pub async fn fetch_url_custom_sni_host(
     host: &str,
     sni: &str,
 ) -> Result<FullResponse, FetchError> {
-    let sni_host = sni.split(':').next().unwrap();
-    let host_host = host.split(':').next().unwrap();
+    // Strip brackets and port: "[::1]:8448" → "::1", "1.2.3.4:8448" → "1.2.3.4", "host:port" → "host"
+    let sni_host = if sni.starts_with('[') {
+        &sni[1..sni.find(']').unwrap_or(sni.len())]
+    } else {
+        sni.split(':').next().unwrap_or(sni)
+    };
+    let host_host = if host.starts_with('[') {
+        &host[1..host.find(']').unwrap_or(host.len())]
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
     tracing::debug!(
         name = "federation.fetch_url_custom_sni_host.start",
         target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),

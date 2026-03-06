@@ -31,6 +31,51 @@ pub async fn lookup_server<P: ConnectionProvider>(
     resolver: &Resolver<P>,
 ) -> DnsPhaseResult {
     use std::collections::BTreeMap;
+
+    // Spec step 1/2: If server_name is an IP literal, connect directly without any DNS.
+    // Parse hostname and optional port, handling IPv6 brackets.
+    let (ip_host, port_str) = if server_name.starts_with('[') {
+        match server_name.find(']') {
+            Some(end) => {
+                let inner = &server_name[1..end];
+                let rest = &server_name[end + 1..];
+                let port = if rest.starts_with(':') {
+                    &rest[1..]
+                } else {
+                    ""
+                };
+                (inner, port)
+            }
+            None => ("", ""),
+        }
+    } else if let Some(colon) = server_name.find(':') {
+        (&server_name[..colon], &server_name[colon + 1..])
+    } else {
+        (server_name, "")
+    };
+
+    if let Ok(ip) = ip_host.parse::<std::net::IpAddr>() {
+        let port: u16 = port_str.parse().unwrap_or(8448);
+        let addr = if ip.is_ipv6() {
+            format!("[{ip}]:{port}")
+        } else {
+            format!("{ip}:{port}")
+        };
+        tracing::info!(
+            name = "federation.dns.ip_literal",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            message = "Server name is an IP literal, skipping DNS lookup",
+            server_name = %server_name,
+            addr = %addr
+        );
+        return DnsPhaseResult {
+            srv_targets: BTreeMap::new(),
+            addrs: vec![addr],
+            srvskipped: true,
+            errors: vec![],
+        };
+    }
+
     let mut srv_targets: BTreeMap<String, Vec<SRVData>> = BTreeMap::new();
     let mut addrs: Vec<String> = vec![];
     let mut srvskipped = false;
