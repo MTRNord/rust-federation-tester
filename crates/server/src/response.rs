@@ -27,6 +27,12 @@ pub struct Root {
     pub error: Option<Error>,
     #[serde(rename = "FederationOK")]
     pub federation_ok: bool,
+    /// True when federation works but well-known responses were inconsistent across IPs
+    /// (split-brain). All connections still succeeded, but remote servers may get different
+    /// resolution results depending on which IP they reach.
+    #[serde(rename = "FederationWarning")]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub federation_warning: bool,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -258,28 +264,29 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     let mut connection_targets: Vec<(String, String, String)> = Vec::new();
 
     // Detect split-brain: different IPs returning different well-known outcomes means
-    // federation is unreliable — remote servers will get different resolution results
-    // depending on which IP they happen to reach.
-    if well_known_phase.per_ip_found_server.len() > 1 {
+    // federation may be unreliable — remote servers will get different resolution results
+    // depending on which IP they happen to reach. We track this here and decide whether it
+    // is a hard failure or just a warning after we know if connections still succeed.
+    let split_brain_message: Option<String> = if well_known_phase.per_ip_found_server.len() > 1 {
         let unique_outcomes: std::collections::HashSet<Option<String>> = well_known_phase
             .per_ip_found_server
             .values()
             .cloned()
             .collect();
         if unique_outcomes.len() > 1 {
-            resp_data.federation_ok = false;
-            resp_data.error = Some(Error {
-                error: format!(
-                    "Well-known responses are inconsistent across IPs (split-brain): \
+            Some(format!(
+                "Well-known responses are inconsistent across IPs (split-brain): \
                      some IPs return different m.server values or fail entirely. \
                      Remote servers will get different resolution results depending on \
                      which IP they reach. Unique outcomes: {:?}",
-                    unique_outcomes
-                ),
-                error_code: ErrorCode::Unknown,
-            });
+                unique_outcomes
+            ))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     if well_known_phase.per_ip_found_server.is_empty() {
         // No per-IP data (e.g. server_name had an explicit port, or no DNS records).
@@ -434,5 +441,26 @@ pub async fn generate_json_report<P: ConnectionProvider>(
             resp_data.federation_ok = any_success;
         }
     }
+
+    // Resolve split-brain: if detected, check whether connections all succeeded.
+    // If connections still work → warning only; if any failed → hard failure.
+    if let Some(msg) = split_brain_message {
+        if resp_data.connection_errors.is_empty() && resp_data.federation_ok {
+            // All connections succeeded despite inconsistent well-known — warn but stay OK.
+            resp_data.federation_warning = true;
+            resp_data.error = Some(Error {
+                error: msg,
+                error_code: ErrorCode::Unknown,
+            });
+        } else {
+            // Some connections failed — split-brain is a hard failure.
+            resp_data.federation_ok = false;
+            resp_data.error = Some(Error {
+                error: msg,
+                error_code: ErrorCode::Unknown,
+            });
+        }
+    }
+
     Ok(resp_data)
 }
