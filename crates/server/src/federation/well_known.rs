@@ -97,7 +97,13 @@ fn is_private_or_internal_ip(ip: &IpAddr) -> bool {
 #[derive(Debug, Clone)]
 pub struct WellKnownPhaseResult {
     pub well_known_result: Vec<(String, WellKnownResult)>,
+    /// The single globally-found server (from the first IP that succeeded), kept for
+    /// backwards-compatible use in the SRV / no-well-known path.
     pub found_server: Option<String>,
+    /// Per-IP outcome: for each IP that was probed, either `Some(delegated_server)` if
+    /// well-known succeeded on that IP, or `None` if it failed (timeout, error, non-200, …).
+    /// This lets callers apply the spec fallback (port 8448) on a per-IP basis.
+    pub per_ip_found_server: std::collections::HashMap<String, Option<String>>,
     pub error: Option<Error>,
 }
 
@@ -116,6 +122,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         return WellKnownPhaseResult {
             well_known_result: vec![],
             found_server: None,
+            per_ip_found_server: std::collections::HashMap::new(),
             error: None,
         };
     }
@@ -146,6 +153,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         return WellKnownPhaseResult {
             well_known_result: vec![],
             found_server: None,
+            per_ip_found_server: std::collections::HashMap::new(),
             error: Some(Error {
                 error: format!("No A/AAAA-Records for {server_name} found"),
                 error_code: ErrorCode::NoRecordsFound,
@@ -168,26 +176,36 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         });
     }
 
+    let mut per_ip_found_server: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+
     while let Some((addr, result, server_candidate)) = futures.next().await {
         well_known_result.push((addr.clone(), result.clone()));
-        if let Some(server_str) = server_candidate
-            && found_server.is_none()
-        {
-            // Only accept if parse_and_validate_server_name would not set error
-            let mut temp_data = crate::response::Root::default();
-            parse_and_validate_server_name(&mut temp_data, &server_str);
-            if temp_data.error.is_none() {
-                found_server = Some(server_str);
-                break;
+        match &server_candidate {
+            Some(server_str) => {
+                // Validate before accepting
+                let mut temp_data = crate::response::Root::default();
+                parse_and_validate_server_name(&mut temp_data, server_str);
+                if temp_data.error.is_none() {
+                    if found_server.is_none() {
+                        found_server = Some(server_str.clone());
+                        // Don't break — we still want to collect all per-IP results.
+                    }
+                    per_ip_found_server.insert(addr, Some(server_str.clone()));
+                } else {
+                    per_ip_found_server.insert(addr, None);
+                }
+            }
+            None => {
+                // Well-known failed or returned no m.server for this IP.
+                per_ip_found_server.insert(addr, None);
             }
         }
-    }
-    while let Some((addr, result, _)) = futures.next().await {
-        well_known_result.push((addr, result));
     }
     WellKnownPhaseResult {
         well_known_result,
         found_server,
+        per_ip_found_server,
         error: None,
     }
 }

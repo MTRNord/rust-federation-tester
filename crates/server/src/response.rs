@@ -228,93 +228,170 @@ pub async fn generate_json_report<P: ConnectionProvider>(
             .well_known_result
             .insert(addr.clone(), wk_result.clone());
     }
-    if let Some(found_server) = &well_known_phase.found_server {
-        // Use the found server for DNS phase
-        resp_data
-            .well_known_result
-            .entry(server_name_lower.clone())
-            .or_insert_with(|| WellKnownResult {
-                m_server: found_server.clone(),
-                ..Default::default()
-            });
-    }
     if let Some(err) = &well_known_phase.error {
         resp_data.error = Some(err.clone());
         resp_data.federation_ok = false;
     }
 
-    let resolved_server = well_known_phase
-        .found_server
-        .clone()
-        .unwrap_or(server_name_lower.clone());
+    // Build the per-IP connection list respecting the spec fallback rules:
+    //
+    // For each IP that was probed during the well-known phase:
+    //   - If well-known SUCCEEDED on that IP → the delegated server from m.server gives us
+    //     the host and port to use for that IP's connection check.  Because m.server may
+    //     delegate to a *different* hostname we run a fresh DNS lookup for it (same as the
+    //     old single-server DNS phase, but scoped to this IP's result).
+    //   - If well-known FAILED on that IP (timeout, error, non-200 …) → per spec step 6 we
+    //     fall back to port 8448 on the same IP, using the original server_name as the Host
+    //     header / SNI.  We already have the IP so no extra DNS lookup is needed.
+    //
+    // If the well-known phase produced no per-IP results at all (server_name contained a
+    // port, or DNS returned no A/AAAA records) we fall back to the original single DNS phase
+    // so that SRV records etc. are still handled correctly.
+    //
+    // Each entry is (connect_addr, host_header, sni).
+    let mut connection_targets: Vec<(String, String, String)> = Vec::new();
 
-    // DNS phase (pure)
-    let dns_phase = lookup_server(&resolved_server, resolver).await;
-    resp_data.dnsresult.srv_targets = dns_phase.srv_targets.clone();
-    resp_data.dnsresult.addrs = dns_phase.addrs.clone();
-    resp_data.dnsresult.srvskipped = dns_phase.srvskipped;
+    if well_known_phase.per_ip_found_server.is_empty() {
+        // No per-IP data (e.g. server_name had an explicit port, or no DNS records).
+        // Fall through to the original single DNS phase.
+        let resolved_server = well_known_phase
+            .found_server
+            .clone()
+            .unwrap_or(server_name_lower.clone());
 
-    // Only fail federation if we have no addresses AND have critical errors
-    // AAAA lookup failures should not fail federation if IPv4 addresses are available
-    if resp_data.dnsresult.addrs.is_empty() {
-        resp_data.federation_ok = false;
-        // Set error only if we have DNS errors and no addresses
-        if !dns_phase.errors.is_empty() {
-            resp_data.error = Some(dns_phase.errors[0].clone());
+        let dns_phase = lookup_server(&resolved_server, resolver).await;
+        resp_data.dnsresult.srv_targets = dns_phase.srv_targets.clone();
+        resp_data.dnsresult.addrs = dns_phase.addrs.clone();
+        resp_data.dnsresult.srvskipped = dns_phase.srvskipped;
+
+        if resp_data.dnsresult.addrs.is_empty() {
+            resp_data.federation_ok = false;
+            if !dns_phase.errors.is_empty() {
+                resp_data.error = Some(dns_phase.errors[0].clone());
+            }
+        } else if !dns_phase.errors.is_empty() {
+            let critical_errors: Vec<_> = dns_phase
+                .errors
+                .iter()
+                .filter(|err| !err.error.contains("AAAA record lookup error"))
+                .collect();
+            if !critical_errors.is_empty() {
+                resp_data.error = Some(critical_errors[0].clone());
+                resp_data.federation_ok = false;
+            }
         }
-    } else if !dns_phase.errors.is_empty() {
-        // We have addresses, so check if all errors are non-critical (like AAAA failures)
-        let critical_errors: Vec<_> = dns_phase
-            .errors
-            .iter()
-            .filter(|err| !err.error.contains("AAAA record lookup error"))
-            .collect();
 
-        if !critical_errors.is_empty() {
-            // We have critical errors, set federation failure and report the first one
-            resp_data.error = Some(critical_errors[0].clone());
+        for addr in &resp_data.dnsresult.addrs {
+            connection_targets.push((
+                addr.clone(),
+                resolved_server.clone(),
+                resolved_server.clone(),
+            ));
+        }
+    } else {
+        // We have per-IP well-known outcomes — handle each IP individually.
+        for (probed_ip, found_server_opt) in &well_known_phase.per_ip_found_server {
+            match found_server_opt {
+                Some(delegated_server) => {
+                    // Well-known succeeded on this IP.  The delegated server may resolve to
+                    // different IPs (or the same), so we run the normal DNS phase for it.
+                    let dns_phase = lookup_server(delegated_server, resolver).await;
+
+                    // Merge DNS results into resp_data for reporting (dedup addrs).
+                    for addr in &dns_phase.addrs {
+                        if !resp_data.dnsresult.addrs.contains(addr) {
+                            resp_data.dnsresult.addrs.push(addr.clone());
+                        }
+                    }
+                    for (k, v) in &dns_phase.srv_targets {
+                        resp_data
+                            .dnsresult
+                            .srv_targets
+                            .entry(k.clone())
+                            .or_insert_with(|| v.clone());
+                    }
+                    if dns_phase.srvskipped {
+                        resp_data.dnsresult.srvskipped = true;
+                    }
+
+                    for addr in &dns_phase.addrs {
+                        connection_targets.push((
+                            addr.clone(),
+                            delegated_server.clone(),
+                            delegated_server.clone(),
+                        ));
+                    }
+                }
+                None => {
+                    // Well-known failed on this IP → spec step 6: use port 8448 directly.
+                    // Strip the port from the probed IP (it was probed on :443) and reattach :8448.
+                    let bare_ip = if probed_ip.starts_with('[') {
+                        // IPv6 formatted as [addr]:port
+                        probed_ip
+                            .rfind(']')
+                            .map(|i| &probed_ip[..=i])
+                            .unwrap_or(probed_ip.as_str())
+                    } else {
+                        probed_ip
+                            .rfind(':')
+                            .map(|i| &probed_ip[..i])
+                            .unwrap_or(probed_ip.as_str())
+                    };
+                    let fallback_addr = format!("{bare_ip}:8448");
+
+                    if !resp_data.dnsresult.addrs.contains(&fallback_addr) {
+                        resp_data.dnsresult.addrs.push(fallback_addr.clone());
+                    }
+                    resp_data.dnsresult.srvskipped = true;
+
+                    connection_targets.push((
+                        fallback_addr,
+                        server_name_lower.clone(),
+                        server_name_lower.clone(),
+                    ));
+                }
+            }
+        }
+
+        if resp_data.dnsresult.addrs.is_empty() {
             resp_data.federation_ok = false;
         }
-        // Non-critical errors (like AAAA failures) are ignored when addresses are available
     }
 
-    // Connection phase (pure)
-    if !resp_data.dnsresult.addrs.is_empty() {
+    // Connection phase — try every target, federation is OK if at least one succeeds fully.
+    if !connection_targets.is_empty() {
         tracing::debug!(
-            "Starting connection checks for addresses: {:?}",
-            resp_data.dnsresult.addrs
+            "Starting connection checks for targets: {:?}",
+            connection_targets
         );
         let mut futures = FuturesUnordered::new();
-        for addr in &resp_data.dnsresult.addrs {
-            let addr = addr.clone();
-            let server_name = server_name_lower.clone();
-            let resolved_server = resolved_server.clone();
+        for (addr, host, sni) in connection_targets {
+            let server_name_c = server_name_lower.clone();
             let pool = connection_pool.clone();
             futures.push(async move {
-                let result = connection_check(
-                    &addr,
-                    &server_name,
-                    &resolved_server,
-                    &resolved_server,
-                    &pool,
-                )
-                .await;
+                let result = connection_check(&addr, &server_name_c, &host, &sni, &pool).await;
                 (addr, result)
             });
         }
+
+        let mut any_success = false;
         while let Some((addr, result)) = futures.next().await {
             match result {
                 Ok(report) => {
-                    resp_data.federation_ok =
-                        resp_data.federation_ok && report.checks.all_checks_ok;
-                    resp_data.version = report.version.clone();
+                    if report.checks.all_checks_ok {
+                        any_success = true;
+                        resp_data.version = report.version.clone();
+                    }
                     resp_data.connection_reports.insert(addr, report);
                 }
                 Err(e) => {
                     resp_data.connection_errors.insert(addr, e);
-                    resp_data.federation_ok = false;
                 }
             }
+        }
+
+        if resp_data.federation_ok {
+            resp_data.federation_ok = any_success;
         }
     }
     Ok(resp_data)
