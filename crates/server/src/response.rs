@@ -37,6 +37,12 @@ pub struct WellKnownResult {
     pub cache_expires_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Error>,
+    /// The connection addresses that the backend actually used for this IP after the
+    /// well-known phase.  If well-known succeeded these are the resolved IPs of the
+    /// delegated m.server; if it failed this is the single port-8448 address for
+    /// this IP.  Empty when the per-IP path was not taken (explicit port, no DNS).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub connection_addresses: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -321,6 +327,11 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                             delegated_server.clone(),
                         ));
                     }
+
+                    // Record which connection addresses this well-known IP led to.
+                    if let Some(wk_result) = resp_data.well_known_result.get_mut(probed_ip) {
+                        wk_result.connection_addresses = dns_phase.addrs.clone();
+                    }
                 }
                 None => {
                     // Well-known failed on this IP → spec step 6: use port 8448 directly.
@@ -345,10 +356,15 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                     resp_data.dnsresult.srvskipped = true;
 
                     connection_targets.push((
-                        fallback_addr,
+                        fallback_addr.clone(),
                         server_name_lower.clone(),
                         server_name_lower.clone(),
                     ));
+
+                    // Record the single port-8448 address this well-known IP led to.
+                    if let Some(wk_result) = resp_data.well_known_result.get_mut(probed_ip) {
+                        wk_result.connection_addresses = vec![fallback_addr];
+                    }
                 }
             }
         }
