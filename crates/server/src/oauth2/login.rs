@@ -75,6 +75,7 @@ struct LoginTemplate {
     message: Option<String>,
     client_name: Option<String>,
     scopes: Vec<ScopeInfo>,
+    frontend_url: String,
 }
 
 /// Query parameters for the login page.
@@ -174,6 +175,7 @@ async fn login_page(
         message: params.message,
         client_name,
         scopes,
+        frontend_url: state.frontend_url.clone(),
     };
 
     match template.render() {

@@ -148,6 +148,7 @@ fn create_test_config() -> AppConfig {
             access_token_lifetime: 3600,
             refresh_token_lifetime: 86400,
             magic_links_enabled: true,
+            account_client_secret: "test_account_client_secret".into(),
         },
     }
 }
@@ -167,7 +168,11 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
         config: config.clone(),
     };
 
-    let oauth2_state = OAuth2State::new(db, config.oauth2.issuer_url.clone());
+    let oauth2_state = OAuth2State::new(
+        db,
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
 
     (resources, oauth2_state)
 }
@@ -658,7 +663,11 @@ async fn test_oauth2_state_generate_token() {
 async fn test_oauth2_state_get_or_create_user() {
     let db = create_oauth2_test_db().await;
     let db = Arc::new(db);
-    let state = OAuth2State::new(db, "http://localhost".into());
+    let state = OAuth2State::new(
+        db,
+        "http://localhost".into(),
+        "http://localhost:5173".into(),
+    );
 
     // Create new user
     let user1 = state.get_or_create_user("new@example.com").await.unwrap();
@@ -678,7 +687,11 @@ async fn test_oauth2_state_get_or_create_user() {
 async fn test_oauth2_state_verify_user_email() {
     let db = create_oauth2_test_db().await;
     let db = Arc::new(db);
-    let state = OAuth2State::new(db.clone(), "http://localhost".into());
+    let state = OAuth2State::new(
+        db.clone(),
+        "http://localhost".into(),
+        "http://localhost:5173".into(),
+    );
 
     // Create unverified user
     let user = state
@@ -705,7 +718,11 @@ async fn test_oauth2_state_verify_user_email() {
 async fn test_oauth2_state_update_last_login() {
     let db = create_oauth2_test_db().await;
     let db = Arc::new(db);
-    let state = OAuth2State::new(db.clone(), "http://localhost".into());
+    let state = OAuth2State::new(
+        db.clone(),
+        "http://localhost".into(),
+        "http://localhost:5173".into(),
+    );
 
     // Create user
     let user = state.get_or_create_user("login@example.com").await.unwrap();
@@ -776,7 +793,11 @@ async fn test_token_authorization_code_success() {
     let db = create_oauth2_test_db().await;
     create_test_authorization(&db).await;
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -809,7 +830,11 @@ async fn test_token_refresh_success() {
     let db = create_oauth2_test_db().await;
     create_test_token(&db).await;
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -840,7 +865,11 @@ async fn test_userinfo_with_valid_token() {
     let db = create_oauth2_test_db().await;
     create_test_token(&db).await;
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))
@@ -870,7 +899,11 @@ async fn test_revoke_existing_token() {
     let db = create_oauth2_test_db().await;
     create_test_token(&db).await;
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db.clone(), "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db.clone(),
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
@@ -916,7 +949,11 @@ async fn test_token_confidential_client_with_basic_auth() {
     .expect("update auth code");
 
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -999,7 +1036,11 @@ async fn test_token_authorization_code_expired() {
     .expect("insert expired authorization code");
 
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -1033,7 +1074,11 @@ async fn test_token_authorization_code_client_mismatch() {
     let db = create_oauth2_test_db().await;
     create_test_authorization(&db).await; // Created for test-client
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -1063,7 +1108,11 @@ async fn test_token_authorization_code_redirect_uri_mismatch() {
     let db = create_oauth2_test_db().await;
     create_test_authorization(&db).await;
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/token", post(token))
@@ -1113,7 +1162,11 @@ async fn test_userinfo_insufficient_scope() {
     .expect("insert token without openid scope");
 
     let db = Arc::new(db);
-    let oauth2_state = OAuth2State::new(db, "http://localhost:8080".into());
+    let oauth2_state = OAuth2State::new(
+        db,
+        "http://localhost:8080".into(),
+        "http://localhost:5173".into(),
+    );
 
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))

@@ -97,17 +97,50 @@
                         </span>
                     </a>
                 </div>
-                <div class="govuk-header__content">
-                    <nav aria-label="Account navigation">
-                        <ul class="govuk-header__navigation-list">
-                            <li class="govuk-header__navigation-item">
-                                <a class="govuk-header__link" href="/oauth2/account">Your account</a>
+            </div>
+        </header>
+
+        <div
+            class="govuk-service-navigation"
+            data-module="govuk-service-navigation"
+        >
+            <div class="govuk-width-container">
+                <div class="govuk-service-navigation__container">
+                    <nav
+                        aria-label="Menu"
+                        class="govuk-service-navigation__wrapper"
+                    >
+                        <button
+                            type="button"
+                            class="govuk-service-navigation__toggle govuk-js-service-navigation-toggle"
+                            aria-controls="navigation"
+                            hidden
+                        >
+                            Menu
+                        </button>
+                        <ul
+                            class="govuk-service-navigation__list"
+                            id="navigation"
+                        >
+                            <li class="govuk-service-navigation__item">
+                                <a
+                                    class="govuk-service-navigation__link"
+                                    href="{{ frontend_url }}"
+                                    >← Back to Connectivity Tester</a
+                                >
+                            </li>
+                            <li class="govuk-service-navigation__item">
+                                <a
+                                    class="govuk-service-navigation__link"
+                                    href="/oauth2/account"
+                                    >Your account</a
+                                >
                             </li>
                         </ul>
                     </nav>
                 </div>
             </div>
-        </header>
+        </div>
 
         <div class="govuk-width-container">
             <div class="govuk-phase-banner">

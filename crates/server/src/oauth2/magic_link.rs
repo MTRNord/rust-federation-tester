@@ -55,6 +55,7 @@ struct MagicLinkClaims {
 #[template(path = "magic_link_sent.html")]
 struct MagicLinkSentTemplate {
     email: String,
+    frontend_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +180,10 @@ async fn magic_link_request(
     }
 
     // Render "check your email" confirmation
-    let template = MagicLinkSentTemplate { email };
+    let template = MagicLinkSentTemplate {
+        email,
+        frontend_url: state.frontend_url.clone(),
+    };
     match template.render() {
         Ok(html) => Html(html).into_response(),
         Err(e) => {

@@ -17,6 +17,8 @@ pub struct OAuth2State {
     pub db: Arc<DatabaseConnection>,
     /// Base URL for the OAuth2 server (used for issuer in tokens)
     pub issuer_url: String,
+    /// Frontend application URL (used for "back to site" links on auth pages)
+    pub frontend_url: String,
     /// Access token lifetime in seconds
     pub access_token_lifetime: i64,
     /// Refresh token lifetime in seconds
@@ -24,22 +26,28 @@ pub struct OAuth2State {
 }
 
 impl OAuth2State {
-    pub fn new(db: Arc<DatabaseConnection>, issuer_url: String) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>, issuer_url: String, frontend_url: String) -> Self {
         Self {
             registrar: DbRegistrar::new(db.clone()),
             db,
             issuer_url,
+            frontend_url,
             access_token_lifetime: 3600,       // 1 hour
             refresh_token_lifetime: 86400 * 7, // 7 days
         }
     }
 
     /// Create OAuth2State from application config
-    pub fn from_config(db: Arc<DatabaseConnection>, config: &crate::config::OAuth2Config) -> Self {
+    pub fn from_config(
+        db: Arc<DatabaseConnection>,
+        config: &crate::config::OAuth2Config,
+        frontend_url: &str,
+    ) -> Self {
         Self {
             registrar: DbRegistrar::new(db.clone()),
             db,
             issuer_url: config.issuer_url.clone(),
+            frontend_url: frontend_url.to_string(),
             access_token_lifetime: config.access_token_lifetime,
             refresh_token_lifetime: config.refresh_token_lifetime,
         }

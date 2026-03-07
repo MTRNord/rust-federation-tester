@@ -82,6 +82,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
         let oauth2_state = oauth2::OAuth2State::from_config(
             app_resources.db.clone(),
             &app_resources.config.oauth2,
+            &app_resources.config.frontend_url,
         );
         // Ensure the built-in account-page client has the correct redirect_uri
         if let Err(e) = oauth2_state

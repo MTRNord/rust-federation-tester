@@ -194,6 +194,8 @@ struct AccountPageTemplate {
     initial_token: Option<String>,
     /// Error message to show (e.g. on bad state)
     auth_error: Option<String>,
+    /// Frontend application URL for "back to site" link
+    frontend_url: String,
 }
 
 /// Query params received on the OAuth2 callback redirect back to the account page.
@@ -269,6 +271,7 @@ async fn account_page(
         sign_in_url,
         initial_token,
         auth_error,
+        frontend_url: resources.config.frontend_url.clone(),
     };
     match template.render() {
         Ok(html) => Html(html).into_response(),

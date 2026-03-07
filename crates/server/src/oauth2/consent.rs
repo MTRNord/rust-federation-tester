@@ -65,6 +65,7 @@ struct ConsentTemplate {
     client_name: String,
     scopes: Vec<ScopeInfo>,
     consent_token: String,
+    frontend_url: String,
 }
 
 /// Data encoded in the consent token.
@@ -186,6 +187,7 @@ async fn consent_page(
         client_name: client.name,
         scopes,
         consent_token: params.token,
+        frontend_url: state.frontend_url.clone(),
     };
 
     match template.render() {

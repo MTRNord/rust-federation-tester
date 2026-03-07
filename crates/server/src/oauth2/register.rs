@@ -42,6 +42,7 @@ struct RegisterTemplate {
     error: Option<String>,
     message: Option<String>,
     client_name: Option<String>,
+    frontend_url: String,
 }
 
 /// Query parameters for the registration page.
@@ -154,6 +155,7 @@ async fn register_page(
         error: params.error,
         message: params.message,
         client_name,
+        frontend_url: state.frontend_url.clone(),
     };
 
     match template.render() {
