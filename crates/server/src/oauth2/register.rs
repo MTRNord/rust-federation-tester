@@ -258,6 +258,7 @@ async fn register_submit(
         email: Set(email.clone()),
         email_verified: Set(false),
         name: Set(None),
+        receives_alerts: Set(true),
         created_at: Set(now),
         last_login_at: Set(None),
         password_hash: Set(Some(password_hash)),

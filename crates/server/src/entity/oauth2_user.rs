@@ -15,6 +15,8 @@ pub struct Model {
     pub name: Option<String>,
     pub created_at: OffsetDateTime,
     pub last_login_at: Option<OffsetDateTime>,
+    /// Whether the primary login email receives alert notification emails.
+    pub receives_alerts: bool,
     /// Argon2 hashed password (NULL for magic link only users)
     #[serde(skip_serializing)]
     pub password_hash: Option<String>,

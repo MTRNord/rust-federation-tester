@@ -10,6 +10,7 @@
 //! - `oauth2` - OAuth2 authentication endpoints (/oauth2/*)
 //! - `openapi` - OpenAPI/Utoipa configuration
 
+pub mod account;
 pub mod alerts;
 pub mod alerts_v2;
 pub mod auth;
@@ -35,6 +36,7 @@ use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer}
 use hickory_resolver::name_server::ConnectionProvider;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
+    services::ServeDir,
     trace::TraceLayer,
 };
 use utoipa::OpenApi;
@@ -83,8 +85,11 @@ pub async fn start_webserver<P: ConnectionProvider>(
         );
         router = router
             .nest("/oauth2", oauth2::router(oauth2_state))
-            .nest("/api/v2/alerts", alerts_v2::router());
-        tracing::info!("OAuth2 endpoints enabled at /oauth2/* and /api/v2/alerts/*");
+            .nest("/api/v2/alerts", alerts_v2::router())
+            .nest("/oauth2/account", account::router());
+        tracing::info!(
+            "OAuth2 endpoints enabled at /oauth2/*, /api/v2/alerts/*, /oauth2/account/*"
+        );
     }
 
     // Apply middleware layers and finalize router
@@ -110,6 +115,20 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .split_for_parts();
 
     let router = router.merge(Redoc::with_url("/api-docs", api));
+
+    // Serve vendored GOV.UK Frontend assets.
+    // The CSS references fonts at /assets/fonts/ (absolute paths).
+    let static_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static");
+    let router = router
+        .nest_service("/assets/govuk", ServeDir::new(static_dir.join("govuk")))
+        .nest_service(
+            "/assets/fonts",
+            ServeDir::new(static_dir.join("govuk/fonts")),
+        )
+        .nest_service(
+            "/assets/images",
+            ServeDir::new(static_dir.join("govuk/images")),
+        );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     tracing::info!("Server running at 0.0.0.0:8080");

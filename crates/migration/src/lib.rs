@@ -15,6 +15,7 @@ mod m20260218_000000_add_alert_status_history;
 mod m20260218_000001_add_last_recovery_at;
 mod m20260219_000000_add_failure_reason_to_status_history;
 mod m20260307_000000_rename_oauth2_tables;
+mod m20260307_000001_account_features;
 
 pub struct Migrator;
 
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260218_000001_add_last_recovery_at::Migration),
             Box::new(m20260219_000000_add_failure_reason_to_status_history::Migration),
             Box::new(m20260307_000000_rename_oauth2_tables::Migration),
+            Box::new(m20260307_000001_account_features::Migration),
         ]
     }
 }

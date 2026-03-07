@@ -8,3 +8,4 @@ pub mod oauth2_client;
 pub mod oauth2_identity;
 pub mod oauth2_token;
 pub mod oauth2_user;
+pub mod user_email;

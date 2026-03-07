@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en" class="govuk-template govuk-template--rebranded">
+    <head>
+        <meta charset="utf-8" />
+        <title>Your account - Federation Tester</title>
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#1d70b8" />
+        <link
+            rel="stylesheet"
+            href="/assets/govuk/govuk-frontend.min.css"
+        />
+        <style>
+            .account-section {
+                margin-bottom: 40px;
+                padding-bottom: 30px;
+                border-bottom: 1px solid #b1b4b6;
+            }
+            .account-section:last-child {
+                border-bottom: none;
+            }
+            .email-row {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                flex-wrap: wrap;
+                padding: 10px 0;
+                border-bottom: 1px solid #f3f2f1;
+            }
+            .email-row:last-child {
+                border-bottom: none;
+            }
+            .email-row__address {
+                flex: 1;
+                min-width: 200px;
+                font-family: monospace;
+                word-break: break-all;
+            }
+            .email-row__badges {
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+            .email-row__actions {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+            .danger-zone {
+                border: 2px solid #d4351c;
+                padding: 20px;
+                margin-top: 10px;
+            }
+            .hidden { display: none; }
+        </style>
+    </head>
+
+    <body class="govuk-template__body">
+        <script>
+            document.body.className +=
+                " js-enabled" +
+                ("noModule" in HTMLScriptElement.prototype
+                    ? " govuk-frontend-supported"
+                    : "");
+        </script>
+
+        <a
+            href="#main-content"
+            class="govuk-skip-link"
+            data-module="govuk-skip-link"
+            >Skip to main content</a
+        >
+
+        <header class="govuk-header" data-module="govuk-header">
+            <div class="govuk-header__container govuk-width-container">
+                <div class="govuk-header__logo">
+                    <a
+                        href="/"
+                        class="govuk-header__link govuk-header__link--homepage"
+                    >
+                        <span class="govuk-header__logotype">
+                            <span class="govuk-header__logotype-text"
+                                >Federation Tester</span
+                            >
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <div class="govuk-width-container">
+            <div class="govuk-phase-banner">
+                <p class="govuk-phase-banner__content">
+                    <strong class="govuk-tag govuk-phase-banner__content__tag"
+                        >Beta</strong
+                    >
+                    <span class="govuk-phase-banner__text"
+                        >This is a community service for testing Matrix
+                        federation.</span
+                    >
+                </p>
+            </div>
+
+            <main
+                class="govuk-main-wrapper"
+                id="main-content"
+                role="main"
+            >
+                <div class="govuk-grid-row">
+                    <div class="govuk-grid-column-two-thirds">
+                        <h1 class="govuk-heading-xl">Your account</h1>
+
+                        <!-- Loading state -->
+                        <div id="state-loading">
+                            <p class="govuk-body" aria-live="polite">
+                                Loading&hellip;
+                            </p>
+                        </div>
+
+                        <!-- Unauthenticated state -->
+                        <div id="state-unauth" class="hidden">
+                            <p class="govuk-body">
+                                You need to sign in to view your account.
+                            </p>
+                            <a
+                                id="sign-in-link"
+                                class="govuk-button"
+                                data-module="govuk-button"
+                                href="/oauth2/login"
+                                >Sign in</a
+                            >
+                        </div>
+
+                        <!-- Error state -->
+                        <div id="state-error" class="hidden">
+                            <div
+                                class="govuk-error-summary"
+                                data-module="govuk-error-summary"
+                            >
+                                <div role="alert">
+                                    <h2 class="govuk-error-summary__title">
+                                        There is a problem
+                                    </h2>
+                                    <div class="govuk-error-summary__body">
+                                        <p
+                                            class="govuk-body"
+                                            id="error-message"
+                                        ></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Verified notification -->
+                        <div id="notice-verified" class="hidden">
+                            <div
+                                class="govuk-notification-banner govuk-notification-banner--success"
+                                role="alert"
+                                data-module="govuk-notification-banner"
+                            >
+                                <div
+                                    class="govuk-notification-banner__header"
+                                >
+                                    <h2
+                                        class="govuk-notification-banner__title"
+                                    >
+                                        Success
+                                    </h2>
+                                </div>
+                                <div
+                                    class="govuk-notification-banner__content"
+                                >
+                                    <p class="govuk-body">
+                                        Email address verified successfully.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Account content (shown when authenticated) -->
+                        <div id="state-account" class="hidden">
+                            <!-- Profile section -->
+                            <section class="account-section">
+                                <h2 class="govuk-heading-m">Profile</h2>
+                                <dl class="govuk-summary-list">
+                                    <div class="govuk-summary-list__row">
+                                        <dt class="govuk-summary-list__key">
+                                            Email
+                                        </dt>
+                                        <dd
+                                            class="govuk-summary-list__value"
+                                            id="profile-email"
+                                        ></dd>
+                                    </div>
+                                    <div class="govuk-summary-list__row">
+                                        <dt class="govuk-summary-list__key">
+                                            Name
+                                        </dt>
+                                        <dd
+                                            class="govuk-summary-list__value"
+                                            id="profile-name"
+                                        ></dd>
+                                    </div>
+                                    <div class="govuk-summary-list__row">
+                                        <dt class="govuk-summary-list__key">
+                                            Email verified
+                                        </dt>
+                                        <dd
+                                            class="govuk-summary-list__value"
+                                            id="profile-verified"
+                                        ></dd>
+                                    </div>
+                                    <div class="govuk-summary-list__row">
+                                        <dt class="govuk-summary-list__key">
+                                            Member since
+                                        </dt>
+                                        <dd
+                                            class="govuk-summary-list__value"
+                                            id="profile-created"
+                                        ></dd>
+                                    </div>
+                                </dl>
+
+                                <div class="govuk-form-group">
+                                    <div class="govuk-checkboxes">
+                                        <div class="govuk-checkboxes__item">
+                                            <input
+                                                class="govuk-checkboxes__input"
+                                                id="primary-receives-alerts"
+                                                type="checkbox"
+                                                onchange="togglePrimaryAlerts(this)"
+                                            />
+                                            <label
+                                                class="govuk-label govuk-checkboxes__label"
+                                                for="primary-receives-alerts"
+                                            >
+                                                Receive alert emails at this
+                                                address
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- Additional emails section -->
+                            <section class="account-section">
+                                <h2 class="govuk-heading-m">
+                                    Additional email addresses
+                                </h2>
+                                <p class="govuk-body">
+                                    Add extra addresses to receive alert
+                                    notifications. Each address must be
+                                    verified before alerts can be sent to it.
+                                </p>
+
+                                <div id="emails-list"></div>
+
+                                <div id="add-email-feedback" class="hidden"></div>
+
+                                <form
+                                    id="add-email-form"
+                                    onsubmit="addEmail(event)"
+                                >
+                                    <div class="govuk-form-group">
+                                        <label
+                                            class="govuk-label"
+                                            for="new-email"
+                                            >Add email address</label
+                                        >
+                                        <input
+                                            class="govuk-input govuk-input--width-20"
+                                            id="new-email"
+                                            type="email"
+                                            name="email"
+                                            autocomplete="email"
+                                        />
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        class="govuk-button govuk-button--secondary"
+                                        data-module="govuk-button"
+                                    >
+                                        Add and send verification
+                                    </button>
+                                </form>
+                            </section>
+
+                            <!-- Data export section -->
+                            <section class="account-section">
+                                <h2 class="govuk-heading-m">
+                                    Download your data
+                                </h2>
+                                <p class="govuk-body">
+                                    Download all personal data we hold about
+                                    you as a JSON file (GDPR Article 20).
+                                </p>
+                                <button
+                                    type="button"
+                                    class="govuk-button govuk-button--secondary"
+                                    data-module="govuk-button"
+                                    onclick="exportData()"
+                                >
+                                    Download data export
+                                </button>
+                            </section>
+
+                            <!-- Delete account section -->
+                            <section class="account-section">
+                                <h2 class="govuk-heading-m">Delete account</h2>
+                                <p class="govuk-body">
+                                    Permanently delete your account and all
+                                    associated data. This cannot be undone.
+                                </p>
+                                <div class="danger-zone">
+                                    <div
+                                        id="delete-confirm-box"
+                                        class="hidden"
+                                    >
+                                        <div
+                                            class="govuk-warning-text"
+                                            style="margin-bottom: 10px"
+                                        >
+                                            <span
+                                                class="govuk-warning-text__icon"
+                                                aria-hidden="true"
+                                                >!</span
+                                            >
+                                            <strong
+                                                class="govuk-warning-text__text"
+                                            >
+                                                <span
+                                                    class="govuk-visually-hidden"
+                                                    >Warning</span
+                                                >
+                                                This will delete your account and
+                                                all alert subscriptions permanently.
+                                            </strong>
+                                        </div>
+                                        <div class="govuk-button-group">
+                                            <button
+                                                type="button"
+                                                class="govuk-button govuk-button--warning"
+                                                data-module="govuk-button"
+                                                onclick="deleteAccount()"
+                                            >
+                                                Yes, delete my account
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="govuk-button govuk-button--secondary"
+                                                data-module="govuk-button"
+                                                onclick="toggleDeleteConfirm(false)"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button
+                                        id="delete-show-btn"
+                                        type="button"
+                                        class="govuk-button govuk-button--warning"
+                                        data-module="govuk-button"
+                                        onclick="toggleDeleteConfirm(true)"
+                                    >
+                                        Delete account
+                                    </button>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <footer class="govuk-footer">
+            <div class="govuk-width-container">
+                <div class="govuk-footer__meta">
+                    <div
+                        class="govuk-footer__meta-item govuk-footer__meta-item--grow"
+                    >
+                        <span class="govuk-footer__licence-description">
+                            Federation Tester is a community project for
+                            testing Matrix homeserver federation.
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        <script
+            type="module"
+            src="/assets/govuk/govuk-frontend.min.js"
+        ></script>
+        <script type="module">
+            import { initAll } from "/assets/govuk/govuk-frontend.min.js";
+            initAll();
+        </script>
+
+        <script>
+            // ---------------------------------------------------------------------------
+            // Token resolution: URL hash (#token=xxx) → localStorage → sessionStorage
+            // The hash fragment approach lets the Fresh frontend pass the token across
+            // origins in development (e.g. localhost:5173 → localhost:8080).
+            // In production (same origin / reverse proxy) sessionStorage works directly.
+            // ---------------------------------------------------------------------------
+            const STORAGE_KEY = "federation_access_token";
+
+            function resolveToken() {
+                // 1. URL hash: /oauth2/account#token=xxx
+                const hash = location.hash.slice(1);
+                if (hash) {
+                    const params = new URLSearchParams(hash);
+                    const t = params.get("token");
+                    if (t) {
+                        // Persist for subsequent navigations on this origin.
+                        try { localStorage.setItem(STORAGE_KEY, t); } catch (_) {}
+                        // Clean the hash from the URL without triggering a reload.
+                        history.replaceState(null, "", location.pathname + location.search);
+                        return t;
+                    }
+                }
+                // 2. localStorage (cross-port dev, set by Fresh frontend)
+                try {
+                    const t = localStorage.getItem(STORAGE_KEY);
+                    if (t) return t;
+                } catch (_) {}
+                // 3. sessionStorage (same-origin production)
+                try {
+                    const t = sessionStorage.getItem("access_token");
+                    if (t) return t;
+                } catch (_) {}
+                return null;
+            }
+
+            let ACCESS_TOKEN = resolveToken();
+            let accountData = null;
+
+            // ---------------------------------------------------------------------------
+            // State helpers
+            // ---------------------------------------------------------------------------
+            function show(id) { document.getElementById(id).classList.remove("hidden"); }
+            function hide(id) { document.getElementById(id).classList.add("hidden"); }
+
+            function showState(name) {
+                ["state-loading", "state-unauth", "state-error", "state-account"]
+                    .forEach(id => hide(id));
+                show("state-" + name);
+            }
+
+            function showError(msg) {
+                document.getElementById("error-message").textContent = msg;
+                showState("error");
+            }
+
+            async function apiFetch(path, opts = {}) {
+                const res = await fetch(path, {
+                    ...opts,
+                    headers: {
+                        "Authorization": "Bearer " + ACCESS_TOKEN,
+                        "Content-Type": "application/json",
+                        ...(opts.headers || {}),
+                    },
+                });
+                if (res.status === 401) {
+                    ACCESS_TOKEN = null;
+                    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+                    showState("unauth");
+                    return null;
+                }
+                return res;
+            }
+
+            // ---------------------------------------------------------------------------
+            // Initial load
+            // ---------------------------------------------------------------------------
+            async function loadAccount() {
+                if (!ACCESS_TOKEN) {
+                    showState("unauth");
+                    return;
+                }
+
+                const res = await apiFetch("/oauth2/account/me");
+                if (!res) return;
+
+                if (!res.ok) {
+                    showError("Failed to load account data (" + res.status + ").");
+                    return;
+                }
+
+                accountData = await res.json();
+                renderAccount(accountData);
+                showState("account");
+
+                // Show verified notice if redirected from email verification.
+                const params = new URLSearchParams(location.search);
+                if (params.get("verified") === "1") show("notice-verified");
+                const err = params.get("error");
+                if (err) showError("Email verification failed: " + err.replace(/_/g, " "));
+            }
+
+            function renderAccount(data) {
+                document.getElementById("profile-email").textContent = data.email;
+                document.getElementById("profile-name").textContent = data.name || "—";
+                document.getElementById("profile-verified").innerHTML = data.email_verified
+                    ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
+                    : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>';
+                document.getElementById("profile-created").textContent =
+                    new Date(data.created_at).toLocaleDateString();
+                document.getElementById("primary-receives-alerts").checked = data.receives_alerts;
+
+                renderEmailsList(data.additional_emails);
+            }
+
+            function renderEmailsList(emails) {
+                const container = document.getElementById("emails-list");
+                if (!emails || emails.length === 0) {
+                    container.innerHTML =
+                        '<div class="govuk-inset-text">No additional email addresses added.</div>';
+                    return;
+                }
+                container.innerHTML = emails.map(e => `
+                    <div class="email-row" id="email-row-${e.id}">
+                        <div class="email-row__address">${escapeHtml(e.email)}</div>
+                        <div class="email-row__badges">
+                            ${e.verified
+                                ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
+                                : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>'}
+                        </div>
+                        <div class="email-row__actions">
+                            ${e.verified ? `
+                            <label class="govuk-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                                <input type="checkbox" class="govuk-checkboxes__input"
+                                    style="width:24px;height:24px"
+                                    ${e.receives_alerts ? "checked" : ""}
+                                    onchange="toggleEmailAlerts('${e.id}', this.checked)"
+                                />
+                                Alerts
+                            </label>` : ""}
+                            <button type="button"
+                                class="govuk-button govuk-button--warning govuk-button--secondary"
+                                data-module="govuk-button"
+                                onclick="removeEmail('${e.id}')">Remove</button>
+                        </div>
+                    </div>
+                `).join("");
+            }
+
+            function escapeHtml(s) {
+                return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+                         .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+            }
+
+            // ---------------------------------------------------------------------------
+            // Actions
+            // ---------------------------------------------------------------------------
+            async function togglePrimaryAlerts(checkbox) {
+                const res = await apiFetch("/oauth2/account", {
+                    method: "PATCH",
+                    body: JSON.stringify({ receives_alerts: checkbox.checked }),
+                });
+                if (!res || !res.ok) {
+                    checkbox.checked = !checkbox.checked; // revert
+                }
+            }
+
+            async function toggleEmailAlerts(id, value) {
+                const res = await apiFetch("/oauth2/account/emails/" + id, {
+                    method: "PATCH",
+                    body: JSON.stringify({ receives_alerts: value }),
+                });
+                if (!res || !res.ok) {
+                    // Reload to get consistent state.
+                    await loadAccount();
+                }
+            }
+
+            async function addEmail(e) {
+                e.preventDefault();
+                const email = document.getElementById("new-email").value.trim();
+                if (!email) return;
+
+                const feedback = document.getElementById("add-email-feedback");
+                feedback.innerHTML = "";
+                hide("add-email-feedback");
+
+                const res = await apiFetch("/oauth2/account/emails", {
+                    method: "POST",
+                    body: JSON.stringify({ email }),
+                });
+                if (!res) return;
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    const msg = data.message || "Failed to add email address.";
+                    feedback.innerHTML =
+                        `<p class="govuk-error-message"><span class="govuk-visually-hidden">Error:</span>${escapeHtml(msg)}</p>`;
+                    show("add-email-feedback");
+                    return;
+                }
+
+                document.getElementById("new-email").value = "";
+                feedback.innerHTML =
+                    '<div class="govuk-notification-banner govuk-notification-banner--success" role="alert" data-module="govuk-notification-banner">' +
+                    '<div class="govuk-notification-banner__header"><h2 class="govuk-notification-banner__title">Success</h2></div>' +
+                    '<div class="govuk-notification-banner__content"><p class="govuk-body">Verification email sent. Check your inbox.</p></div></div>';
+                show("add-email-feedback");
+                await loadAccount();
+            }
+
+            async function removeEmail(id) {
+                if (!confirm("Remove this email address?")) return;
+                const res = await apiFetch("/oauth2/account/emails/" + id, { method: "DELETE" });
+                if (res && (res.ok || res.status === 204)) {
+                    await loadAccount();
+                } else if (res) {
+                    const data = await res.json().catch(() => ({}));
+                    alert(data.message || "Failed to remove email address.");
+                }
+            }
+
+            function exportData() {
+                // Trigger download via a temporary link with the token in the header.
+                // Browsers can't set headers on link clicks, so we fetch and create a blob URL.
+                apiFetch("/oauth2/account/export").then(res => {
+                    if (!res || !res.ok) return;
+                    const disposition = res.headers.get("Content-Disposition") || "";
+                    const match = disposition.match(/filename="([^"]+)"/);
+                    const filename = match ? match[1] : "account-data.json";
+                    res.blob().then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+                    });
+                });
+            }
+
+            function toggleDeleteConfirm(show_) {
+                if (show_) {
+                    hide("delete-show-btn");
+                    show("delete-confirm-box");
+                } else {
+                    show("delete-show-btn");
+                    hide("delete-confirm-box");
+                }
+            }
+
+            async function deleteAccount() {
+                const res = await apiFetch("/oauth2/account", { method: "DELETE" });
+                if (res && (res.ok || res.status === 204)) {
+                    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+                    try { sessionStorage.removeItem("access_token"); } catch (_) {}
+                    location.href = "/";
+                } else if (res) {
+                    alert("Failed to delete account. Please try again.");
+                }
+            }
+
+            // Run on load.
+            loadAccount();
+        </script>
+    </body>
+</html>

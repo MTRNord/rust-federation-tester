@@ -74,6 +74,7 @@ impl OAuth2State {
             email: Set(email.to_string()),
             email_verified: Set(false),
             name: Set(None),
+            receives_alerts: Set(true),
             created_at: Set(now),
             last_login_at: Set(None),
             password_hash: Set(None),
