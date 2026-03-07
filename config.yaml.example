@@ -45,3 +45,7 @@ statistics:
   anonymization_salt: ""
   # Retention window (days) for inactive federation entries (based on last_seen_at). Entries older than this are pruned.
   raw_retention_days: 30
+
+  # Secret for the built-in account-internal OAuth2 client (used for the /oauth2/account page).
+  # Required when oauth2.enabled = true. Generate with: openssl rand -hex 32
+  account_client_secret: replace_me
