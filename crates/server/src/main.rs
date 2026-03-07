@@ -235,16 +235,21 @@ async fn main() -> color_eyre::eyre::Result<()> {
             .expect("Failed to connect to database"),
     );
 
-    // Set up lettre SMTP client
-    tracing::debug!("Loading SMTP client");
-    let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
-    let mailer = Arc::new(
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
-            .unwrap()
-            .port(config.smtp.port)
-            .credentials(creds)
-            .build(),
-    );
+    // Set up lettre SMTP client (only if enabled)
+    let mailer = if config.smtp.enabled {
+        tracing::debug!("Loading SMTP client");
+        let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
+        Some(Arc::new(
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
+                .unwrap()
+                .port(config.smtp.port)
+                .credentials(creds)
+                .build(),
+        ))
+    } else {
+        tracing::info!("SMTP disabled — alert check loops and email endpoints will not be available");
+        None
+    };
 
     // Set up resolver and caches
     tracing::debug!("Loading resolver");
@@ -288,28 +293,31 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    // Separate connection pool for background alert checks.
-    // Per-client limits don't apply to internal batch work, so we use a pool
-    // with no effective per-client cap (all background checks share "anonymous").
-    let alert_pool = ConnectionPool::new_for_background_checks(5, 10);
+    // Start alert check loops only when SMTP is enabled (email is required for alerts)
+    if resources.config.smtp.enabled {
+        // Separate connection pool for background alert checks.
+        // Per-client limits don't apply to internal batch work, so we use a pool
+        // with no effective per-client cap (all background checks share "anonymous").
+        let alert_pool = ConnectionPool::new_for_background_checks(5, 10);
 
-    // Start the two-queue alert check loops
-    let registry: ConfirmationRegistry =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    tracing::debug!("Starting healthy alert check loop (5-min interval)");
-    tokio::spawn(healthy_check_loop(
-        resources.clone(),
-        registry.clone(),
-        state.resolver.clone(),
-        alert_pool.clone(),
-    ));
-    tracing::debug!("Starting active alert check loop (1-min interval)");
-    tokio::spawn(active_check_loop(
-        resources.clone(),
-        registry,
-        state.resolver.clone(),
-        alert_pool,
-    ));
+        // Start the two-queue alert check loops
+        let registry: ConfirmationRegistry =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        tracing::debug!("Starting healthy alert check loop (5-min interval)");
+        tokio::spawn(healthy_check_loop(
+            resources.clone(),
+            registry.clone(),
+            state.resolver.clone(),
+            alert_pool.clone(),
+        ));
+        tracing::debug!("Starting active alert check loop (1-min interval)");
+        tokio::spawn(active_check_loop(
+            resources.clone(),
+            registry,
+            state.resolver.clone(),
+            alert_pool,
+        ));
+    }
 
     let debug_mode = is_debug_mode();
 

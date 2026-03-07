@@ -1,6 +1,9 @@
 #database_url: "postgres://user:pass@localhost/db?currentSchema=schema"
 database_url: "sqlite://alerts.db?mode=rwc"
 smtp:
+  # Whether SMTP (and all email-dependent features) is enabled.
+  # When false, alert endpoints and check loops are disabled.
+  enabled: true
   server: "smtp.example.com"
   port: 587
   username: "alerts@example.com"

@@ -29,6 +29,6 @@ pub mod validation;
 #[derive(Clone, Debug)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
-    pub mailer: Arc<AsyncSmtpTransport<Tokio1Executor>>,
+    pub mailer: Option<Arc<AsyncSmtpTransport<Tokio1Executor>>>,
     pub config: Arc<AppConfig>,
 }

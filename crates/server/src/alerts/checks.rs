@@ -330,7 +330,6 @@ async fn run_active_check<P: ConnectionProvider>(
     let report = generate_json_report(&a.server_name, resolver, pool).await;
     let now = OffsetDateTime::now_utc();
     let db = resources.db.as_ref();
-    let mailer = &resources.mailer;
     let config = &resources.config;
     let db_arc = &resources.db;
 
@@ -382,6 +381,7 @@ async fn run_active_check<P: ConnectionProvider>(
                         );
 
                         if let Ok(updated) = active.update(db).await
+                            && let Some(mailer) = &resources.mailer
                             && send_failure_email(
                                 mailer,
                                 config,
@@ -437,6 +437,7 @@ async fn run_active_check<P: ConnectionProvider>(
 
                     if let Ok(updated) = active.update(db).await
                         && send_reminder
+                        && let Some(mailer) = &resources.mailer
                         && send_failure_email(
                             mailer,
                             config,
@@ -516,6 +517,7 @@ async fn run_active_check<P: ConnectionProvider>(
                     .await;
 
                     if active.update(db).await.is_ok()
+                        && let Some(mailer) = &resources.mailer
                         && send_recovery_email(
                             mailer,
                             config,

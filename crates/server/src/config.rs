@@ -13,15 +13,40 @@ pub enum ConfigError {
 
 #[derive(Debug, Deserialize)]
 pub struct SmtpConfig {
+    #[serde(default = "default_smtp_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
     pub server: String,
+    #[serde(default)]
     pub port: u16,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
     pub from: String,
+}
+
+impl Default for SmtpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server: String::new(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            from: String::new(),
+        }
+    }
+}
+
+fn default_smtp_enabled() -> bool {
+    true // Enabled by default for backward compatibility
 }
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub database_url: String,
+    #[serde(default)]
     pub smtp: SmtpConfig,
     pub frontend_url: String,
     pub magic_token_secret: String,
@@ -210,7 +235,7 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
             "magic_token_secret must be at least 16 characters".into(),
         ));
     }
-    if app.smtp.port == 0 {
+    if app.smtp.enabled && app.smtp.port == 0 {
         return Err(ConfigError::Validation("smtp.port must be > 0".into()));
     }
 

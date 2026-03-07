@@ -558,6 +558,7 @@ mod tests {
         AppConfig {
             database_url: "sqlite::memory:".into(),
             smtp: SmtpConfig {
+                enabled: true,
                 server: "localhost".into(),
                 port: 25,
                 username: "u".into(),
@@ -631,7 +632,7 @@ mod tests {
         );
         let resources = AppResources {
             db: Arc::new(db),
-            mailer,
+            mailer: Some(mailer),
             config,
         };
         record_event(
@@ -661,7 +662,7 @@ mod tests {
         );
         let resources = AppResources {
             db: Arc::new(db.clone()),
-            mailer,
+            mailer: Some(mailer),
             config,
         };
         record_event(
@@ -694,7 +695,7 @@ mod tests {
         );
         let resources = AppResources {
             db: Arc::new(db.clone()),
-            mailer,
+            mailer: Some(mailer),
             config,
         };
         clear_metrics_cache();
@@ -758,7 +759,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
         };
         prune_old_entries(&resources).await; // default retention 30 days -> old.example should be removed
@@ -780,7 +781,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
         };
         record_event(
@@ -811,7 +812,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
         };
 
