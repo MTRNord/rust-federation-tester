@@ -80,8 +80,13 @@ RUN chown appuser:appuser /app
 COPY --from=builder --chown=appuser:appuser /app/target/dist/rust-federation-tester /usr/local/bin/rust-federation-tester
 COPY --from=builder --chown=appuser:appuser /app/target/dist/migration /usr/local/bin/migration
 
+# Copy vendored static assets (GOV.UK Frontend CSS, JS, fonts)
+COPY --from=builder --chown=appuser:appuser /app/crates/server/static /app/static
+
 # Switch to non-root user
 USER appuser
+
+ENV STATIC_DIR=/app/static
 
 EXPOSE 8080
 

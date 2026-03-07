@@ -118,7 +118,9 @@ pub async fn start_webserver<P: ConnectionProvider>(
 
     // Serve vendored GOV.UK Frontend assets.
     // The CSS references fonts at /assets/fonts/ (absolute paths).
-    let static_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static");
+    let static_dir = std::env::var("STATIC_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
     let router = router
         .nest_service("/assets/govuk", ServeDir::new(static_dir.join("govuk")))
         .nest_service(
