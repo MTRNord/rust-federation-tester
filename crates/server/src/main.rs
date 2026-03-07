@@ -33,23 +33,18 @@ fn initialize_standard_tracing() {
 #[cfg(feature = "otel")]
 fn initialize_otel_console_tracing() {
     use opentelemetry::KeyValue;
+    use opentelemetry::global as otel_global;
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::logs::SdkLoggerProvider;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
 
-    // Additional imports used to wire tracing -> opentelemetry and set propagation
-    use opentelemetry::global as otel_global;
-    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    let service_name =
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| {
-        // fallback to crate name
-        env!("CARGO_PKG_NAME").to_string()
-    });
-
-    // Build a Resource that includes service.name
     let resource = Resource::builder()
         .with_service_name(service_name)
         .with_attribute(KeyValue::new(
@@ -58,95 +53,86 @@ fn initialize_otel_console_tracing() {
         ))
         .build();
 
+    otel_global::set_text_map_propagator(TraceContextPropagator::new());
+
+    // Only set up the OTel log bridge when an OTLP endpoint is explicitly configured.
+    // When no endpoint is set the stdout OTel exporter produces verbose structured
+    // output that replaces the normal fmt log format, which is not what we want.
+    // In that case we skip the bridge and rely purely on tracing_subscriber::fmt.
     #[cfg(feature = "otlp")]
-    let logging_provider = {
-        use opentelemetry::global;
-        use opentelemetry_otlp::LogExporter;
-        use opentelemetry_otlp::Protocol;
-        use opentelemetry_otlp::SpanExporter;
-        use opentelemetry_otlp::WithExportConfig;
-        use opentelemetry_sdk::trace::Sampler;
+    let logging_provider: Option<SdkLoggerProvider> = {
+        let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .ok()
+            .filter(|s| !s.is_empty());
 
-        // Create a span exporter and install a tracer provider for traces (OTLP)
-        let exporter = SpanExporter::builder()
-            .with_http()
-            .with_protocol(Protocol::HttpBinary)
-            .build()
-            .unwrap();
+        if let Some(_endpoint) = otlp_endpoint {
+            use opentelemetry::global;
+            use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig};
+            use opentelemetry_sdk::trace::Sampler;
 
-        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .with_batch_exporter(exporter)
-            .with_resource(resource.clone())
-            .with_sampler(Sampler::AlwaysOn)
-            .build();
-        global::set_tracer_provider(provider);
+            let exporter = SpanExporter::builder()
+                .with_http()
+                .with_protocol(Protocol::HttpBinary)
+                .build()
+                .unwrap();
 
-        // Create a log exporter/provider for logs
-        let log_exporter = LogExporter::builder()
-            .with_http()
-            .with_protocol(Protocol::HttpBinary)
-            .build()
-            .unwrap();
+            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
+                .with_resource(resource.clone())
+                .with_sampler(Sampler::AlwaysOn)
+                .build();
+            global::set_tracer_provider(provider);
 
-        SdkLoggerProvider::builder()
-            .with_batch_exporter(log_exporter)
-            .with_resource(resource.clone())
-            .build()
+            let log_exporter = LogExporter::builder()
+                .with_http()
+                .with_protocol(Protocol::HttpBinary)
+                .build()
+                .unwrap();
+
+            Some(
+                SdkLoggerProvider::builder()
+                    .with_batch_exporter(log_exporter)
+                    .with_resource(resource.clone())
+                    .build(),
+            )
+        } else {
+            // No OTLP endpoint — skip OTel bridge, use plain fmt logging.
+            None
+        }
     };
 
     #[cfg(not(feature = "otlp"))]
-    let logging_provider = {
-        use opentelemetry_stdout::LogExporter;
-        let exporter = LogExporter::default();
+    let logging_provider: Option<SdkLoggerProvider> = None;
 
-        let logging_provider = SdkLoggerProvider::builder()
-            .with_simple_exporter(exporter)
-            .with_resource(resource.clone())
-            .with_sampler(Sampler::AlwaysOn)
-            .build();
-    };
+    // Leak the provider so it lives for the entire process (required because the
+    // global subscriber borrows it for the process lifetime).
+    let otel_bridge_opt = logging_provider.map(|p| {
+        let p: &'static SdkLoggerProvider = Box::leak(Box::new(p));
+        OpenTelemetryTracingBridge::new(p)
+    });
 
-    // Bridge tracing events into the OpenTelemetry logging provider
-    let otel_logs_bridge = OpenTelemetryTracingBridge::new(&logging_provider);
+    let env_filter = EnvFilter::from_default_env();
 
-    // Ensure we have a text-map propagator (TraceContext) set globally so traceparent headers
-    // are picked up / injected when making outgoing requests.
-    otel_global::set_text_map_propagator(TraceContextPropagator::new());
-
-    // Create a tracing layer that converts tracing spans into OpenTelemetry spans
-    // and ensure the trace layer is installed before the logs bridge so emitted
-    // log records can observe span context (trace_id/span_id).
-    //
-    // When the `tracing-opentelemetry` feature is enabled we attach the tracing
-    // -> OpenTelemetry layer (which converts tracing spans to typed OTel spans).
-    // Otherwise we fall back to installing only the OpenTelemetry logs bridge + fmt layer.
+    // When the `tracing-opentelemetry` feature is enabled, attach the tracing→OTel
+    // span layer so spans are exported as typed OTel spans. The OTel logs bridge
+    // (if any) and fmt layer are added on top.
     #[cfg(feature = "tracing-opentelemetry")]
     {
-        // Obtain the global tracer and create the tracing->otel layer. The tracer
-        // name uses the crate/module path for easier identification in backends.
         let tracer = otel_global::tracer(concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
         let otel_trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
-        // Install trace layer first so spans and span ids are created, then install
-        // the logs bridge and a fmt layer for local formatting.
-        // Respect RUST_LOG (EnvFilter) when creating the subscriber.
-        let env_filter = EnvFilter::from_default_env();
         tracing_subscriber::registry()
             .with(env_filter)
             .with(otel_trace_layer)
-            .with(otel_logs_bridge)
+            .with(otel_bridge_opt)
             .with(fmt::layer().with_target(true).with_level(true))
             .init();
     }
 
     #[cfg(not(feature = "tracing-opentelemetry"))]
     {
-        // Only install logs bridge + fmt layer when tracing-opentelemetry is not enabled.
-        // Respect RUST_LOG (EnvFilter) so environment log level directives are honored.
-        let env_filter = EnvFilter::from_default_env();
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(otel_logs_bridge)
+            .with(otel_bridge_opt)
             .with(fmt::layer().with_target(true).with_level(true))
             .init();
     }

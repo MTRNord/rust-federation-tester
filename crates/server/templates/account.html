@@ -22,6 +22,7 @@
                 border-bottom: none;
             }
             .hidden { display: none; }
+            .govuk-table .govuk-table__cell { vertical-align: middle; }
         </style>
     </head>
 
@@ -87,6 +88,14 @@
                                     >← Back to Connectivity Tester</a
                                 >
                             </li>
+                            <li class="govuk-service-navigation__item hidden" id="nav-signout">
+                                <a
+                                    class="govuk-service-navigation__link"
+                                    href="#"
+                                    onclick="signOut(); return false;"
+                                    >Sign out</a
+                                >
+                            </li>
                         </ul>
                     </nav>
                 </div>
@@ -94,18 +103,6 @@
         </div>
 
         <div class="govuk-width-container">
-            <div class="govuk-phase-banner">
-                <p class="govuk-phase-banner__content">
-                    <strong class="govuk-tag govuk-phase-banner__content__tag"
-                        >Beta</strong
-                    >
-                    <span class="govuk-phase-banner__text"
-                        >This is a community service for testing Matrix
-                        federation.</span
-                    >
-                </p>
-            </div>
-
             <main
                 class="govuk-main-wrapper"
                 id="main-content"
@@ -406,6 +403,7 @@
                 accountData = await res.json();
                 renderAccount(accountData);
                 showState("account");
+                show("nav-signout");
 
                 // Show verified notice if redirected from email verification.
                 const params = new URLSearchParams(location.search);
@@ -613,6 +611,21 @@
                 } else if (res) {
                     alert("Failed to delete account. Please try again.");
                 }
+            }
+
+            async function signOut() {
+                if (ACCESS_TOKEN) {
+                    // Revoke the token server-side (best-effort).
+                    await fetch("/oauth2/token/revoke", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: "token=" + encodeURIComponent(ACCESS_TOKEN),
+                    }).catch(() => {});
+                }
+                try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+                ACCESS_TOKEN = null;
+                hide("nav-signout");
+                showState("unauth");
             }
 
             // Run on load.

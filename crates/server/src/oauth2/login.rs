@@ -19,43 +19,6 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-/// Scope information for display on the login page.
-#[derive(Debug, Clone)]
-pub struct ScopeInfo {
-    pub name: String,
-    pub description: String,
-}
-
-/// Get human-readable scope information.
-fn get_scope_info(scope: &str) -> ScopeInfo {
-    match scope {
-        "openid" => ScopeInfo {
-            name: "OpenID".to_string(),
-            description: "Verify your identity".to_string(),
-        },
-        "email" => ScopeInfo {
-            name: "Email".to_string(),
-            description: "Access your email address".to_string(),
-        },
-        "profile" => ScopeInfo {
-            name: "Profile".to_string(),
-            description: "Access your profile information".to_string(),
-        },
-        "alerts:read" => ScopeInfo {
-            name: "Read Alerts".to_string(),
-            description: "View your alert subscriptions".to_string(),
-        },
-        "alerts:write" => ScopeInfo {
-            name: "Write Alerts".to_string(),
-            description: "Create and delete alert subscriptions".to_string(),
-        },
-        _ => ScopeInfo {
-            name: scope.to_string(),
-            description: format!("Access to {}", scope),
-        },
-    }
-}
-
 /// Login page template.
 #[derive(Template)]
 #[template(path = "login.html")]
@@ -74,7 +37,6 @@ struct LoginTemplate {
     error: Option<String>,
     message: Option<String>,
     client_name: Option<String>,
-    scopes: Vec<ScopeInfo>,
     frontend_url: String,
 }
 
@@ -157,15 +119,13 @@ async fn login_page(
         _ => None,
     };
 
-    // Parse scopes for display
-    let scope_str = params.scope.as_deref().unwrap_or("openid");
-    let scopes: Vec<ScopeInfo> = scope_str.split_whitespace().map(get_scope_info).collect();
+    let scope_str = params.scope.unwrap_or_else(|| "openid".to_string());
 
     let template = LoginTemplate {
         response_type: "code".to_string(),
         client_id: params.client_id,
         redirect_uri: params.redirect_uri,
-        scope: scope_str.to_string(),
+        scope: scope_str,
         state: params.state.unwrap_or_default(),
         nonce: params.nonce,
         code_challenge: params.code_challenge,
@@ -174,7 +134,6 @@ async fn login_page(
         error: params.error,
         message: params.message,
         client_name,
-        scopes,
         frontend_url: state.frontend_url.clone(),
     };
 
