@@ -33,7 +33,10 @@ pub use health::MISC_TAG;
 use crate::AppResources;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use hickory_resolver::name_server::ConnectionProvider;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
@@ -93,7 +96,16 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .routes(routes!(health::health))
         // Attach application resources, CORS, our trace propagation middleware and the standard TraceLayer.
         .layer(axum::Extension(app_resources))
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::any())
+                .allow_methods(AllowMethods::any())
+                .allow_headers(AllowHeaders::list([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::ACCEPT,
+                ])),
+        )
         .layer(TraceLayer::new_for_http())
         .split_for_parts();
 

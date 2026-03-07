@@ -243,7 +243,7 @@ pub async fn authorize(
     // nonce is stored and will be included in the ID token for replay attack prevention
     let mut login_url = format!(
         "{}/oauth2/login?client_id={}&redirect_uri={}&scope={}&state={}",
-        resources.config.frontend_url,
+        resources.config.oauth2.issuer_url,
         urlencoding::encode(&params.client_id),
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(params.scope.as_deref().unwrap_or("openid")),

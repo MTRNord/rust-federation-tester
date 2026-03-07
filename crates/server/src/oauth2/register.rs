@@ -197,9 +197,9 @@ async fn register_submit(
         return redirect_to_register_with_error(&form, "Please enter a valid email address");
     }
 
-    // Validate password
-    if form.password.len() < 8 {
-        return redirect_to_register_with_error(&form, "Password must be at least 8 characters");
+    // Validate password complexity
+    if let Err(msg) = validate_password_complexity(&form.password) {
+        return redirect_to_register_with_error(&form, msg);
     }
 
     if form.password != form.password_confirm {
@@ -375,7 +375,7 @@ async fn send_verification_email(
     // Build verification URL with OAuth2 parameters
     let mut verify_url = format!(
         "{}/oauth2/verify-email?token={}",
-        resources.config.frontend_url.trim_end_matches('/'),
+        resources.config.oauth2.issuer_url.trim_end_matches('/'),
         urlencoding::encode(token)
     );
 
@@ -575,6 +575,33 @@ fn render_verification_error(message: &str) -> Response {
         message
     );
     Html(html).into_response()
+}
+
+/// Check password complexity requirements.
+///
+/// Requirements:
+/// - At least 12 characters
+/// - At least one uppercase letter
+/// - At least one lowercase letter
+/// - At least one digit
+/// - At least one special character
+fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
+    if password.len() < 12 {
+        return Err("Password must be at least 12 characters long");
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err("Password must contain at least one uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_lowercase()) {
+        return Err("Password must contain at least one lowercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Password must contain at least one number");
+    }
+    if !password.chars().any(|c| !c.is_alphanumeric()) {
+        return Err("Password must contain at least one special character");
+    }
+    Ok(())
 }
 
 /// Redirect back to registration page with an error message.
