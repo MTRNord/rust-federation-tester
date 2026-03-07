@@ -29,7 +29,7 @@ impl MigrationTrait for Migration {
                     '[]',
                     'authorization_code refresh_token',
                     'openid email',
-                    0,
+                    FALSE,
                     CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 )
