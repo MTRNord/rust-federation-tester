@@ -228,20 +228,34 @@ pub async fn lookup_server<P: ConnectionProvider>(
         };
         let records = records.clone();
         lookup_tasks.push(async move {
-            let cname_resp = timeout(
-                Duration::from_secs(NETWORK_TIMEOUT_SECS),
-                resolver.lookup(&host, RecordType::CNAME),
-            )
-            .await;
-            let a_lookup = timeout(
-                Duration::from_secs(NETWORK_TIMEOUT_SECS),
-                resolver.lookup(&host, RecordType::A),
+            // Run CNAME, A, and AAAA lookups in parallel so a CNAME timeout
+            // does not delay the A/AAAA results.
+            let (cname_resp, ipv4_result, ipv6_result) = tokio::join!(
+                timeout(
+                    Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                    resolver.lookup(&host, RecordType::CNAME),
+                ),
+                timeout(
+                    Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                    resolver.lookup(&host, RecordType::A),
+                ),
+                timeout(
+                    Duration::from_secs(NETWORK_TIMEOUT_SECS),
+                    resolver.lookup(&host, RecordType::AAAA),
+                ),
             );
-            let aaaa_lookup = timeout(
-                Duration::from_secs(NETWORK_TIMEOUT_SECS),
-                resolver.lookup(&host, RecordType::AAAA),
-            );
-            let (ipv4_records, ipv6_records) = tokio::try_join!(a_lookup, aaaa_lookup)?;
+            let ipv4_records = match ipv4_result {
+                Ok(r) => r,
+                Err(_) => {
+                    Err(hickory_resolver::ResolveErrorKind::Message("A lookup timed out").into())
+                }
+            };
+            let ipv6_records = match ipv6_result {
+                Ok(r) => r,
+                Err(_) => {
+                    Err(hickory_resolver::ResolveErrorKind::Message("AAAA lookup timed out").into())
+                }
+            };
             Ok::<_, color_eyre::eyre::Error>((
                 host,
                 records,

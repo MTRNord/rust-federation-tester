@@ -289,9 +289,20 @@ pub async fn generate_json_report<P: ConnectionProvider>(
         None
     };
 
-    if well_known_phase.per_ip_found_server.is_empty() {
-        // No per-IP data (e.g. server_name had an explicit port, or no DNS records).
-        // Fall through to the original single DNS phase.
+    // Check whether well-known succeeded on at least one IP.  If it failed on *all* IPs
+    // we must still run the standard DNS phase (SRV → A/AAAA) per the Matrix spec rather
+    // than blindly falling back to port 8448 — that is what caused the regression where
+    // domains with a _matrix._tcp SRV record but no working well-known were resolved at
+    // the wrong port (8448 instead of the SRV-advertised port).
+    let has_any_well_known_success = well_known_phase
+        .per_ip_found_server
+        .values()
+        .any(|v| v.is_some());
+
+    if well_known_phase.per_ip_found_server.is_empty() || !has_any_well_known_success {
+        // No per-IP data (server_name had an explicit port / is an IP literal / no DNS), OR
+        // well-known was attempted but failed on every IP → run the standard DNS phase which
+        // includes SRV lookup before falling back to A/AAAA at port 8448.
         let resolved_server = well_known_phase
             .found_server
             .clone()

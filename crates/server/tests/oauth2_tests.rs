@@ -47,6 +47,7 @@ async fn create_oauth2_test_db() -> DatabaseConnection {
             email TEXT NOT NULL UNIQUE,
             email_verified INTEGER NOT NULL DEFAULT 0,
             name TEXT NULL,
+            receives_alerts INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             last_login_at TEXT NULL,
             password_hash TEXT NULL,
