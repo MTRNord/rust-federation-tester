@@ -11,7 +11,7 @@ categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 argon2 = "0.5"
-askama = "0.15.1"
+askama = { version = "0.15.1", features = ["serde_json"] }
 axum = "0.8.4"
 axum-tracing-opentelemetry = {version="0.32.2", features=["tracing_level_info"]}
 base64 = "0.22.1"
@@ -74,9 +74,10 @@ sea-orm = { version = "1.1.13", features = [
 ] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+hex = "0.4"
 sha2 = "0.10"
 thiserror = "2.0.16"
-time = { version = "0.3.47", features = ["macros", "parsing"] }
+time = { version = "0.3.47", features = ["macros", "parsing", "serde"] }
 tokio = { version = "1.45.1", features = ["full"] }
 tokio-rustls = "0.26"
 tower-http = { version = "0.6.6", features = ["cors", "trace", "fs"] }

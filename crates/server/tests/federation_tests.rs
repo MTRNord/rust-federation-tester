@@ -126,15 +126,9 @@ mod federation_tests {
             .await
             .unwrap();
 
-        // Should pass federation check despite AAAA lookup failures
-        assert!(
-            result.federation_ok,
-            "IPv4-only server should pass federation check"
-        );
-        assert!(
-            result.error.is_none(),
-            "No error should be reported for IPv4-only server"
-        );
+        // The key regression: IPv4 addresses must be resolved even when AAAA times out.
+        // We do NOT assert federation_ok — that depends on the live server's health,
+        // which is outside our control and makes the test flaky in CI.
         assert!(
             !result.dnsresult.addrs.is_empty(),
             "Should find IPv4 addresses"

@@ -156,6 +156,33 @@
             </div>
         </header>
 
+        <div
+            class="govuk-service-navigation"
+            data-module="govuk-service-navigation"
+        >
+            <div class="govuk-width-container">
+                <div class="govuk-service-navigation__container">
+                    <nav
+                        aria-label="Menu"
+                        class="govuk-service-navigation__wrapper"
+                    >
+                        <ul
+                            class="govuk-service-navigation__list"
+                            id="navigation"
+                        >
+                            <li class="govuk-service-navigation__item">
+                                <a
+                                    class="govuk-service-navigation__link"
+                                    href="/oauth2/account"
+                                    >Your account</a
+                                >
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            </div>
+        </div>
+
         <div class="govuk-width-container">
             <div class="govuk-phase-banner">
                 <p class="govuk-phase-banner__content">
@@ -321,9 +348,6 @@
                                 <label class="govuk-label" for="password"
                                     >Password</label
                                 >
-                                <div class="govuk-hint">
-                                    Leave blank to use magic link sign in
-                                </div>
                                 <input
                                     class="govuk-input"
                                     type="password"
@@ -347,88 +371,47 @@
                         </div>
 
                         <form method="POST" action="/oauth2/magic-link">
-                            <input
-                                type="hidden"
-                                name="response_type"
-                                value="{{ response_type }}"
-                            />
-                            <input
-                                type="hidden"
-                                name="client_id"
-                                value="{{ client_id }}"
-                            />
-                            <input
-                                type="hidden"
-                                name="redirect_uri"
-                                value="{{ redirect_uri }}"
-                            />
-                            <input
-                                type="hidden"
-                                name="scope"
-                                value="{{ scope }}"
-                            />
-                            <input
-                                type="hidden"
-                                name="state"
-                                value="{{ state }}"
-                            />
+                            <input type="hidden" name="response_type" value="{{ response_type }}" />
+                            <input type="hidden" name="client_id" value="{{ client_id }}" />
+                            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}" />
+                            <input type="hidden" name="scope" value="{{ scope }}" />
+                            <input type="hidden" name="state" value="{{ state }}" />
                             {% if let Some(nonce) = nonce %}
-                            <input
-                                type="hidden"
-                                name="nonce"
-                                value="{{ nonce }}"
-                            />
-                            {% endif %} {% if let Some(challenge) =
-                            code_challenge %}
-                            <input
-                                type="hidden"
-                                name="code_challenge"
-                                value="{{ challenge }}"
-                            />
-                            {% endif %} {% if let Some(method) =
-                            code_challenge_method %}
-                            <input
-                                type="hidden"
-                                name="code_challenge_method"
-                                value="{{ method }}"
-                            />
+                            <input type="hidden" name="nonce" value="{{ nonce }}" />
                             {% endif %}
-                            <input
-                                type="hidden"
-                                name="email"
-                                id="magic-email"
-                            />
+                            {% if let Some(challenge) = code_challenge %}
+                            <input type="hidden" name="code_challenge" value="{{ challenge }}" />
+                            {% endif %}
+                            {% if let Some(method) = code_challenge_method %}
+                            <input type="hidden" name="code_challenge_method" value="{{ method }}" />
+                            {% endif %}
+
+                            <div class="govuk-form-group">
+                                <label class="govuk-label" for="magic-email"
+                                    >Email address</label
+                                >
+                                <div id="magic-email-hint" class="govuk-hint">
+                                    We'll send you a one-time sign-in link — no password needed.
+                                </div>
+                                <input
+                                    class="govuk-input"
+                                    type="email"
+                                    id="magic-email"
+                                    name="email"
+                                    value="{{ email }}"
+                                    autocomplete="email"
+                                    aria-describedby="magic-email-hint"
+                                />
+                            </div>
 
                             <button
                                 type="submit"
                                 class="govuk-button govuk-button--secondary"
                                 data-module="govuk-button"
-                                onclick="
-                                    document.getElementById(
-                                        'magic-email',
-                                    ).value =
-                                        document.getElementById('email').value
-                                "
                             >
                                 Sign in with magic link
                             </button>
                         </form>
-
-                        <details class="govuk-details">
-                            <summary class="govuk-details__summary">
-                                <span class="govuk-details__summary-text"
-                                    >What is a magic link?</span
-                                >
-                            </summary>
-                            <div class="govuk-details__text">
-                                <p class="govuk-body">
-                                    A magic link is a secure, one-time sign in
-                                    link sent to your email. Click the link in
-                                    your email to sign in without entering a
-                                    password.
-                                </p>
-                            </div>
-                        </details>
 
                         <p class="govuk-body">
                             <a

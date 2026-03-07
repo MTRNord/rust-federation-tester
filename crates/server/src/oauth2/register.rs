@@ -555,7 +555,7 @@ fn render_verification_error(message: &str) -> Response {
     <meta charset="utf-8">
     <title>Verification Failed - Federation Tester</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.css">
+    <link rel="stylesheet" href="/assets/govuk/govuk-frontend.min.css">
 </head>
 <body class="govuk-template__body">
     <div class="govuk-width-container">

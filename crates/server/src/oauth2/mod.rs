@@ -20,6 +20,7 @@ pub mod consent;
 pub mod endpoints;
 pub mod identity;
 pub mod login;
+pub mod magic_link;
 pub mod password;
 pub mod register;
 mod registrar;

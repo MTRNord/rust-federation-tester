@@ -83,6 +83,13 @@ pub async fn start_webserver<P: ConnectionProvider>(
             app_resources.db.clone(),
             &app_resources.config.oauth2,
         );
+        // Ensure the built-in account-page client has the correct redirect_uri
+        if let Err(e) = oauth2_state
+            .upsert_internal_account_client(&app_resources.config.oauth2.account_client_secret)
+            .await
+        {
+            tracing::warn!("Failed to upsert internal account client: {}", e);
+        }
         router = router
             .nest("/oauth2", oauth2::router(oauth2_state))
             .nest("/api/v2/alerts", alerts_v2::router())

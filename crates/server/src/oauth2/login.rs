@@ -246,10 +246,12 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
             }
         }
         None => {
-            // User doesn't have a password set (magic link only account)
+            // User doesn't have a password set — was created via legacy magic link system.
+            // They need to register a new account with the same email to set a password,
+            // which will auto-link their existing alerts.
             return redirect_to_login_with_error(
                 &form,
-                "This account uses magic link authentication. Click 'Sign in with Magic Link' below.",
+                "This account has no password set. Please create a new account with the same email address to link your existing alerts.",
             );
         }
     }

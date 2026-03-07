@@ -21,38 +21,6 @@
             .account-section:last-child {
                 border-bottom: none;
             }
-            .email-row {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                flex-wrap: wrap;
-                padding: 10px 0;
-                border-bottom: 1px solid #f3f2f1;
-            }
-            .email-row:last-child {
-                border-bottom: none;
-            }
-            .email-row__address {
-                flex: 1;
-                min-width: 200px;
-                font-family: monospace;
-                word-break: break-all;
-            }
-            .email-row__badges {
-                display: flex;
-                gap: 6px;
-                flex-wrap: wrap;
-            }
-            .email-row__actions {
-                display: flex;
-                gap: 8px;
-                flex-wrap: wrap;
-            }
-            .danger-zone {
-                border: 2px solid #d4351c;
-                padding: 20px;
-                margin-top: 10px;
-            }
             .hidden { display: none; }
         </style>
     </head>
@@ -77,7 +45,7 @@
             <div class="govuk-header__container govuk-width-container">
                 <div class="govuk-header__logo">
                     <a
-                        href="/"
+                        href="/oauth2/account"
                         class="govuk-header__link govuk-header__link--homepage"
                     >
                         <span class="govuk-header__logotype">
@@ -109,7 +77,7 @@
                 role="main"
             >
                 <div class="govuk-grid-row">
-                    <div class="govuk-grid-column-two-thirds">
+                    <div class="govuk-grid-column-full">
                         <h1 class="govuk-heading-xl">Your account</h1>
 
                         <!-- Loading state -->
@@ -128,7 +96,7 @@
                                 id="sign-in-link"
                                 class="govuk-button"
                                 data-module="govuk-button"
-                                href="/oauth2/login"
+                                href="{{ sign_in_url }}"
                                 >Sign in</a
                             >
                         </div>
@@ -147,7 +115,7 @@
                                         <p
                                             class="govuk-body"
                                             id="error-message"
-                                        ></p>
+                                        >{% if let Some(err) = auth_error %}{{ err }}{% endif %}</p>
                                     </div>
                                 </div>
                             </div>
@@ -186,89 +154,26 @@
                                 <h2 class="govuk-heading-m">Profile</h2>
                                 <dl class="govuk-summary-list">
                                     <div class="govuk-summary-list__row">
-                                        <dt class="govuk-summary-list__key">
-                                            Email
-                                        </dt>
-                                        <dd
-                                            class="govuk-summary-list__value"
-                                            id="profile-email"
-                                        ></dd>
-                                    </div>
-                                    <div class="govuk-summary-list__row">
-                                        <dt class="govuk-summary-list__key">
-                                            Name
-                                        </dt>
-                                        <dd
-                                            class="govuk-summary-list__value"
-                                            id="profile-name"
-                                        ></dd>
-                                    </div>
-                                    <div class="govuk-summary-list__row">
-                                        <dt class="govuk-summary-list__key">
-                                            Email verified
-                                        </dt>
-                                        <dd
-                                            class="govuk-summary-list__value"
-                                            id="profile-verified"
-                                        ></dd>
-                                    </div>
-                                    <div class="govuk-summary-list__row">
-                                        <dt class="govuk-summary-list__key">
-                                            Member since
-                                        </dt>
-                                        <dd
-                                            class="govuk-summary-list__value"
-                                            id="profile-created"
-                                        ></dd>
+                                        <dt class="govuk-summary-list__key">Member since</dt>
+                                        <dd class="govuk-summary-list__value" id="profile-created"></dd>
                                     </div>
                                 </dl>
-
-                                <div class="govuk-form-group">
-                                    <div class="govuk-checkboxes">
-                                        <div class="govuk-checkboxes__item">
-                                            <input
-                                                class="govuk-checkboxes__input"
-                                                id="primary-receives-alerts"
-                                                type="checkbox"
-                                                onchange="togglePrimaryAlerts(this)"
-                                            />
-                                            <label
-                                                class="govuk-label govuk-checkboxes__label"
-                                                for="primary-receives-alerts"
-                                            >
-                                                Receive alert emails at this
-                                                address
-                                            </label>
-                                        </div>
-                                    </div>
-                                </div>
                             </section>
 
-                            <!-- Additional emails section -->
+                            <!-- Emails section (primary + additional unified) -->
                             <section class="account-section">
-                                <h2 class="govuk-heading-m">
-                                    Additional email addresses
-                                </h2>
+                                <h2 class="govuk-heading-m">Email addresses</h2>
                                 <p class="govuk-body">
-                                    Add extra addresses to receive alert
-                                    notifications. Each address must be
-                                    verified before alerts can be sent to it.
+                                    Your primary email is used to sign in. Additional addresses can also receive alert notifications once verified.
                                 </p>
 
                                 <div id="emails-list"></div>
 
                                 <div id="add-email-feedback" class="hidden"></div>
 
-                                <form
-                                    id="add-email-form"
-                                    onsubmit="addEmail(event)"
-                                >
+                                <form id="add-email-form" onsubmit="addEmail(event)">
                                     <div class="govuk-form-group">
-                                        <label
-                                            class="govuk-label"
-                                            for="new-email"
-                                            >Add email address</label
-                                        >
+                                        <label class="govuk-label" for="new-email">Add email address</label>
                                         <input
                                             class="govuk-input govuk-input--width-20"
                                             id="new-email"
@@ -313,60 +218,42 @@
                                     Permanently delete your account and all
                                     associated data. This cannot be undone.
                                 </p>
-                                <div class="danger-zone">
-                                    <div
-                                        id="delete-confirm-box"
-                                        class="hidden"
-                                    >
-                                        <div
-                                            class="govuk-warning-text"
-                                            style="margin-bottom: 10px"
-                                        >
-                                            <span
-                                                class="govuk-warning-text__icon"
-                                                aria-hidden="true"
-                                                >!</span
-                                            >
-                                            <strong
-                                                class="govuk-warning-text__text"
-                                            >
-                                                <span
-                                                    class="govuk-visually-hidden"
-                                                    >Warning</span
-                                                >
-                                                This will delete your account and
-                                                all alert subscriptions permanently.
-                                            </strong>
-                                        </div>
-                                        <div class="govuk-button-group">
-                                            <button
-                                                type="button"
-                                                class="govuk-button govuk-button--warning"
-                                                data-module="govuk-button"
-                                                onclick="deleteAccount()"
-                                            >
-                                                Yes, delete my account
-                                            </button>
-                                            <button
-                                                type="button"
-                                                class="govuk-button govuk-button--secondary"
-                                                data-module="govuk-button"
-                                                onclick="toggleDeleteConfirm(false)"
-                                            >
-                                                Cancel
-                                            </button>
-                                        </div>
+                                <div id="delete-confirm-box" class="hidden">
+                                    <div class="govuk-warning-text">
+                                        <span class="govuk-warning-text__icon" aria-hidden="true">!</span>
+                                        <strong class="govuk-warning-text__text">
+                                            <span class="govuk-visually-hidden">Warning</span>
+                                            This will delete your account and all alert subscriptions permanently.
+                                        </strong>
                                     </div>
-                                    <button
-                                        id="delete-show-btn"
-                                        type="button"
-                                        class="govuk-button govuk-button--warning"
-                                        data-module="govuk-button"
-                                        onclick="toggleDeleteConfirm(true)"
-                                    >
-                                        Delete account
-                                    </button>
+                                    <div class="govuk-button-group">
+                                        <button
+                                            type="button"
+                                            class="govuk-button govuk-button--warning"
+                                            data-module="govuk-button"
+                                            onclick="deleteAccount()"
+                                        >
+                                            Yes, delete my account
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="govuk-button govuk-button--secondary"
+                                            data-module="govuk-button"
+                                            onclick="toggleDeleteConfirm(false)"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
                                 </div>
+                                <button
+                                    id="delete-show-btn"
+                                    type="button"
+                                    class="govuk-button govuk-button--warning"
+                                    data-module="govuk-button"
+                                    onclick="toggleDeleteConfirm(true)"
+                                >
+                                    Delete account
+                                </button>
                             </section>
                         </div>
                     </div>
@@ -400,37 +287,23 @@
 
         <script>
             // ---------------------------------------------------------------------------
-            // Token resolution: URL hash (#token=xxx) → localStorage → sessionStorage
-            // The hash fragment approach lets the Fresh frontend pass the token across
-            // origins in development (e.g. localhost:5173 → localhost:8080).
-            // In production (same origin / reverse proxy) sessionStorage works directly.
+            // Auth — token is exchanged server-side and injected into the page.
+            // The sign-in link in the HTML builds the authorize URL server-side
+            // with a signed CSRF state, so no JS PKCE/callback is needed here.
             // ---------------------------------------------------------------------------
             const STORAGE_KEY = "federation_access_token";
 
+            // If the server completed the OAuth2 code exchange, it injects the token here.
+            {% if let Some(token) = initial_token %}
+            (function() {
+                try { localStorage.setItem(STORAGE_KEY, {{ token|json|safe }}); } catch (_) {}
+                // Clean ?code=&state= from the URL without reloading.
+                history.replaceState(null, "", location.pathname);
+            })();
+            {% endif %}
+
             function resolveToken() {
-                // 1. URL hash: /oauth2/account#token=xxx
-                const hash = location.hash.slice(1);
-                if (hash) {
-                    const params = new URLSearchParams(hash);
-                    const t = params.get("token");
-                    if (t) {
-                        // Persist for subsequent navigations on this origin.
-                        try { localStorage.setItem(STORAGE_KEY, t); } catch (_) {}
-                        // Clean the hash from the URL without triggering a reload.
-                        history.replaceState(null, "", location.pathname + location.search);
-                        return t;
-                    }
-                }
-                // 2. localStorage (cross-port dev, set by Fresh frontend)
-                try {
-                    const t = localStorage.getItem(STORAGE_KEY);
-                    if (t) return t;
-                } catch (_) {}
-                // 3. sessionStorage (same-origin production)
-                try {
-                    const t = sessionStorage.getItem("access_token");
-                    if (t) return t;
-                } catch (_) {}
+                try { const t = localStorage.getItem(STORAGE_KEY); if (t) return t; } catch (_) {}
                 return null;
             }
 
@@ -476,6 +349,12 @@
             // Initial load
             // ---------------------------------------------------------------------------
             async function loadAccount() {
+                // Show server-injected auth error if present.
+                {% if let Some(err) = auth_error %}
+                showError({{ err|json|safe }});
+                return;
+                {% endif %}
+
                 if (!ACCESS_TOKEN) {
                     showState("unauth");
                     return;
@@ -500,51 +379,92 @@
                 if (err) showError("Email verification failed: " + err.replace(/_/g, " "));
             }
 
-            function renderAccount(data) {
-                document.getElementById("profile-email").textContent = data.email;
-                document.getElementById("profile-name").textContent = data.name || "—";
-                document.getElementById("profile-verified").innerHTML = data.email_verified
-                    ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
-                    : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>';
-                document.getElementById("profile-created").textContent =
-                    new Date(data.created_at).toLocaleDateString();
-                document.getElementById("primary-receives-alerts").checked = data.receives_alerts;
-
-                renderEmailsList(data.additional_emails);
+            function parseDate(ts) {
+                // Truncate sub-millisecond precision before parsing (JS Date only handles up to ms)
+                return new Date(ts.replace(/(\.\d{3})\d+/, "$1"));
             }
 
-            function renderEmailsList(emails) {
+            function renderAccount(data) {
+                document.getElementById("profile-created").textContent =
+                    parseDate(data.created_at).toLocaleDateString();
+
+                renderEmailsList(data);
+            }
+
+            function renderEmailsList(data) {
                 const container = document.getElementById("emails-list");
-                if (!emails || emails.length === 0) {
-                    container.innerHTML =
-                        '<div class="govuk-inset-text">No additional email addresses added.</div>';
-                    return;
-                }
-                container.innerHTML = emails.map(e => `
-                    <div class="email-row" id="email-row-${e.id}">
-                        <div class="email-row__address">${escapeHtml(e.email)}</div>
-                        <div class="email-row__badges">
+
+                // Build rows: primary first, then additional
+                const primaryRow = `
+                    <tr class="govuk-table__row">
+                        <td class="govuk-table__cell">
+                            <code>${escapeHtml(data.email)}</code>
+                            <strong class="govuk-tag govuk-tag--blue" style="margin-left:0.5rem">Primary</strong>
+                        </td>
+                        <td class="govuk-table__cell">
+                            ${data.email_verified
+                                ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
+                                : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>'}
+                        </td>
+                        <td class="govuk-table__cell">
+                            <div class="govuk-checkboxes govuk-checkboxes--small">
+                                <div class="govuk-checkboxes__item">
+                                    <input class="govuk-checkboxes__input" id="primary-receives-alerts"
+                                        type="checkbox" ${data.receives_alerts ? "checked" : ""}
+                                        onchange="togglePrimaryAlerts(this)" />
+                                    <label class="govuk-label govuk-checkboxes__label" for="primary-receives-alerts">
+                                        Receive alerts
+                                    </label>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="govuk-table__cell">—</td>
+                    </tr>`;
+
+                const additionalRows = (data.additional_emails || []).map(e => `
+                    <tr class="govuk-table__row" id="email-row-${e.id}">
+                        <td class="govuk-table__cell"><code>${escapeHtml(e.email)}</code></td>
+                        <td class="govuk-table__cell">
                             ${e.verified
                                 ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
                                 : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>'}
-                        </div>
-                        <div class="email-row__actions">
+                        </td>
+                        <td class="govuk-table__cell">
                             ${e.verified ? `
-                            <label class="govuk-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                                <input type="checkbox" class="govuk-checkboxes__input"
-                                    style="width:24px;height:24px"
-                                    ${e.receives_alerts ? "checked" : ""}
-                                    onchange="toggleEmailAlerts('${e.id}', this.checked)"
-                                />
-                                Alerts
-                            </label>` : ""}
+                            <div class="govuk-checkboxes govuk-checkboxes--small">
+                                <div class="govuk-checkboxes__item">
+                                    <input class="govuk-checkboxes__input" id="email-alerts-${e.id}"
+                                        type="checkbox" ${e.receives_alerts ? "checked" : ""}
+                                        onchange="toggleEmailAlerts('${e.id}', this.checked)" />
+                                    <label class="govuk-label govuk-checkboxes__label" for="email-alerts-${e.id}">
+                                        Receive alerts
+                                    </label>
+                                </div>
+                            </div>` : "—"}
+                        </td>
+                        <td class="govuk-table__cell">
                             <button type="button"
                                 class="govuk-button govuk-button--warning govuk-button--secondary"
                                 data-module="govuk-button"
                                 onclick="removeEmail('${e.id}')">Remove</button>
-                        </div>
-                    </div>
-                `).join("");
+                        </td>
+                    </tr>`).join("");
+
+                container.innerHTML = `
+                    <table class="govuk-table">
+                        <thead class="govuk-table__head">
+                            <tr class="govuk-table__row">
+                                <th scope="col" class="govuk-table__header">Email address</th>
+                                <th scope="col" class="govuk-table__header">Status</th>
+                                <th scope="col" class="govuk-table__header">Alert notifications</th>
+                                <th scope="col" class="govuk-table__header">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="govuk-table__body">
+                            ${primaryRow}
+                            ${additionalRows}
+                        </tbody>
+                    </table>`;
             }
 
             function escapeHtml(s) {
@@ -654,8 +574,7 @@
                 const res = await apiFetch("/oauth2/account", { method: "DELETE" });
                 if (res && (res.ok || res.status === 204)) {
                     try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
-                    try { sessionStorage.removeItem("access_token"); } catch (_) {}
-                    location.href = "/";
+                    location.href = "/oauth2/account";
                 } else if (res) {
                     alert("Failed to delete account. Please try again.");
                 }

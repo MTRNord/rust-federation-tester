@@ -2,7 +2,7 @@
 //!
 //! Provides the state structures for the OAuth2 authorization server.
 
-use crate::entity::oauth2_user;
+use crate::entity::{oauth2_client, oauth2_user};
 use crate::oauth2::registrar::DbRegistrar;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -43,6 +43,39 @@ impl OAuth2State {
             access_token_lifetime: config.access_token_lifetime,
             refresh_token_lifetime: config.refresh_token_lifetime,
         }
+    }
+
+    /// Ensure the built-in `account-internal` OAuth2 client has the correct
+    /// redirect_uri and client_secret for this deployment. Called at startup.
+    pub async fn upsert_internal_account_client(
+        &self,
+        account_client_secret: &str,
+    ) -> Result<(), sea_orm::DbErr> {
+        let account_redirect_uri =
+            format!("{}/oauth2/account", self.issuer_url.trim_end_matches('/'));
+        let client_secret = account_client_secret.to_string();
+
+        match oauth2_client::Entity::find_by_id("account-internal")
+            .one(self.db.as_ref())
+            .await?
+        {
+            Some(client) => {
+                let uris = vec![account_redirect_uri.clone()];
+                let uris_json = serde_json::to_string(&uris).unwrap_or_default();
+                let mut active: oauth2_client::ActiveModel = client.into();
+                active.redirect_uris = Set(uris_json);
+                active.secret = Set(Some(client_secret));
+                active.is_public = Set(false);
+                active.update(self.db.as_ref()).await?;
+            }
+            None => {
+                tracing::warn!(
+                    "account-internal OAuth2 client not found; run migrations to create it"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Generate a secure random token

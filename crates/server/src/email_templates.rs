@@ -202,6 +202,39 @@ The Federation Tester Team"#,
     }
 }
 
+/// Template for OAuth2 magic link sign-in emails
+#[derive(Template)]
+#[template(path = "magic_link_email.html")]
+pub struct MagicLinkEmailTemplate {
+    pub verify_url: String,
+}
+
+impl MagicLinkEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        format!(
+            r#"Hello,
+
+You requested to sign in to Federation Tester.
+
+Click the link below to sign in (valid for 1 hour):
+{}
+
+If you did not request this, you can safely ignore this email.
+
+Best regards,
+The Federation Tester Team"#,
+            self.verify_url
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

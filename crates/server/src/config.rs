@@ -52,6 +52,10 @@ pub struct OAuth2Config {
     /// Whether legacy magic link authentication is enabled (default: true for backward compatibility)
     #[serde(default = "default_magic_links_enabled")]
     pub magic_links_enabled: bool,
+    /// Client secret for the built-in account-internal OAuth2 client.
+    /// Required when oauth2.enabled = true. Generate with: openssl rand -hex 32
+    #[serde(default)]
+    pub account_client_secret: String,
 }
 
 impl Default for OAuth2Config {
@@ -62,6 +66,7 @@ impl Default for OAuth2Config {
             access_token_lifetime: default_access_token_lifetime(),
             refresh_token_lifetime: default_refresh_token_lifetime(),
             magic_links_enabled: default_magic_links_enabled(),
+            account_client_secret: String::new(),
         }
     }
 }
@@ -208,6 +213,12 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
     if app.magic_token_secret.len() < 32 {
         return Err(ConfigError::Validation(
             "magic_token_secret must be at least 16 characters".into(),
+        ));
+    }
+
+    if app.oauth2.enabled && app.oauth2.account_client_secret.is_empty() {
+        return Err(ConfigError::Validation(
+            "oauth2.account_client_secret must be set when oauth2.enabled = true".into(),
         ));
     }
     if app.smtp.port == 0 {

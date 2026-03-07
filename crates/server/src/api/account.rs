@@ -23,6 +23,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
+use jsonwebtoken::{DecodingKey, EncodingKey, Header as JwtHeader, Validation, decode, encode};
 use lettre::AsyncTransport;
 use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{
@@ -45,6 +46,7 @@ pub struct EmailDto {
     pub email: String,
     pub verified: bool,
     pub receives_alerts: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -68,7 +70,9 @@ pub struct AccountInfoResponse {
     pub email_verified: bool,
     /// Whether the primary login email receives alert notifications.
     pub receives_alerts: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_login_at: Option<OffsetDateTime>,
     pub additional_emails: Vec<EmailDto>,
 }
@@ -95,6 +99,7 @@ pub struct VerifyTokenQuery {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct GdprExport {
+    #[serde(with = "time::serde::rfc3339")]
     pub exported_at: OffsetDateTime,
     pub account: GdprAccountInfo,
     pub additional_emails: Vec<EmailDto>,
@@ -108,7 +113,9 @@ pub struct GdprAccountInfo {
     pub name: Option<String>,
     pub email_verified: bool,
     pub receives_alerts: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_login_at: Option<OffsetDateTime>,
 }
 
@@ -118,7 +125,9 @@ pub struct GdprAlertInfo {
     pub server_name: String,
     pub email: String,
     pub verified: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_check_at: Option<OffsetDateTime>,
     pub is_currently_failing: bool,
 }
@@ -159,10 +168,41 @@ pub fn router() -> OpenApiRouter {
 // GET /oauth2/account  — HTML shell (no auth required; JS handles auth)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Internal account client constants
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_CLIENT_ID: &str = "account-internal";
+
+/// JWT claims used for the OAuth2 state parameter (CSRF protection).
+/// Signed with `magic_token_secret`; no session storage needed.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AccountStateClaims {
+    /// Random nonce
+    pub nonce: String,
+    /// Expiry (Unix timestamp)
+    pub exp: usize,
+}
+
 /// Askama template for the account management page.
 #[derive(Template)]
 #[template(path = "account.html")]
-struct AccountPageTemplate {}
+struct AccountPageTemplate {
+    /// Pre-built authorize URL for the "Sign in" button (no JS needed for sign-in)
+    sign_in_url: String,
+    /// Access token — `None` unless the OAuth2 callback just completed server-side
+    initial_token: Option<String>,
+    /// Error message to show (e.g. on bad state)
+    auth_error: Option<String>,
+}
+
+/// Query params received on the OAuth2 callback redirect back to the account page.
+#[derive(Debug, serde::Deserialize)]
+struct AccountPageQuery {
+    code: Option<String>,
+    state: Option<String>,
+    // forward-compatible: ignore extra params
+}
 
 #[utoipa::path(
     get,
@@ -174,8 +214,62 @@ struct AccountPageTemplate {}
         (status = 200, description = "Account management page HTML"),
     )
 )]
-async fn account_page() -> Response {
-    let template = AccountPageTemplate {};
+async fn account_page(
+    Extension(resources): Extension<AppResources>,
+    Query(query): Query<AccountPageQuery>,
+) -> Response {
+    let issuer = resources.config.oauth2.issuer_url.trim_end_matches('/');
+    let redirect_uri = format!("{issuer}/oauth2/account");
+    let client_secret = &resources.config.oauth2.account_client_secret;
+
+    // --- Handle OAuth2 callback (code + state) server-side ------------------
+    let (initial_token, auth_error) = if let (Some(code), Some(state)) = (&query.code, &query.state)
+    {
+        // Verify the signed state JWT to prevent CSRF.
+        let secret_bytes = client_secret.as_bytes();
+        let mut validation = Validation::default();
+        validation.validate_exp = true;
+        let state_ok = decode::<AccountStateClaims>(
+            state,
+            &DecodingKey::from_secret(secret_bytes),
+            &validation,
+        )
+        .is_ok();
+
+        if !state_ok {
+            (
+                None,
+                Some("Sign-in failed: invalid or expired state. Please try again.".to_string()),
+            )
+        } else {
+            match exchange_code_internal(
+                issuer,
+                ACCOUNT_CLIENT_ID,
+                client_secret,
+                code,
+                &redirect_uri,
+            )
+            .await
+            {
+                Ok(token) => (Some(token), None),
+                Err(e) => {
+                    tracing::error!("Account page code exchange failed: {e}");
+                    (None, Some("Sign-in failed: could not exchange authorisation code. Please try again.".to_string()))
+                }
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    // --- Build a fresh authorize URL with a signed state JWT -----------------
+    let sign_in_url = build_sign_in_url(issuer, &redirect_uri, client_secret);
+
+    let template = AccountPageTemplate {
+        sign_in_url,
+        initial_token,
+        auth_error,
+    };
     match template.render() {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
@@ -183,6 +277,69 @@ async fn account_page() -> Response {
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
         }
     }
+}
+
+/// Build the authorize URL with a fresh signed state JWT.
+fn build_sign_in_url(issuer: &str, redirect_uri: &str, magic_secret: &str) -> String {
+    let nonce = crate::oauth2::generate_verification_token();
+    let exp =
+        (time::OffsetDateTime::now_utc() + time::Duration::minutes(10)).unix_timestamp() as usize;
+    let claims = AccountStateClaims { nonce, exp };
+    let state = encode(
+        &JwtHeader::default(),
+        &claims,
+        &EncodingKey::from_secret(magic_secret.as_bytes()),
+    )
+    .unwrap_or_default();
+
+    format!(
+        "{issuer}/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=openid+email&state={state}",
+        client_id = urlencoding::encode(ACCOUNT_CLIENT_ID),
+        redirect_uri = urlencoding::encode(redirect_uri),
+        state = urlencoding::encode(&state),
+    )
+}
+
+/// Exchange an authorization code for an access token by calling the token
+/// endpoint on the same server (HTTP loopback — same process).
+async fn exchange_code_internal(
+    issuer: &str,
+    client_id: &str,
+    client_secret: &str,
+    code: &str,
+    redirect_uri: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let body = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+    ]
+    .iter()
+    .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+    .collect::<Vec<_>>()
+    .join("&");
+
+    let url = format!("{issuer}/oauth2/token");
+    let client = reqwest::Client::new();
+    let res = client
+        .post(&url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Token endpoint returned error: {text}").into());
+    }
+
+    let json: serde_json::Value = res.json().await?;
+    json["access_token"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| "No access_token in token response".into())
 }
 
 // ---------------------------------------------------------------------------
