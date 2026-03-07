@@ -577,29 +577,41 @@ fn render_verification_error(message: &str) -> Response {
     Html(html).into_response()
 }
 
-/// Check password complexity requirements.
+/// Estimate password entropy in bits.
 ///
-/// Requirements:
-/// - At least 12 characters
-/// - At least one uppercase letter
-/// - At least one lowercase letter
-/// - At least one digit
-/// - At least one special character
+/// Uses `entropy = length * log2(charset_size)` where charset_size
+/// is the union of character pools detected in the password:
+/// lowercase (26), uppercase (26), digits (10), other/special (32).
+fn password_entropy(password: &str) -> f64 {
+    if password.is_empty() {
+        return 0.0;
+    }
+    let mut pool: u32 = 0;
+    if password.chars().any(|c| c.is_ascii_lowercase()) {
+        pool += 26;
+    }
+    if password.chars().any(|c| c.is_ascii_uppercase()) {
+        pool += 26;
+    }
+    if password.chars().any(|c| c.is_ascii_digit()) {
+        pool += 10;
+    }
+    if password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        pool += 32;
+    }
+    password.len() as f64 * (pool as f64).log2()
+}
+
+/// Require at least 40 bits of entropy (rejects short/trivial passwords while
+/// allowing both long passphrases and shorter complex passwords).
 fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
-    if password.len() < 12 {
-        return Err("Password must be at least 12 characters long");
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters long");
     }
-    if !password.chars().any(|c| c.is_ascii_uppercase()) {
-        return Err("Password must contain at least one uppercase letter");
-    }
-    if !password.chars().any(|c| c.is_ascii_lowercase()) {
-        return Err("Password must contain at least one lowercase letter");
-    }
-    if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err("Password must contain at least one number");
-    }
-    if !password.chars().any(|c| !c.is_alphanumeric()) {
-        return Err("Password must contain at least one special character");
+    if password_entropy(password) < 40.0 {
+        return Err(
+            "Password is too weak. Try making it longer or mixing letters, numbers, and symbols.",
+        );
     }
     Ok(())
 }

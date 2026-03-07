@@ -43,6 +43,27 @@
             .hidden {
                 display: none;
             }
+
+            .password-strength {
+                margin-top: 8px;
+            }
+            .password-strength__bar-track {
+                height: 8px;
+                background: #b1b4b6;
+                border-radius: 4px;
+                overflow: hidden;
+            }
+            .password-strength__bar-fill {
+                height: 100%;
+                width: 0;
+                border-radius: 4px;
+                transition: width 0.2s ease, background-color 0.2s ease;
+            }
+            .password-strength__label {
+                font-size: 0.875rem;
+                margin-top: 4px;
+                font-weight: 600;
+            }
         </style>
     </head>
 
@@ -212,8 +233,8 @@
                                 <label class="govuk-label" for="password"
                                     >Password</label
                                 >
-                                <div class="govuk-hint">
-                                    Must be at least 8 characters
+                                <div class="govuk-hint" id="password-hint">
+                                    Use a long passphrase or a mix of letters, numbers, and symbols. Aim for a strong rating.
                                 </div>
                                 <input
                                     class="govuk-input"
@@ -222,8 +243,14 @@
                                     name="password"
                                     required
                                     autocomplete="new-password"
-                                    minlength="8"
+                                    aria-describedby="password-hint password-strength-label"
                                 />
+                                <div class="password-strength" aria-live="polite">
+                                    <div class="password-strength__bar-track">
+                                        <div class="password-strength__bar-fill" id="strength-bar"></div>
+                                    </div>
+                                    <p class="password-strength__label govuk-body-s" id="password-strength-label"></p>
+                                </div>
                             </div>
 
                             <div class="govuk-form-group">
@@ -237,7 +264,6 @@
                                     name="password_confirm"
                                     required
                                     autocomplete="new-password"
-                                    minlength="8"
                                 />
                             </div>
 
@@ -285,6 +311,54 @@
         <script type="module">
             import { initAll } from "https://cdn.jsdelivr.net/npm/govuk-frontend@5.14.0/dist/govuk/govuk-frontend.min.js";
             initAll();
+        </script>
+        <script>
+            (function () {
+                // Mirror of the server-side entropy calculation.
+                // entropy = length * log2(pool_size)
+                // Pool: lowercase(26) + uppercase(26) + digits(10) + other(32)
+                function calcEntropy(pw) {
+                    if (!pw) return 0;
+                    var pool = 0;
+                    if (/[a-z]/.test(pw)) pool += 26;
+                    if (/[A-Z]/.test(pw)) pool += 26;
+                    if (/[0-9]/.test(pw)) pool += 10;
+                    if (/[^a-zA-Z0-9]/.test(pw)) pool += 32;
+                    if (pool === 0) return 0;
+                    return pw.length * Math.log2(pool);
+                }
+
+                // Thresholds (bits): < 25 very weak, < 40 weak, < 55 fair, < 70 strong, >= 70 very strong
+                // Minimum accepted by server: 40 bits
+                var levels = [
+                    { max: 25,  label: "Very weak",   color: "#d4351c", pct: 10 },
+                    { max: 40,  label: "Weak",         color: "#f47738", pct: 30 },
+                    { max: 55,  label: "Fair",         color: "#ffdd00", pct: 55 },
+                    { max: 70,  label: "Strong",       color: "#00703c", pct: 80 },
+                    { max: Infinity, label: "Very strong", color: "#005a30", pct: 100 },
+                ];
+
+                var bar   = document.getElementById("strength-bar");
+                var label = document.getElementById("password-strength-label");
+                var input = document.getElementById("password");
+
+                if (!input || !bar || !label) return;
+
+                input.addEventListener("input", function () {
+                    var entropy = calcEntropy(input.value);
+                    if (!input.value) {
+                        bar.style.width = "0";
+                        bar.style.backgroundColor = "";
+                        label.textContent = "";
+                        return;
+                    }
+                    var lvl = levels.find(function (l) { return entropy < l.max; });
+                    bar.style.width = lvl.pct + "%";
+                    bar.style.backgroundColor = lvl.color;
+                    label.textContent = lvl.label + " (" + Math.round(entropy) + " bits)";
+                    label.style.color = lvl.color === "#ffdd00" ? "#594d00" : lvl.color;
+                });
+            })();
         </script>
     </body>
 </html>
