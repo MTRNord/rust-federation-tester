@@ -250,10 +250,11 @@
                                         <div class="password-strength__bar-fill" id="strength-bar"></div>
                                     </div>
                                     <p class="password-strength__label govuk-body-s" id="password-strength-label"></p>
+                                    <p class="govuk-body-s" id="password-strength-hint" style="margin-top:2px;margin-bottom:0"></p>
                                 </div>
                             </div>
 
-                            <div class="govuk-form-group">
+                            <div class="govuk-form-group" id="confirm-group">
                                 <label class="govuk-label" for="password_confirm"
                                     >Confirm password</label
                                 >
@@ -264,7 +265,9 @@
                                     name="password_confirm"
                                     required
                                     autocomplete="new-password"
+                                    aria-describedby="confirm-match-hint"
                                 />
+                                <p class="govuk-body-s" id="confirm-match-hint" style="margin-top:6px;margin-bottom:0" aria-live="polite"></p>
                             </div>
 
                             <button
@@ -328,36 +331,71 @@
                     return pw.length * Math.log2(pool);
                 }
 
-                // Thresholds (bits): < 25 very weak, < 40 weak, < 55 fair, < 70 strong, >= 70 very strong
-                // Minimum accepted by server: 40 bits
+                // Thresholds (bits): < 40 very weak, < 55 weak, < 65 fair, < 80 strong, >= 80 very strong
+                // Minimum accepted by server: 55 bits (fair)
+                var MIN_ENTROPY = 55;
                 var levels = [
-                    { max: 25,  label: "Very weak",   color: "#d4351c", pct: 10 },
-                    { max: 40,  label: "Weak",         color: "#f47738", pct: 30 },
-                    { max: 55,  label: "Fair",         color: "#ffdd00", pct: 55 },
-                    { max: 70,  label: "Strong",       color: "#00703c", pct: 80 },
-                    { max: Infinity, label: "Very strong", color: "#005a30", pct: 100 },
+                    { max: 40,       label: "Very weak",   color: "#d4351c", pct: 10,  accepted: false },
+                    { max: 55,       label: "Weak",        color: "#f47738", pct: 30,  accepted: false },
+                    { max: 65,       label: "Fair",        color: "#ffdd00", pct: 55,  accepted: true  },
+                    { max: 80,       label: "Strong",      color: "#00703c", pct: 80,  accepted: true  },
+                    { max: Infinity, label: "Very strong", color: "#005a30", pct: 100, accepted: true  },
                 ];
 
-                var bar   = document.getElementById("strength-bar");
-                var label = document.getElementById("password-strength-label");
-                var input = document.getElementById("password");
+                var bar        = document.getElementById("strength-bar");
+                var label      = document.getElementById("password-strength-label");
+                var hint       = document.getElementById("password-strength-hint");
+                var input      = document.getElementById("password");
+                var confirm    = document.getElementById("password_confirm");
+                var matchHint  = document.getElementById("confirm-match-hint");
 
                 if (!input || !bar || !label) return;
 
-                input.addEventListener("input", function () {
+                function updateStrength() {
                     var entropy = calcEntropy(input.value);
                     if (!input.value) {
                         bar.style.width = "0";
                         bar.style.backgroundColor = "";
                         label.textContent = "";
+                        if (hint) hint.textContent = "";
                         return;
                     }
                     var lvl = levels.find(function (l) { return entropy < l.max; });
+                    var textColor = lvl.color === "#ffdd00" ? "#594d00" : lvl.color;
                     bar.style.width = lvl.pct + "%";
                     bar.style.backgroundColor = lvl.color;
                     label.textContent = lvl.label + " (" + Math.round(entropy) + " bits)";
-                    label.style.color = lvl.color === "#ffdd00" ? "#594d00" : lvl.color;
-                });
+                    label.style.color = textColor;
+                    if (hint) {
+                        if (lvl.accepted) {
+                            hint.textContent = "✓ Acceptable";
+                            hint.style.color = "#00703c";
+                        } else {
+                            hint.textContent = "✗ Too weak — aim for at least Fair";
+                            hint.style.color = "#d4351c";
+                        }
+                    }
+                    // Re-check confirm match if it has a value
+                    if (confirm && confirm.value) updateMatch();
+                }
+
+                function updateMatch() {
+                    if (!confirm || !matchHint) return;
+                    if (!confirm.value) {
+                        matchHint.textContent = "";
+                        return;
+                    }
+                    if (confirm.value === input.value) {
+                        matchHint.textContent = "✓ Passwords match";
+                        matchHint.style.color = "#00703c";
+                    } else {
+                        matchHint.textContent = "✗ Passwords do not match";
+                        matchHint.style.color = "#d4351c";
+                    }
+                }
+
+                input.addEventListener("input", updateStrength);
+                if (confirm) confirm.addEventListener("input", updateMatch);
             })();
         </script>
     </body>

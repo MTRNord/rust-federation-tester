@@ -608,7 +608,7 @@ fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
     if password.len() < 8 {
         return Err("Password must be at least 8 characters long");
     }
-    if password_entropy(password) < 40.0 {
+    if password_entropy(password) < 55.0 {
         return Err(
             "Password is too weak. Try making it longer or mixing letters, numbers, and symbols.",
         );
