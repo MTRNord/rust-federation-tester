@@ -68,6 +68,36 @@ chmod +x coverage.sh
 
 Open `target/coverage/html/index.html` in a browser for a detailed report.
 
+## Federation Check Configuration
+
+Two top-level keys control how the federation checks are performed:
+
+```yaml
+# Network timeout in seconds for each individual federation check (DNS, TLS, HTTP).
+# Default: 3 — suitable for the public internet.
+# Increase for high-latency intranet links (e.g. 10–30).
+federation_timeout_secs: 3
+
+# When true, the SSRF guard that blocks private/internal IP addresses is disabled.
+# Required for intranet / closed-federation deployments.
+#
+# WARNING: Do NOT enable this on a public-facing deployment. It allows any user to
+# probe internal network resources (RFC 1918, link-local, ULA, etc.) via the
+# well-known delegation mechanism.
+allow_private_targets: false
+```
+
+### Blocked IP ranges (when `allow_private_targets: false`)
+
+| Range | Description |
+|-------|-------------|
+| 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 | RFC 1918 private networks |
+| 169.254.0.0/16 | Link-local / AWS instance metadata |
+| 100.64.0.0/10 | CGNAT / Tailscale |
+| fc00::/7 | IPv6 ULA |
+
+---
+
 ## Federation Statistics & Prometheus Metrics
 
 The service can (optionally) record per-request federation statistics on a strict opt-in basis and expose anonymized aggregates via `GET /metrics` in Prometheus text format.
