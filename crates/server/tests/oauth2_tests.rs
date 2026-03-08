@@ -150,6 +150,8 @@ fn create_test_config() -> AppConfig {
             magic_links_enabled: true,
             account_client_secret: "test_account_client_secret".into(),
         },
+        federation_timeout_secs: 3,
+        allow_private_targets: false,
     }
 }
 

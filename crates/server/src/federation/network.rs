@@ -9,10 +9,10 @@ use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio::time::{Duration, timeout};
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
-use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
+use crate::federation::well_known::network_timeout;
 
 #[derive(Debug)]
 pub struct FullResponse {
@@ -49,13 +49,11 @@ pub async fn fetch_url_custom_sni_host(
         sni_host = %sni_host,
         host = %host_host
     );
-    let stream = timeout(
-        Duration::from_secs(NETWORK_TIMEOUT_SECS),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| FetchError::Timeout(Duration::from_secs(NETWORK_TIMEOUT_SECS)))
-    .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
+    let t = network_timeout();
+    let stream = timeout(t, TcpStream::connect(addr))
+        .await
+        .map_err(|_| FetchError::Timeout(t))
+        .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
     // Use shared TLS configuration for better performance
     let config = get_shared_tls_config();

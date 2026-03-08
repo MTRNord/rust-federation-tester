@@ -6,6 +6,7 @@ use http_body_util::Empty;
 use hyper::client::conn::http1::SendRequest;
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::ServerName;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,17 @@ use tokio_rustls::TlsConnector;
 
 type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni) - use Arc<str> for better memory efficiency
 type PooledConnection = SendRequest<Empty<Bytes>>;
+
+/// Build a map key for a client ID. Returns a zero-allocation borrowed key for
+/// the common `"anonymous"` case; allocates only for dynamic strings (IP addresses).
+#[inline]
+fn make_client_key(client_id: &str) -> Cow<'static, str> {
+    if client_id == "anonymous" {
+        Cow::Borrowed("anonymous")
+    } else {
+        Cow::Owned(client_id.to_string())
+    }
+}
 
 /// Track per-client connection usage to prevent DoS attacks
 #[derive(Debug)]
@@ -45,7 +57,7 @@ impl ClientUsage {
 #[derive(Clone)]
 pub struct ConnectionPool {
     pools: Arc<DashMap<ConnectionKey, Arc<Mutex<Vec<PooledConnection>>>>>,
-    client_usage: Arc<DashMap<String, ClientUsage>>, // Track per-client usage
+    client_usage: Arc<DashMap<Cow<'static, str>, ClientUsage>>, // Track per-client usage
     max_connections_per_key: usize,
     max_total_connections: usize,
     max_connections_per_client: usize, // NEW: Per-client limit
@@ -208,7 +220,13 @@ impl ConnectionPool {
         addr: &str,
         sni: &str,
     ) -> color_eyre::eyre::Result<PooledConnection> {
-        let sni_host = sni.split(':').next().unwrap();
+        // Strip brackets and port to get the bare hostname for SNI.
+        // Mirrors the same logic in network.rs::fetch_url_custom_sni_host.
+        let sni_host = if sni.starts_with('[') {
+            &sni[1..sni.find(']').unwrap_or(sni.len())]
+        } else {
+            sni.split(':').next().unwrap_or(sni)
+        };
 
         let stream = timeout(self.connection_timeout, TcpStream::connect(addr)).await??;
 
@@ -341,7 +359,7 @@ impl ConnectionPool {
             .as_secs();
         let usage = self
             .client_usage
-            .entry(client_id.to_string())
+            .entry(make_client_key(client_id))
             .or_insert_with(ClientUsage::new);
 
         let last_request = usage.last_request.load(Ordering::Relaxed);
@@ -370,7 +388,7 @@ impl ConnectionPool {
     fn increment_client_usage(&self, client_id: &str) {
         let usage = self
             .client_usage
-            .entry(client_id.to_string())
+            .entry(make_client_key(client_id))
             .or_insert_with(ClientUsage::new);
         usage.connection_count.fetch_add(1, Ordering::Relaxed);
     }

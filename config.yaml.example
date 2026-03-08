@@ -34,6 +34,26 @@ oauth2:
   # Set to false to force all users to use OAuth2
   magic_links_enabled: true
 
+## Federation check settings
+# Network timeout in seconds for each individual federation check (DNS, TLS, HTTP).
+# Default: 3 — suitable for the public internet.
+# Increase for high-latency intranet links (e.g. 10–30).
+#federation_timeout_secs: 3
+
+# When true, the SSRF guard that blocks private/internal IP addresses is disabled.
+# This allows the tool to test intranet / closed-federation servers.
+#
+# WARNING: Do NOT enable this on a public-facing deployment. It allows any user to
+# probe internal network resources (RFC 1918 addresses, link-local, ULA, etc.) via
+# the well-known delegation mechanism.
+#
+# Blocked ranges (when false, the default):
+#   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16  (RFC 1918)
+#   169.254.0.0/16                               (link-local / AWS metadata)
+#   100.64.0.0/10                                (CGNAT / Tailscale)
+#   fc00::/7                                     (IPv6 ULA)
+#allow_private_targets: false
+
 ## Optional anonymized, opt-in statistics & Prometheus metrics
 statistics:
   # Master switch. When false, no events are recorded even if clients pass stats_opt_in.

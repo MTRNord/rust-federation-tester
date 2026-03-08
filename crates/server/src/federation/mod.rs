@@ -16,7 +16,7 @@ pub mod network;
 pub mod version;
 pub mod well_known;
 
-pub use well_known::{NETWORK_TIMEOUT_SECS, lookup_server_well_known};
+pub use well_known::{init_federation_config, lookup_server_well_known, network_timeout};
 
 pub use dns::{absolutize_srv_target, lookup_server};
 

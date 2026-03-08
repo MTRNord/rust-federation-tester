@@ -96,6 +96,11 @@ pub struct ConnectionReportData {
     pub ed25519verify_keys: BTreeMap<String, String>,
     pub keys: Keys,
     pub version: Version,
+    /// True when a transient failure required a retry to succeed.
+    /// An endpoint that only responds after a retry is exhibiting instability
+    /// that federation peers may also encounter on their first attempt.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub required_retry: bool,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

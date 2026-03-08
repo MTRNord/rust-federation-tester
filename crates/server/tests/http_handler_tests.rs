@@ -101,6 +101,8 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
             raw_retention_days: 30,
         },
         oauth2: OAuth2Config::default(),
+        federation_timeout_secs: 3,
+        allow_private_targets: false,
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::connection_pool::ConnectionPool;
 use crate::error::FetchError;
-use crate::federation::well_known::NETWORK_TIMEOUT_SECS;
+use crate::federation::well_known::network_timeout;
 use crate::optimization::get_shared_tls_config;
 use crate::response::Version;
 use bytes::Bytes;
@@ -11,7 +11,7 @@ use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio::time::{Duration, timeout};
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 #[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -26,7 +26,7 @@ pub async fn query_server_version_pooled(
     sni: &str,
     connection_pool: &ConnectionPool,
 ) -> color_eyre::eyre::Result<Option<(Version, bool)>> {
-    let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
+    let timeout_duration = network_timeout();
     let response_result = timeout(
         timeout_duration,
         fetch_url_pooled_simple(
@@ -76,8 +76,18 @@ pub async fn fetch_url_pooled_simple(
     sni: &str,
     connection_pool: &ConnectionPool,
 ) -> Result<Option<hyper::Response<Incoming>>, FetchError> {
-    let sni_host = sni.split(':').next().unwrap();
-    let host_host = host.split(':').next().unwrap();
+    // Strip brackets and port to get the bare hostname for SNI and Host header.
+    // Mirrors the same logic in network.rs::fetch_url_custom_sni_host.
+    let sni_host = if sni.starts_with('[') {
+        &sni[1..sni.find(']').unwrap_or(sni.len())]
+    } else {
+        sni.split(':').next().unwrap_or(sni)
+    };
+    let host_host = if host.starts_with('[') {
+        &host[1..host.find(']').unwrap_or(host.len())]
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
     tracing::debug!(
         name = "federation.fetch_url_pooled_simple.start",
         target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -129,13 +139,11 @@ pub async fn fetch_url_pooled_simple(
         path = %path,
         addr = %addr
     );
-    let stream = timeout(
-        Duration::from_secs(NETWORK_TIMEOUT_SECS),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| FetchError::Timeout(Duration::from_secs(NETWORK_TIMEOUT_SECS)))
-    .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
+    let t = network_timeout();
+    let stream = timeout(t, TcpStream::connect(addr))
+        .await
+        .map_err(|_| FetchError::Timeout(t))
+        .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
     // Use shared TLS configuration for better performance
     let config = get_shared_tls_config();

@@ -33,6 +33,19 @@ pub struct AppConfig {
     pub statistics: StatisticsConfig,
     #[serde(default)]
     pub oauth2: OAuth2Config,
+    /// Network timeout in seconds for individual federation checks (DNS, TLS, HTTP).
+    /// Default: 3 seconds — suitable for the public internet.
+    /// Increase this for high-latency intranet links (e.g. 10–30).
+    #[serde(default = "default_federation_timeout_secs")]
+    pub federation_timeout_secs: u64,
+    /// When true, the SSRF guard that rejects private/internal IP addresses is disabled.
+    ///
+    /// **WARNING:** Only enable this for closed-federation / intranet deployments where
+    /// the tool is not reachable from untrusted networks. Enabling it on a public-facing
+    /// instance allows any user to probe internal network resources via the well-known
+    /// delegation mechanism.
+    #[serde(default)]
+    pub allow_private_targets: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -105,6 +118,10 @@ impl Default for StatisticsConfig {
             raw_retention_days: default_raw_retention_days(),
         }
     }
+}
+
+fn default_federation_timeout_secs() -> u64 {
+    3
 }
 
 fn default_prometheus_enabled() -> bool {

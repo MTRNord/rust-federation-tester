@@ -1,4 +1,5 @@
 use hickory_resolver::Resolver;
+use hickory_resolver::config::ResolverOpts;
 use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
 use rust_federation_tester::AppResources;
 use rust_federation_tester::alerts::{ConfirmationRegistry, active_check_loop, healthy_check_loop};
@@ -6,6 +7,7 @@ use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
+use rust_federation_tester::federation::init_federation_config;
 
 use rustls::crypto;
 use rustls::crypto::CryptoProvider;
@@ -232,9 +234,29 @@ async fn main() -> color_eyre::eyre::Result<()> {
             .build(),
     );
 
-    // Set up resolver and caches
+    // Apply federation configuration (timeout, private-target SSRF bypass) globally.
+    // Must happen before the first request is handled.
+    init_federation_config(config.federation_timeout_secs, config.allow_private_targets);
+    tracing::info!(
+        timeout_secs = config.federation_timeout_secs,
+        allow_private_targets = config.allow_private_targets,
+        "Federation configuration initialised"
+    );
+
+    // Set up resolver and caches.
+    // Cap cached TTLs at 30 s so recent DNS changes are visible quickly while still
+    // avoiding repeated lookups within a single test run.
     tracing::debug!("Loading resolver");
-    let resolver = Arc::new(Resolver::builder_tokio()?.build());
+    let resolver = {
+        let mut builder = Resolver::builder_tokio()?;
+        let opts: &mut ResolverOpts = builder.options_mut();
+        // Debug tool: cap TTL so DNS changes appear quickly.
+        opts.positive_max_ttl = Some(Duration::from_secs(30));
+        opts.negative_max_ttl = Some(Duration::from_secs(5));
+        // Increase cache size from the default 32 to hold more concurrent server lookups.
+        opts.cache_size = 256;
+        Arc::new(builder.build())
+    };
     let connection_pool = ConnectionPool::default();
 
     let state = AppState {

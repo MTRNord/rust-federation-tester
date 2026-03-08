@@ -6,10 +6,37 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::{Resolver, name_server::ConnectionProvider};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{Duration, timeout};
 use url::Url;
 
-pub const NETWORK_TIMEOUT_SECS: u64 = 3;
+/// Default network timeout; overridden at startup by `init_federation_config`.
+const DEFAULT_TIMEOUT_SECS: u64 = 3;
+
+static FEDERATION_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(DEFAULT_TIMEOUT_SECS);
+
+/// When true, the SSRF check that rejects private/internal IPs is skipped.
+/// Only set this to true for closed-federation / intranet deployments.
+/// Enabling this on a public-facing instance allows users to probe internal network resources.
+static ALLOW_PRIVATE_TARGETS: AtomicBool = AtomicBool::new(false);
+
+/// Initialise federation-wide settings from the loaded config.
+/// Must be called once at startup, before any requests are handled.
+pub fn init_federation_config(timeout_secs: u64, allow_private_targets: bool) {
+    FEDERATION_TIMEOUT_SECS.store(timeout_secs, Ordering::Relaxed);
+    ALLOW_PRIVATE_TARGETS.store(allow_private_targets, Ordering::Relaxed);
+}
+
+/// Returns the configured federation network timeout as a `Duration`.
+pub fn network_timeout() -> Duration {
+    Duration::from_secs(FEDERATION_TIMEOUT_SECS.load(Ordering::Relaxed))
+}
+
+/// Kept for callers that still expect a raw `u64`.
+#[deprecated(since = "0.2.0", note = "use `network_timeout()` instead")]
+pub fn network_timeout_secs() -> u64 {
+    FEDERATION_TIMEOUT_SECS.load(Ordering::Relaxed)
+}
 
 /// Validate well-known response for security issues
 #[tracing::instrument()]
@@ -42,26 +69,29 @@ fn validate_well_known_security(original_server: &str, m_server: &str) -> Result
         // Allow but warn - this might be intentional
     }
 
-    // 4. Validate against localhost/internal addresses to prevent SSRF
-    let server_host = m_server.split(':').next().unwrap_or(m_server);
-    if let Ok(ip) = server_host.parse::<IpAddr>()
-        && is_private_or_internal_ip(&ip)
-    {
-        return Err(Error {
-            error: format!("m.server points to private/internal address: {}", m_server),
-            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
-        });
-    }
+    // 4. Validate against localhost/internal addresses to prevent SSRF.
+    //    This check is skipped when allow_private_targets is enabled (intranet deployments).
+    if !ALLOW_PRIVATE_TARGETS.load(Ordering::Relaxed) {
+        let server_host = m_server.split(':').next().unwrap_or(m_server);
+        if let Ok(ip) = server_host.parse::<IpAddr>()
+            && is_private_or_internal_ip(&ip)
+        {
+            return Err(Error {
+                error: format!("m.server points to private/internal address: {}", m_server),
+                error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+            });
+        }
 
-    // 5. Check for suspicious patterns
-    if server_host.contains("localhost")
-        || server_host.contains("127.0.0.1")
-        || server_host.contains("::1")
-    {
-        return Err(Error {
-            error: format!("m.server points to localhost: {}", m_server),
-            error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
-        });
+        // 5. Check for suspicious patterns (only when SSRF guard is active)
+        if server_host.contains("localhost")
+            || server_host.contains("127.0.0.1")
+            || server_host.contains("::1")
+        {
+            return Err(Error {
+                error: format!("m.server points to localhost: {}", m_server),
+                error_code: ErrorCode::InvalidServerName(InvalidServerNameErrorCode::NotValidDNS),
+            });
+        }
     }
 
     Ok(())
@@ -181,7 +211,7 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
         let addr = addr.clone();
         let server_name = server_name.to_string();
         futures.push(async move {
-            let timeout_duration = Duration::from_secs(NETWORK_TIMEOUT_SECS);
+            let timeout_duration = network_timeout();
             let (_resp_opt, result, server_candidate) =
                 fetch_url_with_redirects(&addr, &server_name, &server_name, 10, timeout_duration)
                     .await;
@@ -358,7 +388,7 @@ async fn fetch_url_with_redirects(
             }
             Ok(Err(e)) => {
                 result.error = Some(Error {
-                    error: format!("Error fetching well-known URL: {e:#?}"),
+                    error: format!("Error fetching well-known URL: {e}"),
                     error_code: ErrorCode::Unknown,
                 });
                 return (None, result, None);

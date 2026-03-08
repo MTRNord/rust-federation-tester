@@ -2,6 +2,7 @@ use crate::connection_pool::ConnectionPool;
 use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
 use crate::response::{ConnectionReportData, Error, ErrorCode};
+use tokio::time::{Duration, sleep};
 
 #[tracing::instrument(skip(connection_pool))]
 pub async fn connection_check(
@@ -16,10 +17,37 @@ pub async fn connection_check(
     let server_host_c = server_host.to_string();
     let sni_c = sni.to_string();
     let pool_c = connection_pool.clone();
-    let (version_result, key_result) = tokio::join!(
+
+    // First attempt: run version and keys fetches in parallel.
+    let (v_first, k_first) = tokio::join!(
         query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c),
         fetch_keys(&addr_c, &server_host_c, &sni_c)
     );
+    let (v_err, k_err) = (v_first.is_err(), k_first.is_err());
+
+    // Retry on transient failure: one retry after 500 ms (single sleep covers both).
+    // If the retry succeeds, mark `required_retry` so callers know the endpoint is
+    // exhibiting instability that federation peers may also encounter.
+    let (version_result, key_result, version_retried, keys_retried) = if !v_err && !k_err {
+        (v_first, k_first, false, false)
+    } else {
+        sleep(Duration::from_millis(500)).await;
+        let v = if v_err {
+            query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c).await
+        } else {
+            v_first
+        };
+        let k = if k_err {
+            fetch_keys(&addr_c, &server_host_c, &sni_c).await
+        } else {
+            k_first
+        };
+        (v, k, v_err, k_err)
+    };
+
+    // Flag: a retry was performed AND that retry succeeded (transient instability).
+    report.required_retry =
+        (version_retried && version_result.is_ok()) || (keys_retried && key_result.is_ok());
 
     match version_result {
         Ok(version_data) => {
