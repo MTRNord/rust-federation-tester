@@ -103,6 +103,7 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
         oauth2: OAuth2Config::default(),
         federation_timeout_secs: 3,
         allow_private_targets: false,
+        redis: Default::default(),
     }
 }
 
@@ -118,6 +119,7 @@ async fn create_test_resources(stats_enabled: bool) -> AppResources {
         db: Arc::new(db),
         mailer,
         config,
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
     }
 }
 

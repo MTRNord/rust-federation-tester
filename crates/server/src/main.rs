@@ -2,11 +2,12 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::ResolverOpts;
 use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
 use rust_federation_tester::AppResources;
-use rust_federation_tester::alerts::{ConfirmationRegistry, active_check_loop, healthy_check_loop};
+use rust_federation_tester::alerts::{active_check_loop, healthy_check_loop};
 use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
+use rust_federation_tester::distributed;
 use rust_federation_tester::federation::init_federation_config;
 
 use rustls::crypto;
@@ -264,7 +265,52 @@ async fn main() -> color_eyre::eyre::Result<()> {
         connection_pool: connection_pool.clone(),
     };
 
-    let resources = std::sync::Arc::new(AppResources { db, mailer, config });
+    // Set up distributed coordination (Registry, Lock, EmailGuard).
+    // When redis.url is configured, uses Redis/Valkey for multi-instance support.
+    // Falls back to in-memory when url is empty or when the redis-backend feature
+    // is not compiled in.
+    let (registry, lock, email_guard) = if !config.redis.url.is_empty() {
+        #[cfg(feature = "redis-backend")]
+        {
+            match distributed::redis_backed(&config.redis) {
+                Ok(triplet) => {
+                    tracing::info!(
+                        url = %config.redis.url,
+                        "Distributed coordination: Redis/Valkey connected"
+                    );
+                    triplet
+                }
+                Err(e) => {
+                    tracing::error!(
+                        url = %config.redis.url,
+                        error = %e,
+                        "Failed to create Redis/Valkey pool; falling back to in-memory single-instance mode"
+                    );
+                    distributed::in_memory()
+                }
+            }
+        }
+        #[cfg(not(feature = "redis-backend"))]
+        {
+            tracing::warn!(
+                "redis.url is configured but binary was compiled without --features redis-backend; \
+                 running in single-instance mode (rebuild with redis-backend to enable Valkey/Redis)"
+            );
+            distributed::in_memory()
+        }
+    } else {
+        tracing::info!(
+            "Distributed coordination: no redis.url configured, running in single-instance mode"
+        );
+        distributed::in_memory()
+    };
+
+    let resources = std::sync::Arc::new(AppResources {
+        db,
+        mailer,
+        config,
+        email_guard,
+    });
 
     // Compute derived values for logging (explicit so fields are clear and type-safe)
     let stats_enabled = resources.config.statistics.enabled;
@@ -302,12 +348,11 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let alert_pool = ConnectionPool::new_for_background_checks(5, 10);
 
     // Start the two-queue alert check loops
-    let registry: ConfirmationRegistry =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     tracing::debug!("Starting healthy alert check loop (5-min interval)");
     tokio::spawn(healthy_check_loop(
         resources.clone(),
         registry.clone(),
+        lock.clone(),
         state.resolver.clone(),
         alert_pool.clone(),
     ));
@@ -315,6 +360,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     tokio::spawn(active_check_loop(
         resources.clone(),
         registry,
+        lock,
         state.resolver.clone(),
         alert_pool,
     ));

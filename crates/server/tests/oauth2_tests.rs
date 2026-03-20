@@ -152,6 +152,7 @@ fn create_test_config() -> AppConfig {
         },
         federation_timeout_secs: 3,
         allow_private_targets: false,
+        redis: Default::default(),
     }
 }
 
@@ -168,6 +169,7 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
         db: db.clone(),
         mailer,
         config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
     };
 
     let oauth2_state = OAuth2State::new(

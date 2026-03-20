@@ -1,13 +1,9 @@
 //! Tests for alert system components.
 
-use rust_federation_tester::alerts::{
-    CONFIRMATION_THRESHOLD, ConfirmationRegistry, should_send_reminder_email,
-};
+use rust_federation_tester::alerts::{CONFIRMATION_THRESHOLD, should_send_reminder_email};
+use rust_federation_tester::distributed::Registry;
 use rust_federation_tester::entity::alert;
-use std::collections::HashMap;
-use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
-use tokio::sync::Mutex;
 
 // =============================================================================
 // Test helpers
@@ -35,8 +31,8 @@ fn make_alert(
     }
 }
 
-fn empty_registry() -> ConfirmationRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
+fn empty_registry() -> Registry {
+    rust_federation_tester::distributed::in_memory().0
 }
 
 // =============================================================================
@@ -99,14 +95,13 @@ fn test_should_send_reminder_email_ignores_failing_flag() {
 }
 
 // =============================================================================
-// ConfirmationRegistry Tests
+// Registry Tests
 // =============================================================================
 
 #[tokio::test]
 async fn test_confirmation_registry_starts_empty() {
     let registry = empty_registry();
-    let reg = registry.lock().await;
-    assert!(reg.is_empty());
+    assert!(registry.all_ids().await.is_empty());
 }
 
 #[tokio::test]
@@ -116,28 +111,20 @@ async fn test_confirmation_no_email_before_threshold() {
     let registry = empty_registry();
 
     // Insert an alert and accumulate failures up to threshold - 1
-    {
-        let mut reg = registry.lock().await;
-        reg.insert(42, 1);
-    }
+    registry.set(42, 1).await;
 
     for step in 2..CONFIRMATION_THRESHOLD {
-        let count = {
-            let reg = registry.lock().await;
-            reg.get(&42).copied().unwrap_or(0)
-        };
+        let count = registry.get(42).await.unwrap_or(0);
         // Should still be below threshold
         assert!(
             count < CONFIRMATION_THRESHOLD,
             "Step {step}: count {count} should be < threshold"
         );
-        // Increment
-        let mut reg = registry.lock().await;
-        reg.insert(42, step);
+        registry.set(42, step).await;
     }
 
     // At this point count == CONFIRMATION_THRESHOLD - 1, no email triggered yet
-    let final_count = registry.lock().await.get(&42).copied().unwrap_or(0);
+    let final_count = registry.get(42).await.unwrap_or(0);
     assert_eq!(final_count, CONFIRMATION_THRESHOLD - 1);
 }
 
@@ -147,18 +134,15 @@ async fn test_confirmation_email_at_threshold() {
     // is_currently_failing would be set to true (DB update done by loop).
     // Here we verify the registry removal logic.
     let registry = empty_registry();
-    registry.lock().await.insert(42, CONFIRMATION_THRESHOLD - 1);
+    registry.set(42, CONFIRMATION_THRESHOLD - 1).await;
 
     // Simulate the threshold check that the active loop performs
-    let new_count = {
-        let reg = registry.lock().await;
-        reg.get(&42).copied().unwrap_or(0) + 1
-    };
+    let new_count = registry.get(42).await.unwrap_or(0) + 1;
     assert_eq!(new_count, CONFIRMATION_THRESHOLD);
 
     // Threshold reached → remove from registry (as the loop does)
-    registry.lock().await.remove(&42);
-    assert!(!registry.lock().await.contains_key(&42));
+    registry.remove(42).await;
+    assert!(registry.get(42).await.is_none());
 }
 
 #[tokio::test]
@@ -166,18 +150,44 @@ async fn test_confirmation_recovery_cancels() {
     // If the server passes a check while in the confirmation phase,
     // the registry entry is removed and no email is sent.
     let registry = empty_registry();
-    registry.lock().await.insert(42, 3);
+    registry.set(42, 3).await;
 
     // Server passes → remove from registry
-    let was_in_registry = registry.lock().await.remove(&42).is_some();
-    assert!(was_in_registry);
-    assert!(!registry.lock().await.contains_key(&42));
+    registry.remove(42).await;
+    assert!(registry.get(42).await.is_none());
 }
 
 #[tokio::test]
 async fn test_confirmation_threshold_constant() {
     // Ensure the constant matches the expected 5-minute window.
     assert_eq!(CONFIRMATION_THRESHOLD, 5);
+}
+
+#[tokio::test]
+async fn test_registry_increment() {
+    let registry = empty_registry();
+
+    // Increment from absent → should start at 1
+    let count = registry.increment(10).await;
+    assert_eq!(count, 1);
+
+    // Increment again → 2
+    let count = registry.increment(10).await;
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn test_registry_all_ids() {
+    let registry = empty_registry();
+    registry.set(1, 1).await;
+    registry.set(2, 3).await;
+    registry.set(3, 5).await;
+
+    let ids = registry.all_ids().await;
+    assert_eq!(ids.len(), 3);
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
 }
 
 // =============================================================================

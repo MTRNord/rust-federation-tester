@@ -576,6 +576,7 @@ mod tests {
             oauth2: OAuth2Config::default(),
             federation_timeout_secs: 3,
             allow_private_targets: false,
+            redis: Default::default(),
         }
     }
 
@@ -635,6 +636,7 @@ mod tests {
             db: Arc::new(db),
             mailer,
             config,
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
         record_event(
             &resources,
@@ -665,6 +667,7 @@ mod tests {
             db: Arc::new(db.clone()),
             mailer,
             config,
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
         record_event(
             &resources,
@@ -698,6 +701,7 @@ mod tests {
             db: Arc::new(db.clone()),
             mailer,
             config,
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
         clear_metrics_cache();
         record_event(
@@ -762,6 +766,7 @@ mod tests {
             db: Arc::new(db),
             mailer: Arc::new(dummy_mailer),
             config: Arc::new(config),
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
         prune_old_entries(&resources).await; // default retention 30 days -> old.example should be removed
         let cnt_stmt = Statement::from_string(
@@ -784,6 +789,7 @@ mod tests {
             db: Arc::new(db),
             mailer: Arc::new(dummy_mailer),
             config: Arc::new(config),
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
         record_event(
             &resources,
@@ -815,6 +821,7 @@ mod tests {
             db: Arc::new(db),
             mailer: Arc::new(dummy_mailer),
             config: Arc::new(config),
+            email_guard: crate::distributed::EmailGuard::Noop,
         };
 
         let enabled_features = vec!["msc2716".to_string(), "msc3030".to_string()];

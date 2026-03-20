@@ -46,6 +46,12 @@ pub struct AppConfig {
     /// delegation mechanism.
     #[serde(default)]
     pub allow_private_targets: bool,
+    /// Redis/Valkey connection settings for distributed multi-instance operation.
+    ///
+    /// Leave unconfigured (empty `url`) for single-instance mode.
+    /// See [`RedisConfig`] for details and Valkey as the recommended backend.
+    #[serde(default)]
+    pub redis: RedisConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -118,6 +124,124 @@ impl Default for StatisticsConfig {
             raw_retention_days: default_raw_retention_days(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// RedisConfig
+// ---------------------------------------------------------------------------
+
+/// Connection settings for a Redis-compatible server used for distributed operation.
+///
+/// **Recommended backend: [Valkey](https://valkey.io/)** — BSD-3-Clause licensed,
+/// Linux Foundation backed (AWS, Google, Oracle). Valkey is a direct fork of
+/// Redis 7.2 from before Redis changed to SSPL/RSALv2. Use it instead of Redis
+/// for licensing clarity in production.
+///
+/// When configured, this enables:
+/// - Distributed loop locks — only one pod runs alert checks per cycle
+/// - Shared confirmation registry — failure counts are consistent across pods
+/// - Email idempotency guards — each alert email is sent exactly once
+///
+/// When `url` is empty the server runs in single-instance mode using in-memory
+/// state. All other fields are ignored in that case.
+///
+/// # Example config.yaml
+///
+/// ```yaml
+/// redis:
+///   url: "redis://valkey:6379"  # Valkey recommended; Redis also works
+///   pool_size: 4
+///   key_prefix: "federation-tester"
+/// ```
+///
+/// Environment override: `REDIS__URL=redis://valkey:6379`
+#[derive(Debug, Deserialize, Clone)]
+pub struct RedisConfig {
+    /// Valkey or Redis connection URL.
+    ///
+    /// Examples:
+    /// - `redis://valkey:6379`            (Valkey — recommended)
+    /// - `redis://redis:6379`             (Redis — check licensing)
+    /// - `redis://:password@valkey:6379`  (with auth)
+    /// - `redis://valkey:6379/1`          (specific database)
+    ///
+    /// Leave empty (the default) to run in single-instance mode with in-memory
+    /// fallback. All other `redis.*` fields are ignored when this is empty.
+    #[serde(default)]
+    pub url: String,
+
+    /// Connection pool size per instance. Default: 4.
+    ///
+    /// Each instance opens at most this many connections to Redis/Valkey.
+    /// A value of 4 is sufficient for the three background primitives plus
+    /// headroom for concurrent alert checks.
+    #[serde(default = "default_redis_pool_size")]
+    pub pool_size: usize,
+
+    /// Key namespace prefix. Default: `"federation-tester"`.
+    ///
+    /// All Redis keys written by this application are prefixed with this
+    /// value. Useful when sharing a Redis instance across environments
+    /// (e.g. `"ft-prod"` vs `"ft-staging"`).
+    #[serde(default = "default_redis_key_prefix")]
+    pub key_prefix: String,
+
+    /// Lock TTL for the healthy check loop in seconds. Default: 360.
+    ///
+    /// Should be slightly longer than `CHECK_INTERVAL` (300 s) so the lock
+    /// outlives a slow iteration. Short enough that a crashed instance
+    /// releases the lock within one extra cycle.
+    #[serde(default = "default_healthy_lock_ttl_secs")]
+    pub healthy_lock_ttl_secs: u64,
+
+    /// Lock TTL for the active check loop in seconds. Default: 90.
+    ///
+    /// Should be slightly longer than `ACTIVE_CHECK_INTERVAL` (60 s).
+    #[serde(default = "default_active_lock_ttl_secs")]
+    pub active_lock_ttl_secs: u64,
+
+    /// Time bucket width for email idempotency keys in seconds. Default: 3600.
+    ///
+    /// Each email type (failure, reminder, recovery) can fire at most once per
+    /// bucket per alert across all instances. The default of one hour means a
+    /// reminder email sent at 13:45 cannot be re-sent until 14:00. Since
+    /// reminders are governed by a 12-hour interval check, this guard only
+    /// matters when the loop lock fails (Redis outage / fail-open).
+    #[serde(default = "default_email_bucket_secs")]
+    pub email_bucket_secs: u64,
+}
+
+impl Default for RedisConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            pool_size: default_redis_pool_size(),
+            key_prefix: default_redis_key_prefix(),
+            healthy_lock_ttl_secs: default_healthy_lock_ttl_secs(),
+            active_lock_ttl_secs: default_active_lock_ttl_secs(),
+            email_bucket_secs: default_email_bucket_secs(),
+        }
+    }
+}
+
+fn default_redis_pool_size() -> usize {
+    4
+}
+
+fn default_redis_key_prefix() -> String {
+    "federation-tester".to_string()
+}
+
+fn default_healthy_lock_ttl_secs() -> u64 {
+    360 // 6 minutes — slightly longer than CHECK_INTERVAL (5 min)
+}
+
+fn default_active_lock_ttl_secs() -> u64 {
+    90 // 1.5 minutes — slightly longer than ACTIVE_CHECK_INTERVAL (1 min)
+}
+
+fn default_email_bucket_secs() -> u64 {
+    3600 // 1 hour
 }
 
 fn default_federation_timeout_secs() -> u64 {

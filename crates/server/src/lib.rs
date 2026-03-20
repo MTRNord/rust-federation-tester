@@ -15,6 +15,7 @@ pub mod api;
 pub mod client;
 pub mod config;
 pub mod connection_pool;
+pub mod distributed;
 pub mod email_templates;
 pub mod entity;
 pub mod error;
@@ -31,4 +32,7 @@ pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
     pub mailer: Arc<AsyncSmtpTransport<Tokio1Executor>>,
     pub config: Arc<AppConfig>,
+    /// Email idempotency guard — prevents duplicate alert emails when running
+    /// multiple instances. Uses Redis/Valkey when configured, no-op otherwise.
+    pub email_guard: distributed::EmailGuard,
 }
