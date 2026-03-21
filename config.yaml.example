@@ -34,6 +34,16 @@ oauth2:
   # Set to false to force all users to use OAuth2
   magic_links_enabled: true
 
+  # Secret for the built-in account-internal OAuth2 client (used for the /oauth2/account page).
+  # Required when oauth2.enabled = true. Generate with: openssl rand -hex 32
+  account_client_secret: replace_me
+
+## Environment label for outgoing emails
+## Omit (or set to "production") for plain unlabelled emails — no prefix is added.
+## Set to any other value (e.g. "staging") to prefix every email subject with [staging]
+## and show an orange banner in the email body so recipients can tell emails apart.
+# environment_name: "staging"
+
 ## Federation check settings
 # Network timeout in seconds for each individual federation check (DNS, TLS, HTTP).
 # Default: 3 — suitable for the public internet.
@@ -65,7 +75,3 @@ statistics:
   anonymization_salt: ""
   # Retention window (days) for inactive federation entries (based on last_seen_at). Entries older than this are pruned.
   raw_retention_days: 30
-
-  # Secret for the built-in account-internal OAuth2 client (used for the /oauth2/account page).
-  # Required when oauth2.enabled = true. Generate with: openssl rand -hex 32
-  account_client_secret: replace_me

@@ -313,6 +313,7 @@ async fn send_magic_link_email(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let template = MagicLinkEmailTemplate {
         verify_url: verify_url.to_string(),
+        environment_name: resources.config.environment_name.clone(),
     };
 
     let html_body = template.render_html()?;
@@ -321,7 +322,10 @@ async fn send_magic_link_email(
     let msg = lettre::Message::builder()
         .from(resources.config.smtp.from.parse()?)
         .to(email.parse()?)
-        .subject("Sign in to Federation Tester")
+        .subject(crate::email_templates::env_subject(
+            "Sign in to Federation Tester",
+            resources.config.environment_name.as_deref(),
+        ))
         .header(lettre::message::header::MIME_VERSION_1_0)
         .multipart(
             MultiPart::alternative()

@@ -52,6 +52,15 @@ pub struct AppConfig {
     /// See [`RedisConfig`] for details and Valkey as the recommended backend.
     #[serde(default)]
     pub redis: RedisConfig,
+    /// Optional label for the deployment environment (e.g. `"staging"` or `"production"`).
+    ///
+    /// When set, every outgoing email will have its subject prefixed with `[<name>]`
+    /// and include a visible banner in the body, making it easy to tell which
+    /// environment sent a given alert during debugging.
+    ///
+    /// Leave unset (the default) to send plain unlabelled emails.
+    #[serde(default)]
+    pub environment_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

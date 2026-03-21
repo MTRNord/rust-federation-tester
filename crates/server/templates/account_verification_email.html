@@ -50,6 +50,16 @@
                             <span style="color: #0b0c0c; font-size: 14px;">This is a community service for testing Matrix federation.</span>
                         </td>
                     </tr>
+                    {% if let Some(env) = environment_name %}
+                    {% if !env.is_empty() && env.to_lowercase() != "production" %}
+                    <!-- Environment Banner -->
+                    <tr>
+                        <td style="padding: 10px 20px; background-color: #f47738; border-bottom: 1px solid #b1b4b6;">
+                            <span style="color: #ffffff; font-size: 14px; font-weight: 700;">&#9888; Sent from the {{ env|upper }} environment — not production</span>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endif %}
                     <!-- Main Content -->
                     <tr>
                         <td style="padding: 40px 20px; background-color: #ffffff;" class="mobile-padding">

@@ -3,7 +3,7 @@
 //! Handles sending failure and recovery notification emails.
 
 use crate::api::alerts::MagicClaims;
-use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate};
+use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate, env_subject};
 use crate::entity::email_log;
 use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
 use lettre::AsyncTransport;
@@ -76,9 +76,13 @@ pub async fn send_failure_email(
         reminder_interval: reminder_interval_text,
         unsubscribe_url: unsubscribe_url.clone(),
         failure_reason,
+        environment_name: config.environment_name.clone(),
     };
 
-    let subject = format!("Federation Alert: {server_name} is not healthy");
+    let subject = env_subject(
+        &format!("Federation Alert: {server_name} is not healthy"),
+        config.environment_name.as_deref(),
+    );
 
     // Render both HTML and plain text versions
     let html_body = match template.render_html() {
@@ -213,9 +217,13 @@ pub async fn send_recovery_email(
         server_name: server_name.to_string(),
         check_url: check_url.clone(),
         unsubscribe_url: unsubscribe_url.clone(),
+        environment_name: config.environment_name.clone(),
     };
 
-    let subject = format!("Federation Alert: {server_name} has recovered!");
+    let subject = env_subject(
+        &format!("Federation Alert: {server_name} has recovered!"),
+        config.environment_name.as_deref(),
+    );
 
     // Render both HTML and plain text versions
     let html_body = match template.render_html() {

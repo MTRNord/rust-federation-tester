@@ -411,6 +411,7 @@ async fn send_verification_email(
 
     let template = AccountVerificationEmailTemplate {
         verify_url: verify_url.clone(),
+        environment_name: resources.config.environment_name.clone(),
     };
 
     let html_body = template.render_html()?;
@@ -419,7 +420,10 @@ async fn send_verification_email(
     let email_msg = lettre::Message::builder()
         .from(resources.config.smtp.from.parse()?)
         .to(email.parse()?)
-        .subject("Verify your email - Federation Tester")
+        .subject(crate::email_templates::env_subject(
+            "Verify your email - Federation Tester",
+            resources.config.environment_name.as_deref(),
+        ))
         .header(lettre::message::header::MIME_VERSION_1_0)
         .multipart(
             MultiPart::alternative()

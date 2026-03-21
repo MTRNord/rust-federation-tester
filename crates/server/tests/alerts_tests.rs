@@ -205,6 +205,7 @@ fn test_failure_email_template_with_reminder() {
         reminder_interval: "12 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
+        environment_name: None,
     };
 
     let html = template.render_html().expect("render HTML");
@@ -230,6 +231,7 @@ fn test_failure_email_template_without_reminder() {
         reminder_interval: "12 hours".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
+        environment_name: None,
     };
 
     let text = template.render_text();
@@ -246,6 +248,7 @@ fn test_recovery_email_template() {
         server_name: "example.org".to_string(),
         check_url: "https://test.example.com/?serverName=example.org".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
+        environment_name: None,
     };
 
     let html = template.render_html().expect("render HTML");
@@ -264,6 +267,7 @@ fn test_verification_email_template() {
     let template = VerificationEmailTemplate {
         server_name: "example.org".to_string(),
         verify_url: "https://test.example.com/verify?token=abc123".to_string(),
+        environment_name: None,
     };
 
     let html = template.render_html().expect("render HTML");

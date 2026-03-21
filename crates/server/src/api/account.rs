@@ -922,7 +922,10 @@ async fn send_verification_email(
     let msg = lettre::Message::builder()
         .from(resources.config.smtp.from.parse()?)
         .to(to_email.parse()?)
-        .subject("Verify your email address - Federation Tester")
+        .subject(crate::email_templates::env_subject(
+            "Verify your email address - Federation Tester",
+            resources.config.environment_name.as_deref(),
+        ))
         .header(lettre::message::header::MIME_VERSION_1_0)
         .multipart(
             MultiPart::alternative()

@@ -196,9 +196,13 @@ async fn register_alert(
     let template = crate::email_templates::VerificationEmailTemplate {
         server_name: payload.server_name.clone(),
         verify_url: verify_url.clone(),
+        environment_name: resources.config.environment_name.clone(),
     };
 
-    let subject = "Please verify your email for Federation Alerts";
+    let subject = crate::email_templates::env_subject(
+        "Please verify your email for Federation Alerts",
+        resources.config.environment_name.as_deref(),
+    );
 
     // Render both HTML and plain text versions
     let html_body = match template.render_html() {
@@ -505,7 +509,10 @@ The Federation Tester Team"#
     let email = lettre::Message::builder()
         .from(resources.config.smtp.from.parse().unwrap())
         .to(payload.email.parse().unwrap())
-        .subject("Verify to view your Federation Alerts")
+        .subject(crate::email_templates::env_subject(
+            "Verify to view your Federation Alerts",
+            resources.config.environment_name.as_deref(),
+        ))
         .header(lettre::message::header::ContentType::TEXT_PLAIN)
         .header(lettre::message::header::MIME_VERSION_1_0)
         .message_id(None)
@@ -611,7 +618,10 @@ The Federation Tester Team"#,
             let email = lettre::Message::builder()
                 .from(resources.config.smtp.from.parse().unwrap())
                 .to(a.email.parse().unwrap())
-                .subject("Verify to delete your Federation Alert")
+                .subject(crate::email_templates::env_subject(
+                    "Verify to delete your Federation Alert",
+                    resources.config.environment_name.as_deref(),
+                ))
                 .header(lettre::message::header::ContentType::TEXT_PLAIN)
                 .header(lettre::message::header::MIME_VERSION_1_0)
                 .message_id(None)

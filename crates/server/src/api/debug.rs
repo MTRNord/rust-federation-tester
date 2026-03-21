@@ -71,6 +71,7 @@ pub async fn preview_verification_email(
     let template = VerificationEmailTemplate {
         server_name: "example.matrix.org".to_string(),
         verify_url: "https://example.com/verify?token=sample-token-12345".to_string(),
+        environment_name: resources.config.environment_name.clone(),
     };
 
     match template.render_html() {
@@ -118,6 +119,7 @@ pub async fn preview_failure_email(
         failure_reason: Some(
             "Error fetching server version from 1.2.3.4:8448: connection refused".to_string(),
         ),
+        environment_name: resources.config.environment_name.clone(),
     };
 
     match template.render_html() {
@@ -159,6 +161,7 @@ pub async fn preview_recovery_email(
         server_name: "example.matrix.org".to_string(),
         check_url: "https://example.com/report/example.matrix.org".to_string(),
         unsubscribe_url: "https://example.com/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
     };
 
     match template.render_html() {

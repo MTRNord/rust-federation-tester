@@ -2,6 +2,37 @@
 use askama::Template;
 use once_cell::sync::Lazy;
 
+/// Prefix an email subject with the environment name when one is configured.
+///
+/// `env_subject("Federation Alert: foo is not healthy", Some("staging"))`
+/// returns `"[staging] Federation Alert: foo is not healthy"`.
+///
+/// Returns the subject unchanged when:
+/// - `env_name` is `None` (field omitted in config — implies production)
+/// - `env_name` is `Some("production")` (explicitly named production)
+/// - `env_name` is an empty string
+pub fn env_subject(base: &str, env_name: Option<&str>) -> String {
+    match env_name {
+        Some(name) if !name.is_empty() && name.to_lowercase() != "production" => {
+            format!("[{name}] {base}")
+        }
+        _ => base.to_string(),
+    }
+}
+
+/// Returns a banner string for plain-text emails, or empty string for production/unset.
+pub fn env_banner_text(env_name: Option<&str>) -> String {
+    match env_name {
+        Some(name) if !name.is_empty() && name.to_lowercase() != "production" => {
+            format!(
+                "*** Sent from the {} environment ***\n\n",
+                name.to_uppercase()
+            )
+        }
+        _ => String::new(),
+    }
+}
+
 /// Compiled and inlined CSS from SCSS
 static COMPILED_CSS: Lazy<String> = Lazy::new(|| {
     let scss = include_str!("../styles/email.scss");
@@ -48,6 +79,7 @@ pub struct FailureEmailTemplate {
     pub reminder_interval: String,
     pub unsubscribe_url: String,
     pub failure_reason: Option<String>,
+    pub environment_name: Option<String>,
 }
 
 impl FailureEmailTemplate {
@@ -59,6 +91,8 @@ impl FailureEmailTemplate {
 
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
         let reminder_text = if self.failure_count > 1 {
             format!(
                 "\nThis is reminder #{} - the server has been failing for a while.\n",
@@ -75,7 +109,7 @@ impl FailureEmailTemplate {
         };
 
         format!(
-            r#"Hello,
+            r#"{}Hello,
 
 Your server '{}' failed the federation health check.{}{}
 
@@ -88,6 +122,7 @@ The Federation Tester Team
 
 ---
 Unsubscribe: {}"#,
+            env_banner,
             self.server_name,
             reminder_text,
             reason_text,
@@ -104,6 +139,7 @@ pub struct RecoveryEmailTemplate {
     pub server_name: String,
     pub check_url: String,
     pub unsubscribe_url: String,
+    pub environment_name: Option<String>,
 }
 
 impl RecoveryEmailTemplate {
@@ -115,8 +151,10 @@ impl RecoveryEmailTemplate {
 
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
         format!(
-            r#"Hello,
+            r#"{}Hello,
 
 Good news! Your server '{}' has recovered and is now passing federation health checks.
 
@@ -129,7 +167,7 @@ The Federation Tester Team
 
 ---
 Unsubscribe: {}"#,
-            self.server_name, self.check_url, self.unsubscribe_url
+            env_banner, self.server_name, self.check_url, self.unsubscribe_url
         )
     }
 }
@@ -139,6 +177,7 @@ Unsubscribe: {}"#,
 pub struct VerificationEmailTemplate {
     pub server_name: String,
     pub verify_url: String,
+    pub environment_name: Option<String>,
 }
 
 impl VerificationEmailTemplate {
@@ -150,8 +189,10 @@ impl VerificationEmailTemplate {
 
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
         format!(
-            r#"Hello,
+            r#"{}Hello,
 
 You requested to receive alerts for your server: {}
 
@@ -162,7 +203,7 @@ If you did not request this, you can ignore this email.
 
 Best regards,
 The Federation Tester Team"#,
-            self.server_name, self.verify_url
+            env_banner, self.server_name, self.verify_url
         )
     }
 }
@@ -172,6 +213,7 @@ The Federation Tester Team"#,
 #[template(path = "account_verification_email.html")]
 pub struct AccountVerificationEmailTemplate {
     pub verify_url: String,
+    pub environment_name: Option<String>,
 }
 
 impl AccountVerificationEmailTemplate {
@@ -183,8 +225,10 @@ impl AccountVerificationEmailTemplate {
 
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
         format!(
-            r#"Hello,
+            r#"{}Hello,
 
 Thanks for creating an account with Federation Tester.
 
@@ -197,7 +241,7 @@ If you did not create this account, you can safely ignore this email.
 
 Best regards,
 The Federation Tester Team"#,
-            self.verify_url
+            env_banner, self.verify_url
         )
     }
 }
@@ -207,6 +251,7 @@ The Federation Tester Team"#,
 #[template(path = "magic_link_email.html")]
 pub struct MagicLinkEmailTemplate {
     pub verify_url: String,
+    pub environment_name: Option<String>,
 }
 
 impl MagicLinkEmailTemplate {
@@ -218,8 +263,10 @@ impl MagicLinkEmailTemplate {
 
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
         format!(
-            r#"Hello,
+            r#"{}Hello,
 
 You requested to sign in to Federation Tester.
 
@@ -230,7 +277,7 @@ If you did not request this, you can safely ignore this email.
 
 Best regards,
 The Federation Tester Team"#,
-            self.verify_url
+            env_banner, self.verify_url
         )
     }
 }
@@ -248,6 +295,7 @@ mod tests {
             reminder_interval: "12 hours".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
             failure_reason: None,
+            environment_name: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
@@ -264,6 +312,7 @@ mod tests {
             server_name: "example.org".to_string(),
             check_url: "https://test.example.com/results?serverName=example.org".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
+            environment_name: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
@@ -279,6 +328,7 @@ mod tests {
         let template = VerificationEmailTemplate {
             server_name: "example.org".to_string(),
             verify_url: "https://test.example.com/verify?token=abc123".to_string(),
+            environment_name: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
