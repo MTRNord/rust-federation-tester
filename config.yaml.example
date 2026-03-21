@@ -6,6 +6,9 @@ smtp:
   username: "alerts@example.com"
   password: "supersecret"
   from: "alerts@example.com"
+  # Timeout in seconds for SMTP connections. Default: 10.
+  # Increase if your relay is slow; keep low to fail fast on misconfiguration.
+  # timeout_secs: 10
 frontend_url: "https://your-frontend.com"
 magic_token_secret: "CHANGE_ME"
 

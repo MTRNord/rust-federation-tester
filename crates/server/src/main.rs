@@ -232,6 +232,9 @@ async fn main() -> color_eyre::eyre::Result<()> {
             .unwrap()
             .port(config.smtp.port)
             .credentials(creds)
+            .timeout(Some(std::time::Duration::from_secs(
+                config.smtp.timeout_secs,
+            )))
             .build(),
     );
 

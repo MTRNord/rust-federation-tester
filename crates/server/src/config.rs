@@ -18,6 +18,16 @@ pub struct SmtpConfig {
     pub username: String,
     pub password: String,
     pub from: String,
+    /// Timeout in seconds for SMTP connections and commands. Default: 10.
+    ///
+    /// If the relay does not respond within this time, the send is aborted
+    /// and the caller receives an error immediately rather than hanging.
+    #[serde(default = "default_smtp_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_smtp_timeout_secs() -> u64 {
+    10
 }
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
