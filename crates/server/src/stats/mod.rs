@@ -577,6 +577,7 @@ mod tests {
             federation_timeout_secs: 3,
             allow_private_targets: false,
             redis: Default::default(),
+            environment_name: None,
         }
     }
 
