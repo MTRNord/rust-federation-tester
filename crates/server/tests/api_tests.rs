@@ -9,8 +9,7 @@ async fn test_connection_pool_basic_operations() {
     let _cloned_pool = connection_pool.clone();
 
     // Test that we can create a connection pool successfully
-    assert_eq!(connection_pool.len(), 0);
-    assert!(connection_pool.is_empty());
+    assert_eq!(connection_pool.pool_count(), 0);
 }
 
 #[test]
@@ -21,9 +20,9 @@ fn test_connection_pool_configuration() {
     let pool3 = ConnectionPool::new(10, 5);
 
     // All should start empty regardless of configuration
-    assert!(pool1.is_empty());
-    assert!(pool2.is_empty());
-    assert!(pool3.is_empty());
+    assert_eq!(pool1.pool_count(), 0);
+    assert_eq!(pool2.pool_count(), 0);
+    assert_eq!(pool3.pool_count(), 0);
 
     // All should be cloneable
     let _cloned1 = pool1.clone();

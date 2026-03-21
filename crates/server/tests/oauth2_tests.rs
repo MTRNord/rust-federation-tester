@@ -137,6 +137,7 @@ fn create_test_config() -> AppConfig {
             username: "test".into(),
             password: "test".into(),
             from: "noreply@test.example.org".into(),
+            timeout_secs: 10,
         },
         frontend_url: "http://localhost:3000".into(),
         magic_token_secret: "12345678901234567890123456789012".into(),

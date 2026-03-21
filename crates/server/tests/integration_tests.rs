@@ -32,7 +32,7 @@ async fn test_connection_pool() {
     let pool = ConnectionPool::new(2, 5);
 
     // Test pool creation
-    assert_eq!(pool.len(), 0);
+    assert_eq!(pool.pool_count(), 0);
 
     // Connection pool functionality would need actual network connections to test properly
     // For now, just verify the pool can be created and basic methods exist

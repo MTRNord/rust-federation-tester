@@ -291,7 +291,7 @@ async fn cache_stats<P: ConnectionProvider>(
         connection_pools: usize,
     }
     let body = CombinedStats {
-        connection_pools: state.connection_pool.len(),
+        connection_pools: state.connection_pool.pool_count(),
     };
     let value = serde_json::to_value(body)
         .unwrap_or_else(|_| serde_json::json!({"error": "serialization failure"}));

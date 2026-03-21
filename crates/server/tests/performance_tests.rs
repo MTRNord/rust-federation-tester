@@ -11,7 +11,7 @@ mod connection_pool_tests {
         // Test that pool is created successfully
         // We can't easily test actual connections without a real server,
         // but we can test the basic structure
-        assert_eq!(pool.len(), 0); // Should start empty
+        assert_eq!(pool.pool_count(), 0); // Should start empty
     }
 
     #[tokio::test]

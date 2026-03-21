@@ -563,6 +563,7 @@ mod tests {
                 username: "u".into(),
                 password: "p".into(),
                 from: "noreply@example.org".into(),
+                timeout_secs: 10,
             },
             frontend_url: "http://localhost".into(),
             magic_token_secret: "12345678901234567890123456789012".into(),
