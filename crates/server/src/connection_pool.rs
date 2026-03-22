@@ -257,7 +257,7 @@ impl ConnectionPool {
 
     /// Returns `true` if the client has not yet reached the per-client connection cap.
     fn client_within_limit(&self, client_id: &str) -> bool {
-        self.client_usage.get(client_id).map_or(true, |u| {
+        self.client_usage.get(client_id).is_none_or(|u| {
             u.connection_count.load(Ordering::Relaxed) < self.max_connections_per_client
         })
     }
