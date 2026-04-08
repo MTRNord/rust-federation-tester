@@ -499,7 +499,7 @@ mod tests {
             email: Set(email.to_string()),
             server_name: Set(server_name.to_string()),
             verified: Set(true),
-            magic_token: Set(String::new()),
+            magic_token: Set(Some(String::new())),
             created_at: Set(now),
             user_id: Set(None), // Legacy alert - no user_id
             ..Default::default()
@@ -624,7 +624,7 @@ mod tests {
             email: Set("test@example.com".to_string()),
             server_name: Set("linked.server.com".to_string()),
             verified: Set(true),
-            magic_token: Set(String::new()),
+            magic_token: Set(Some(String::new())),
             created_at: Set(now),
             user_id: Set(Some(user.id.clone())),
             ..Default::default()

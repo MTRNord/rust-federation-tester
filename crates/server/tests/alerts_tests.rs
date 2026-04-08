@@ -18,7 +18,7 @@ fn make_alert(
         email: "test@example.com".to_string(),
         server_name: "example.org".to_string(),
         verified: true,
-        magic_token: "token123".to_string(),
+        magic_token: Some("token123".to_string()),
         created_at: OffsetDateTime::now_utc(),
         last_check_at: None,
         last_failure_at: None,

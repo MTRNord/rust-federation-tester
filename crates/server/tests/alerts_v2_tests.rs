@@ -189,7 +189,7 @@ async fn create_test_alert(
         email: Set(email.to_string()),
         server_name: Set(server_name.to_string()),
         verified: Set(verified),
-        magic_token: Set(String::new()),
+        magic_token: Set(None),
         created_at: Set(now),
         user_id: Set(user_id.map(String::from)),
         ..Default::default()
@@ -487,7 +487,7 @@ async fn test_create_alert_links_to_user_id() {
         email: Set("test@example.com".to_string()),
         server_name: Set("new.server.com".to_string()),
         verified: Set(true), // Pre-verified for verified email
-        magic_token: Set(String::new()),
+        magic_token: Set(None),
         created_at: Set(now),
         user_id: Set(Some(user.id.clone())),
         ..Default::default()
