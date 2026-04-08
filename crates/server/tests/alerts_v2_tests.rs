@@ -74,7 +74,7 @@ async fn setup_test_db() -> Arc<DatabaseConnection> {
     .await
     .expect("Failed to create oauth2_token table");
 
-    // Create alert table
+    // Create alert table (magic_token nullable to match migrations)
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         r#"CREATE TABLE alert (
@@ -82,7 +82,7 @@ async fn setup_test_db() -> Arc<DatabaseConnection> {
             email TEXT NOT NULL,
             server_name TEXT NOT NULL,
             verified INTEGER NOT NULL DEFAULT 0,
-            magic_token TEXT NOT NULL,
+            magic_token TEXT NULL,
             created_at TEXT NOT NULL,
             last_check_at TEXT NULL,
             last_failure_at TEXT NULL,
@@ -96,6 +96,28 @@ async fn setup_test_db() -> Arc<DatabaseConnection> {
     ))
     .await
     .expect("Failed to create alert table");
+
+    // Create indexes used by the application/migrations so tests observe the correct DB layout
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_magic_token_unique ON alert (magic_token);"#,
+    ))
+    .await
+    .expect("Failed to create idx_magic_token_unique");
+
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_email_server_name_unique ON alert (email, server_name);"#,
+    ))
+    .await
+    .expect("Failed to create idx_email_server_name_unique");
+
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        r#"CREATE INDEX IF NOT EXISTS idx_alert_user_id ON alert (user_id);"#,
+    ))
+    .await
+    .expect("Failed to create idx_alert_user_id");
 
     Arc::new(db)
 }
