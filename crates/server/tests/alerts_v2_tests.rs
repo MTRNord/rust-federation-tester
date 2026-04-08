@@ -3,121 +3,25 @@
 //! These tests verify the dual-auth functionality where OAuth2 tokens
 //! can be used to manage alerts.
 
+use migration::MigratorTrait;
 use rust_federation_tester::entity::{alert, oauth2_client, oauth2_token, oauth2_user};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Database, DatabaseConnection, DbBackend,
-    EntityTrait, Statement,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection, EntityTrait};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
-/// Create an in-memory SQLite database with required tables.
+/// Create an in-memory SQLite database with required tables by running the real migrations.
 async fn setup_test_db() -> Arc<DatabaseConnection> {
     let db = Database::connect("sqlite::memory:")
         .await
         .expect("Failed to connect to in-memory database");
 
-    // Create oauth2_user table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_user (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
-            email_verified INTEGER NOT NULL DEFAULT 0,
-            name TEXT NULL,
-            receives_alerts INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            last_login_at TEXT NULL,
-            password_hash TEXT NULL,
-            email_verification_token TEXT NULL,
-            email_verification_expires_at TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("Failed to create oauth2_user table");
-
-    // Create oauth2_client table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_client (
-            id TEXT PRIMARY KEY,
-            secret TEXT NULL,
-            name TEXT NOT NULL,
-            redirect_uris TEXT NOT NULL,
-            grant_types TEXT NOT NULL,
-            scopes TEXT NOT NULL,
-            is_public INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );"#,
-    ))
-    .await
-    .expect("Failed to create oauth2_client table");
-
-    // Create oauth2_token table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_token (
-            id TEXT PRIMARY KEY,
-            access_token TEXT NOT NULL UNIQUE,
-            refresh_token TEXT NULL UNIQUE,
-            token_type TEXT NOT NULL,
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            access_token_expires_at TEXT NOT NULL,
-            refresh_token_expires_at TEXT NULL,
-            created_at TEXT NOT NULL,
-            revoked_at TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("Failed to create oauth2_token table");
-
-    // Create alert table (magic_token nullable to match migrations)
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE alert (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            server_name TEXT NOT NULL,
-            verified INTEGER NOT NULL DEFAULT 0,
-            magic_token TEXT NULL,
-            created_at TEXT NOT NULL,
-            last_check_at TEXT NULL,
-            last_failure_at TEXT NULL,
-            last_success_at TEXT NULL,
-            last_email_sent_at TEXT NULL,
-            failure_count INTEGER NOT NULL DEFAULT 0,
-            is_currently_failing INTEGER NOT NULL DEFAULT 0,
-            last_recovery_at TEXT NULL,
-            user_id TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("Failed to create alert table");
-
-    // Create indexes used by the application/migrations so tests observe the correct DB layout
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_magic_token_unique ON alert (magic_token);"#,
-    ))
-    .await
-    .expect("Failed to create idx_magic_token_unique");
-
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_email_server_name_unique ON alert (email, server_name);"#,
-    ))
-    .await
-    .expect("Failed to create idx_email_server_name_unique");
-
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE INDEX IF NOT EXISTS idx_alert_user_id ON alert (user_id);"#,
-    ))
-    .await
-    .expect("Failed to create idx_alert_user_id");
+    // Run the real migrations so tests use the same single source of truth for the schema.
+    // The `migration` crate is added as a dev-dependency in Cargo.toml.
+    // Use the Migrator provided by the migration crate to apply all migrations to the test DB.
+    // Pass `None` for `steps` so all pending migrations are applied.
+    migration::Migrator::up(&db, None)
+        .await
+        .expect("Failed to run migrations for test database");
 
     Arc::new(db)
 }

@@ -143,6 +143,11 @@ fn initialize_otel_console_tracing() {
 
 #[cfg(feature = "console")]
 fn initialize_layered_tracing() {
+    // Import the tracing_subscriber items used in this cfg block so they are available
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::prelude::*;
+
     let default_directives = "rust_federation_tester=info,hyper=warn,sea_orm=info,tokio=trace,runtime=trace,tower_http=debug";
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));

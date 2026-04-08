@@ -4,78 +4,24 @@
 
 use axum::{Extension, Router, routing::get};
 use axum_test::TestServer;
+use migration::MigratorTrait;
 use rust_federation_tester::{
     AppResources,
     api::{health, metrics},
     config::{AppConfig, OAuth2Config, SmtpConfig, StatisticsConfig},
 };
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{Database, DatabaseConnection};
 use std::sync::Arc;
 
 /// Create a test database connection
 async fn create_test_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:").await.expect("connect");
 
-    // Create the required tables
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE federation_stat_aggregate (
-            server_name TEXT PRIMARY KEY,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            req_count INTEGER NOT NULL,
-            success_count INTEGER NOT NULL,
-            failure_count INTEGER NOT NULL,
-            first_version_name TEXT NULL,
-            first_version_string TEXT NULL,
-            last_version_name TEXT NULL,
-            last_version_string TEXT NULL,
-            software_family TEXT NULL,
-            software_version TEXT NULL,
-            unstable_features_enabled INTEGER NOT NULL DEFAULT 0,
-            unstable_features_announced INTEGER NOT NULL DEFAULT 0
-        );"#,
-    ))
-    .await
-    .expect("create table");
-
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE federation_stat_raw (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL,
-            server_name TEXT NOT NULL,
-            federation_ok BOOLEAN NOT NULL,
-            version_name TEXT NULL,
-            version_string TEXT NULL,
-            unstable_features_enabled TEXT NULL,
-            unstable_features_announced TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("create raw table");
-
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE alert (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            server_name TEXT NOT NULL,
-            verified BOOLEAN NOT NULL DEFAULT 0,
-            magic_token TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            last_check_at TEXT NULL,
-            last_failure_at TEXT NULL,
-            last_success_at TEXT NULL,
-            last_email_sent_at TEXT NULL,
-            failure_count INTEGER NOT NULL DEFAULT 0,
-            is_currently_failing BOOLEAN NOT NULL DEFAULT 0,
-            last_recovery_at TEXT NULL,
-            user_id TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("create alert table");
+    // Apply migrations to the in-memory DB so tests share the same schema.
+    // Call `up` with `None` for `steps` so all pending migrations are applied.
+    migration::Migrator::up(&db, None)
+        .await
+        .expect("Failed to run migrations for test DB");
 
     db
 }

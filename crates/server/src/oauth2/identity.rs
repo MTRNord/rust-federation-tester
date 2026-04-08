@@ -309,71 +309,19 @@ impl IdentityService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
+    use migration::MigratorTrait;
+    use sea_orm::{Database, DatabaseConnection};
+    use std::sync::Arc;
 
     async fn setup_test_db() -> Arc<DatabaseConnection> {
         let db = Database::connect("sqlite::memory:").await.expect("connect");
 
-        // Create required tables
-        db.execute(Statement::from_string(
-            DbBackend::Sqlite,
-            r#"CREATE TABLE oauth2_user (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE,
-                email_verified INTEGER NOT NULL DEFAULT 0,
-                name TEXT NULL,
-                receives_alerts INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                last_login_at TEXT NULL,
-                password_hash TEXT NULL,
-                email_verification_token TEXT NULL,
-                email_verification_expires_at TEXT NULL
-            );"#,
-        ))
-        .await
-        .expect("create oauth2_user table");
-
-        db.execute(Statement::from_string(
-            DbBackend::Sqlite,
-            r#"CREATE TABLE oauth2_identity (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                email TEXT NULL,
-                name TEXT NULL,
-                access_token TEXT NULL,
-                refresh_token TEXT NULL,
-                token_expires_at TEXT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(provider, subject)
-            );"#,
-        ))
-        .await
-        .expect("create oauth2_identity table");
-
-        db.execute(Statement::from_string(
-            DbBackend::Sqlite,
-            r#"CREATE TABLE alert (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL,
-                server_name TEXT NOT NULL,
-                verified INTEGER NOT NULL DEFAULT 0,
-                magic_token TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_check_at TEXT NULL,
-                last_failure_at TEXT NULL,
-                last_success_at TEXT NULL,
-                last_email_sent_at TEXT NULL,
-                failure_count INTEGER NOT NULL DEFAULT 0,
-                is_currently_failing INTEGER NOT NULL DEFAULT 0,
-                last_recovery_at TEXT NULL,
-                user_id TEXT NULL
-            );"#,
-        ))
-        .await
-        .expect("create alert table");
+        // Run migrations against this in-memory DB.
+        // The migration crate is added as a dev-dependency; call its Migrator to apply all migrations.
+        // Pass `None` for `steps` so all pending migrations are applied.
+        migration::Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations for test database");
 
         Arc::new(db)
     }

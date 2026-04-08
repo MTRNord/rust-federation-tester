@@ -109,6 +109,7 @@ rcgen = "0.14.4"
 serde_urlencoded = "0.7"
 tokio-test = "0.4.4"
 wiremock = "0.6.4"
+migration = { path = "../migration", optional = false }
 
 [features]
 # Default enables OpenTelemetry support (otel), OTLP exporter (otlp), and

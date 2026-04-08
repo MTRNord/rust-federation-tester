@@ -4471,6 +4471,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "lettre",
+ "migration",
  "once_cell",
  "opentelemetry",
  "opentelemetry-appender-tracing",
