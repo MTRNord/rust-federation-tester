@@ -134,7 +134,7 @@ async fn register_alert(
             } else {
                 // Not verified, update token and created_at, send new email
                 let mut model: alert::ActiveModel = a.into();
-                model.magic_token = Set(token.clone());
+                model.magic_token = Set(Some(token.clone()));
                 model.created_at = Set(now);
                 if let Err(e) = model.update(resources.db.as_ref()).await {
                     tracing::error!(
@@ -156,7 +156,7 @@ async fn register_alert(
                 email: Set(payload.email.clone()),
                 server_name: Set(payload.server_name.clone()),
                 verified: Set(false),
-                magic_token: Set(token.clone()),
+                magic_token: Set(Some(token.clone())),
                 created_at: Set(now),
                 ..Default::default()
             };

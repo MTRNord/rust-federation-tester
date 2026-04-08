@@ -11,7 +11,7 @@ pub struct Model {
     pub email: String,
     pub server_name: String,
     pub verified: bool,
-    pub magic_token: String,
+    pub magic_token: Option<String>,
     pub created_at: OffsetDateTime,
     pub last_check_at: Option<OffsetDateTime>,
     pub last_failure_at: Option<OffsetDateTime>,

@@ -68,4 +68,12 @@ pub enum Alert {
     Verified,
     MagicToken,
     CreatedAt,
+    LastCheckAt,
+    LastFailureAt,
+    LastSuccessAt,
+    LastEmailSentAt,
+    FailureCount,
+    IsCurrentlyFailing,
+    UserId,
+    LastRecoveryAt,
 }

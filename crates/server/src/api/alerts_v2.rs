@@ -210,7 +210,7 @@ async fn create_alert_v2(
         email: Set(auth.email.clone()),
         server_name: Set(server_name.clone()),
         verified: Set(is_verified),
-        magic_token: Set(String::new()), // No magic token needed for OAuth2
+        magic_token: Set(None), // No magic token needed for OAuth2
         created_at: Set(now),
         user_id: Set(Some(auth.user_id.clone())),
         ..Default::default()

@@ -17,6 +17,7 @@ mod m20260219_000000_add_failure_reason_to_status_history;
 mod m20260307_000000_rename_oauth2_tables;
 mod m20260307_000001_account_features;
 mod m20260307_000002_internal_account_client;
+mod m20260408_163202_fix_oauth_alert_magic_token;
 
 pub struct Migrator;
 
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260307_000000_rename_oauth2_tables::Migration),
             Box::new(m20260307_000001_account_features::Migration),
             Box::new(m20260307_000002_internal_account_client::Migration),
+            Box::new(m20260408_163202_fix_oauth_alert_magic_token::Migration),
         ]
     }
 }
