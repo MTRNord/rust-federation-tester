@@ -30,7 +30,11 @@ use tokio::time::{Duration, interval};
 
 #[cfg(all(not(feature = "console"), not(feature = "otel")))]
 fn initialize_standard_tracing() {
-    tracing_subscriber::fmt().init();
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(tracing_error::ErrorLayer::default())
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 }
 
 #[cfg(feature = "otel")]
@@ -124,6 +128,7 @@ fn initialize_otel_console_tracing() {
         let tracer = otel_global::tracer(concat!(env!("CARGO_PKG_NAME"), "::", module_path!()));
         let otel_trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
         tracing_subscriber::registry()
+            .with(tracing_error::ErrorLayer::default())
             .with(env_filter)
             .with(otel_trace_layer)
             .with(otel_bridge_opt)
@@ -134,6 +139,7 @@ fn initialize_otel_console_tracing() {
     #[cfg(not(feature = "tracing-opentelemetry"))]
     {
         tracing_subscriber::registry()
+            .with(tracing_error::ErrorLayer::default())
             .with(env_filter)
             .with(otel_bridge_opt)
             .with(fmt::layer().with_target(true).with_level(true))
@@ -160,6 +166,7 @@ fn initialize_layered_tracing() {
 
     // Combine both layers
     tracing_subscriber::registry()
+        .with(tracing_error::ErrorLayer::default())
         .with(env_filter)
         .with(console_layer)
         .with(fmt_layer)

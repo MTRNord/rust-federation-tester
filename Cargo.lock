@@ -4505,6 +4505,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-core",
+ "tracing-error",
  "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
