@@ -45,7 +45,7 @@ jobs:
           echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
 
       - name: Cache Rust registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/git
@@ -62,7 +62,8 @@ jobs:
             --no-deps \
             --profile test \
             -- \
-            -D warnings
+            -D warnings \
+            -W clippy::cognitive_complexity
 
       - name: Show sccache stats
         if: always()
@@ -94,7 +95,7 @@ jobs:
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
       - name: Cache Rust registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/git
