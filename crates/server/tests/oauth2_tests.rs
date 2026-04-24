@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use axum_test::TestServer;
+use migration::MigratorTrait;
 use rust_federation_tester::{
     AppResources,
     config::{AppConfig, OAuth2Config, SmtpConfig, StatisticsConfig},
@@ -17,90 +18,15 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-/// Create a test database with OAuth2 tables
-async fn create_oauth2_test_db() -> DatabaseConnection {
+/// Create an in-memory SQLite database using the real migrations.
+async fn create_oauth2_test_db() -> Arc<DatabaseConnection> {
     let db = Database::connect("sqlite::memory:").await.expect("connect");
 
-    // Create oauth2_client table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_client (
-            id TEXT PRIMARY KEY,
-            secret TEXT NULL,
-            name TEXT NOT NULL,
-            redirect_uris TEXT NOT NULL,
-            grant_types TEXT NOT NULL DEFAULT 'authorization_code',
-            scopes TEXT NOT NULL DEFAULT 'openid profile email',
-            is_public INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );"#,
-    ))
-    .await
-    .expect("create oauth2_client table");
+    migration::Migrator::up(&db, None)
+        .await
+        .expect("Failed to run migrations for test database");
 
-    // Create oauth2_user table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_user (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
-            email_verified INTEGER NOT NULL DEFAULT 0,
-            name TEXT NULL,
-            receives_alerts INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            last_login_at TEXT NULL,
-            password_hash TEXT NULL,
-            email_verification_token TEXT NULL,
-            email_verification_expires_at TEXT NULL,
-            password_reset_token TEXT NULL,
-            password_reset_expires_at TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("create oauth2_user table");
-
-    // Create oauth2_authorization table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_authorization (
-            code TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            redirect_uri TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            state TEXT NULL,
-            nonce TEXT NULL,
-            code_challenge TEXT NULL,
-            code_challenge_method TEXT NULL,
-            expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );"#,
-    ))
-    .await
-    .expect("create oauth2_authorization table");
-
-    // Create oauth2_token table
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"CREATE TABLE oauth2_token (
-            id TEXT PRIMARY KEY,
-            access_token TEXT NOT NULL UNIQUE,
-            refresh_token TEXT UNIQUE,
-            token_type TEXT NOT NULL DEFAULT 'Bearer',
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            access_token_expires_at TEXT NOT NULL,
-            refresh_token_expires_at TEXT NULL,
-            created_at TEXT NOT NULL,
-            revoked_at TEXT NULL
-        );"#,
-    ))
-    .await
-    .expect("create oauth2_token table");
-
-    // Insert a test client (redirect_uris must be JSON array)
+    // Insert test clients
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         r#"INSERT INTO oauth2_client (id, secret, name, redirect_uris, grant_types, scopes, is_public, created_at, updated_at)
@@ -109,7 +35,6 @@ async fn create_oauth2_test_db() -> DatabaseConnection {
     .await
     .expect("insert test client");
 
-    // Insert a confidential client (redirect_uris must be JSON array)
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         r#"INSERT INTO oauth2_client (id, secret, name, redirect_uris, grant_types, scopes, is_public, created_at, updated_at)
@@ -121,13 +46,13 @@ async fn create_oauth2_test_db() -> DatabaseConnection {
     // Insert a test user
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
-        r#"INSERT INTO oauth2_user (id, email, email_verified, name, created_at)
-           VALUES ('user-123', 'test@example.com', 1, 'Test User', datetime('now'));"#,
+        r#"INSERT INTO oauth2_user (id, email, email_verified, name, receives_alerts, created_at)
+           VALUES ('user-123', 'test@example.com', 1, 'Test User', 1, datetime('now'));"#,
     ))
     .await
     .expect("insert test user");
 
-    db
+    Arc::new(db)
 }
 
 fn create_test_config() -> AppConfig {
@@ -163,7 +88,6 @@ fn create_test_config() -> AppConfig {
 
 async fn create_test_resources() -> (AppResources, OAuth2State) {
     let db = create_oauth2_test_db().await;
-    let db = Arc::new(db);
     let config = Arc::new(create_test_config());
     let mailer = Some(Arc::new(
         lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
@@ -184,6 +108,12 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
     );
 
     (resources, oauth2_state)
+}
+
+/// Build the full OAuth2 router as a plain axum Router for testing.
+fn build_oauth2_app(resources: AppResources, state: OAuth2State) -> Router {
+    let (router, _) = rust_federation_tester::oauth2::endpoints::router(state).split_for_parts();
+    router.layer(Extension(resources))
 }
 
 // =============================================================================
@@ -671,7 +601,6 @@ async fn test_oauth2_state_generate_token() {
 #[tokio::test]
 async fn test_oauth2_state_get_or_create_user() {
     let db = create_oauth2_test_db().await;
-    let db = Arc::new(db);
     let state = OAuth2State::new(
         db,
         "http://localhost".into(),
@@ -695,7 +624,6 @@ async fn test_oauth2_state_get_or_create_user() {
 #[tokio::test]
 async fn test_oauth2_state_verify_user_email() {
     let db = create_oauth2_test_db().await;
-    let db = Arc::new(db);
     let state = OAuth2State::new(
         db.clone(),
         "http://localhost".into(),
@@ -726,7 +654,6 @@ async fn test_oauth2_state_verify_user_email() {
 #[tokio::test]
 async fn test_oauth2_state_update_last_login() {
     let db = create_oauth2_test_db().await;
-    let db = Arc::new(db);
     let state = OAuth2State::new(
         db.clone(),
         "http://localhost".into(),
@@ -795,13 +722,38 @@ async fn create_test_token(db: &DatabaseConnection) {
     .expect("insert test token");
 }
 
+/// Helper to set a password reset token on a user.
+async fn insert_password_reset_token(
+    db: &DatabaseConnection,
+    user_id: &str,
+    token: &str,
+    expired: bool,
+) {
+    use time::OffsetDateTime;
+    let expires = if expired {
+        OffsetDateTime::now_utc() - time::Duration::hours(1)
+    } else {
+        OffsetDateTime::now_utc() + time::Duration::hours(1)
+    };
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        format!(
+            "UPDATE oauth2_user SET password_reset_token = '{}', password_reset_expires_at = '{}' WHERE id = '{}'",
+            token,
+            expires.format(&time::format_description::well_known::Rfc3339).unwrap(),
+            user_id
+        ),
+    ))
+    .await
+    .expect("set password reset token");
+}
+
 #[tokio::test]
 async fn test_token_authorization_code_success() {
     use rust_federation_tester::oauth2::endpoints::token;
 
     let db = create_oauth2_test_db().await;
-    create_test_authorization(&db).await;
-    let db = Arc::new(db);
+    create_test_authorization(db.as_ref()).await;
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -837,8 +789,7 @@ async fn test_token_refresh_success() {
     use rust_federation_tester::oauth2::endpoints::token;
 
     let db = create_oauth2_test_db().await;
-    create_test_token(&db).await;
-    let db = Arc::new(db);
+    create_test_token(db.as_ref()).await;
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -872,8 +823,7 @@ async fn test_userinfo_with_valid_token() {
     use rust_federation_tester::oauth2::endpoints::userinfo;
 
     let db = create_oauth2_test_db().await;
-    create_test_token(&db).await;
-    let db = Arc::new(db);
+    create_test_token(db.as_ref()).await;
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -906,8 +856,7 @@ async fn test_revoke_existing_token() {
     use rust_federation_tester::oauth2::endpoints::revoke;
 
     let db = create_oauth2_test_db().await;
-    create_test_token(&db).await;
-    let db = Arc::new(db);
+    create_test_token(db.as_ref()).await;
     let oauth2_state = OAuth2State::new(
         db.clone(),
         "http://localhost:8080".into(),
@@ -948,16 +897,16 @@ async fn test_token_confidential_client_with_basic_auth() {
     use rust_federation_tester::oauth2::endpoints::token;
 
     let db = create_oauth2_test_db().await;
-    create_test_authorization(&db).await;
+    create_test_authorization(db.as_ref()).await;
     // Update the auth code to use confidential client
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        r#"UPDATE oauth2_authorization SET client_id = 'confidential-client' WHERE code = 'valid-auth-code'"#,
-    ))
-    .await
-    .expect("update auth code");
+    db.as_ref()
+        .execute(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"UPDATE oauth2_authorization SET client_id = 'confidential-client' WHERE code = 'valid-auth-code'"#,
+        ))
+        .await
+        .expect("update auth code");
 
-    let db = Arc::new(db);
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -1032,19 +981,22 @@ async fn test_token_authorization_code_expired() {
     let now = OffsetDateTime::now_utc();
     let expired = now - time::Duration::hours(1); // Already expired
 
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        format!(
-            r#"INSERT INTO oauth2_authorization (code, client_id, user_id, redirect_uri, scope, state, nonce, code_challenge, code_challenge_method, expires_at, created_at)
+    db.as_ref()
+        .execute(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                r#"INSERT INTO oauth2_authorization (code, client_id, user_id, redirect_uri, scope, state, nonce, code_challenge, code_challenge_method, expires_at, created_at)
                VALUES ('expired-auth-code', 'test-client', 'user-123', 'http://localhost:3000/callback', 'openid', NULL, NULL, NULL, NULL, '{}', '{}')"#,
-            expired.format(&time::format_description::well_known::Rfc3339).unwrap(),
-            now.format(&time::format_description::well_known::Rfc3339).unwrap()
-        ),
-    ))
-    .await
-    .expect("insert expired authorization code");
+                expired
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+                now.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            ),
+        ))
+        .await
+        .expect("insert expired authorization code");
 
-    let db = Arc::new(db);
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -1081,8 +1033,7 @@ async fn test_token_authorization_code_client_mismatch() {
     use rust_federation_tester::oauth2::endpoints::token;
 
     let db = create_oauth2_test_db().await;
-    create_test_authorization(&db).await; // Created for test-client
-    let db = Arc::new(db);
+    create_test_authorization(db.as_ref()).await; // Created for test-client
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -1115,8 +1066,7 @@ async fn test_token_authorization_code_redirect_uri_mismatch() {
     use rust_federation_tester::oauth2::endpoints::token;
 
     let db = create_oauth2_test_db().await;
-    create_test_authorization(&db).await;
-    let db = Arc::new(db);
+    create_test_authorization(db.as_ref()).await;
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -1158,19 +1108,22 @@ async fn test_userinfo_insufficient_scope() {
     let now = OffsetDateTime::now_utc();
     let access_expires = now + time::Duration::hours(1);
 
-    db.execute(Statement::from_string(
-        DbBackend::Sqlite,
-        format!(
-            r#"INSERT INTO oauth2_token (id, access_token, refresh_token, token_type, client_id, user_id, scope, access_token_expires_at, refresh_token_expires_at, created_at, revoked_at)
+    db.as_ref()
+        .execute(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                r#"INSERT INTO oauth2_token (id, access_token, refresh_token, token_type, client_id, user_id, scope, access_token_expires_at, refresh_token_expires_at, created_at, revoked_at)
                VALUES ('token-no-openid', 'no-openid-token', NULL, 'Bearer', 'test-client', 'user-123', 'profile email', '{}', NULL, '{}', NULL)"#,
-            access_expires.format(&time::format_description::well_known::Rfc3339).unwrap(),
-            now.format(&time::format_description::well_known::Rfc3339).unwrap()
-        ),
-    ))
-    .await
-    .expect("insert token without openid scope");
+                access_expires
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+                now.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            ),
+        ))
+        .await
+        .expect("insert token without openid scope");
 
-    let db = Arc::new(db);
     let oauth2_state = OAuth2State::new(
         db,
         "http://localhost:8080".into(),
@@ -1193,4 +1146,392 @@ async fn test_userinfo_insufficient_scope() {
     response.assert_status_forbidden();
     let body: serde_json::Value = response.json();
     assert_eq!(body["error"], "insufficient_scope");
+}
+
+// =============================================================================
+// Password Complexity Tests
+// =============================================================================
+
+#[test]
+fn test_password_complexity_weak_password_rejected() {
+    use rust_federation_tester::oauth2::validate_password_complexity;
+
+    // Very short / low-entropy passwords should fail
+    assert!(validate_password_complexity("abc").is_err());
+    assert!(validate_password_complexity("password").is_err());
+    assert!(validate_password_complexity("12345678").is_err());
+    assert!(validate_password_complexity("aaaaaaaa").is_err());
+}
+
+#[test]
+fn test_password_complexity_strong_password_accepted() {
+    use rust_federation_tester::oauth2::validate_password_complexity;
+
+    // High-entropy passwords should pass (>= 55 bits)
+    assert!(validate_password_complexity("Correct-Horse-Battery-Staple-99").is_ok());
+    assert!(validate_password_complexity("Tr0ub4dor&3XtraSpecial!").is_ok());
+    assert!(validate_password_complexity("mY$uP3rS3cur3P@ssw0rd!").is_ok());
+}
+
+#[test]
+fn test_password_complexity_error_message() {
+    use rust_federation_tester::oauth2::validate_password_complexity;
+
+    let err = validate_password_complexity("weak").unwrap_err();
+    assert!(err.contains("too weak"));
+}
+
+// =============================================================================
+// Password Reset Token Validity Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_is_password_reset_valid_true() {
+    let db = create_oauth2_test_db().await;
+    let token = "test-reset-token-valid";
+    insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
+
+    use rust_federation_tester::entity::oauth2_user;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let user = oauth2_user::Entity::find()
+        .filter(oauth2_user::Column::PasswordResetToken.eq(token))
+        .one(db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(user.is_password_reset_valid());
+}
+
+#[tokio::test]
+async fn test_is_password_reset_valid_expired() {
+    let db = create_oauth2_test_db().await;
+    let token = "test-reset-token-expired";
+    insert_password_reset_token(db.as_ref(), "user-123", token, true).await;
+
+    use rust_federation_tester::entity::oauth2_user;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let user = oauth2_user::Entity::find()
+        .filter(oauth2_user::Column::PasswordResetToken.eq(token))
+        .one(db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(!user.is_password_reset_valid());
+}
+
+#[tokio::test]
+async fn test_is_password_reset_valid_no_token() {
+    let db = create_oauth2_test_db().await;
+
+    use rust_federation_tester::entity::oauth2_user;
+    use sea_orm::EntityTrait;
+    let user = oauth2_user::Entity::find_by_id("user-123")
+        .one(db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+
+    // No token set — should be invalid
+    assert!(!user.is_password_reset_valid());
+}
+
+// =============================================================================
+// Password Reset Endpoint Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_password_reset_request_get_renders_form() {
+    let (resources, oauth2_state) = create_test_resources().await;
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server.get("/password-reset").await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Reset your password"));
+    assert!(body.contains("Send reset link"));
+}
+
+#[tokio::test]
+async fn test_password_reset_request_post_unknown_email() {
+    let (resources, oauth2_state) = create_test_resources().await;
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    // Unknown email — anti-enumeration: always returns "check your email"
+    let response = server
+        .post("/password-reset")
+        .form(&[("email", "nobody@example.com")])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Check your email"));
+}
+
+#[tokio::test]
+async fn test_password_reset_request_post_known_email() {
+    let (resources, oauth2_state) = create_test_resources().await;
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    // Known email — still shows same "check your email" page (anti-enumeration)
+    let response = server
+        .post("/password-reset")
+        .form(&[("email", "test@example.com")])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Check your email"));
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_get_invalid_token() {
+    let (resources, oauth2_state) = create_test_resources().await;
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .get("/password-reset/confirm")
+        .add_query_param("token", "nonexistent-token")
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Link expired or invalid"));
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_get_valid_token() {
+    let db = create_oauth2_test_db().await;
+    let token = "valid-confirm-get-token";
+    insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
+
+    let config = Arc::new(create_test_config());
+    let mailer = Some(Arc::new(
+        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+            .build(),
+    ));
+    let resources = AppResources {
+        db: db.clone(),
+        mailer,
+        config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+    };
+    let oauth2_state = OAuth2State::new(
+        db,
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .get("/password-reset/confirm")
+        .add_query_param("token", token)
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Set a new password"));
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_post_password_mismatch() {
+    let db = create_oauth2_test_db().await;
+    let token = "mismatch-test-token";
+    insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
+
+    let config = Arc::new(create_test_config());
+    let mailer = Some(Arc::new(
+        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+            .build(),
+    ));
+    let resources = AppResources {
+        db: db.clone(),
+        mailer,
+        config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+    };
+    let oauth2_state = OAuth2State::new(
+        db,
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .post("/password-reset/confirm")
+        .form(&[
+            ("token", token),
+            ("new_password", "Correct-Horse-Battery-Staple-99"),
+            ("confirm_password", "Different-Password-99!"),
+        ])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Passwords do not match"));
+    assert!(body.contains("Set a new password")); // Still on the form page
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_post_weak_password() {
+    let db = create_oauth2_test_db().await;
+    let token = "weak-pw-test-token";
+    insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
+
+    let config = Arc::new(create_test_config());
+    let mailer = Some(Arc::new(
+        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+            .build(),
+    ));
+    let resources = AppResources {
+        db: db.clone(),
+        mailer,
+        config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+    };
+    let oauth2_state = OAuth2State::new(
+        db,
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .post("/password-reset/confirm")
+        .form(&[
+            ("token", token),
+            ("new_password", "weak"),
+            ("confirm_password", "weak"),
+        ])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("too weak"));
+    assert!(body.contains("Set a new password")); // Still on the form page
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_post_invalid_token() {
+    let (resources, oauth2_state) = create_test_resources().await;
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .post("/password-reset/confirm")
+        .form(&[
+            ("token", "bogus-token"),
+            ("new_password", "Correct-Horse-Battery-Staple-99"),
+            ("confirm_password", "Correct-Horse-Battery-Staple-99"),
+        ])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Link expired or invalid"));
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_post_success() {
+    let db = create_oauth2_test_db().await;
+    let token = "success-reset-token";
+    insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
+
+    let config = Arc::new(create_test_config());
+    let mailer = Some(Arc::new(
+        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+            .build(),
+    ));
+    let resources = AppResources {
+        db: db.clone(),
+        mailer,
+        config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+    };
+    let oauth2_state = OAuth2State::new(
+        db.clone(),
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .post("/password-reset/confirm")
+        .form(&[
+            ("token", token),
+            ("new_password", "Correct-Horse-Battery-Staple-99"),
+            ("confirm_password", "Correct-Horse-Battery-Staple-99"),
+        ])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Password updated"));
+
+    // Verify password was set and reset token was cleared
+    use rust_federation_tester::entity::oauth2_user;
+    use sea_orm::EntityTrait;
+    let user = oauth2_user::Entity::find_by_id("user-123")
+        .one(db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(user.password_hash.is_some(), "password_hash should be set");
+    assert!(
+        user.password_reset_token.is_none(),
+        "reset token should be cleared"
+    );
+    assert!(
+        user.password_reset_expires_at.is_none(),
+        "reset expiry should be cleared"
+    );
+}
+
+#[tokio::test]
+async fn test_password_reset_confirm_post_expired_token() {
+    let db = create_oauth2_test_db().await;
+    let token = "expired-reset-token";
+    insert_password_reset_token(db.as_ref(), "user-123", token, true).await; // expired
+
+    let config = Arc::new(create_test_config());
+    let mailer = Some(Arc::new(
+        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+            .build(),
+    ));
+    let resources = AppResources {
+        db: db.clone(),
+        mailer,
+        config: config.clone(),
+        email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+    };
+    let oauth2_state = OAuth2State::new(
+        db,
+        config.oauth2.issuer_url.clone(),
+        config.frontend_url.clone(),
+    );
+    let server =
+        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+
+    let response = server
+        .post("/password-reset/confirm")
+        .form(&[
+            ("token", token),
+            ("new_password", "Correct-Horse-Battery-Staple-99"),
+            ("confirm_password", "Correct-Horse-Battery-Staple-99"),
+        ])
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Link expired or invalid"));
 }
