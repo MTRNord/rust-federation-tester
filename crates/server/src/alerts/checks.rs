@@ -479,9 +479,10 @@ async fn handle_confirmation_failure(
         let Ok(updated) = active.update(db).await else {
             return;
         };
-        if resources.email_guard.try_claim(a.id, "failure").await
+        if let Some(mailer) = &resources.mailer
+            && resources.email_guard.try_claim(a.id, "failure").await
             && send_failure_email(
-                &resources.mailer,
+                mailer,
                 &resources.config,
                 &resources.db,
                 &a.email,
@@ -591,9 +592,10 @@ async fn handle_confirmed_failure(
     };
 
     if send_reminder
+        && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "reminder").await
         && send_failure_email(
-            &resources.mailer,
+            mailer,
             &resources.config,
             &resources.db,
             &a.email,
@@ -648,9 +650,10 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
     .await;
 
     if active.update(db).await.is_ok()
+        && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "recovery").await
         && send_recovery_email(
-            &resources.mailer,
+            mailer,
             &resources.config,
             &resources.db,
             &a.email,

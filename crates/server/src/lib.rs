@@ -30,7 +30,8 @@ pub mod validation;
 #[derive(Clone, Debug)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
-    pub mailer: Arc<AsyncSmtpTransport<Tokio1Executor>>,
+    /// None when `smtp.enabled = false` in config.
+    pub mailer: Option<Arc<AsyncSmtpTransport<Tokio1Executor>>>,
     pub config: Arc<AppConfig>,
     /// Email idempotency guard — prevents duplicate alert emails when running
     /// multiple instances. Uses Redis/Valkey when configured, no-op otherwise.

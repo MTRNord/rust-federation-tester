@@ -1,6 +1,10 @@
 #database_url: "postgres://user:pass@localhost/db?currentSchema=schema"
 database_url: "sqlite://alerts.db?mode=rwc"
 smtp:
+  # Set to false to disable all email sending and email-dependent routes
+  # (legacy alerts API, OAuth2 registration/verification, v2 alerts API).
+  # When false, all other smtp fields are ignored. Default: true.
+  enabled: true
   server: "smtp.example.com"
   port: 587
   username: "alerts@example.com"

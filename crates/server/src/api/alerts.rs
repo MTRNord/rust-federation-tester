@@ -244,7 +244,13 @@ async fn register_alert(
         )
         .unwrap();
 
-    if let Err(e) = resources.mailer.send(email).await {
+    if let Err(e) = resources
+        .mailer
+        .as_ref()
+        .expect("mailer must be set when alerts API is mounted")
+        .send(email)
+        .await
+    {
         tracing::error!(
             name = "api.register_alert.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -518,7 +524,13 @@ The Federation Tester Team"#
         .message_id(None)
         .body(email_body)
         .unwrap();
-    if let Err(e) = resources.mailer.send(email).await {
+    if let Err(e) = resources
+        .mailer
+        .as_ref()
+        .expect("mailer must be set when alerts API is mounted")
+        .send(email)
+        .await
+    {
         tracing::error!(
             name = "api.list_alerts.email_send_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -627,7 +639,13 @@ The Federation Tester Team"#,
                 .message_id(None)
                 .body(email_body)
                 .unwrap();
-            if let Err(e) = resources.mailer.send(email).await {
+            if let Err(e) = resources
+                .mailer
+                .as_ref()
+                .expect("mailer must be set when alerts API is mounted")
+                .send(email)
+                .await
+            {
                 tracing::error!(
                     name = "api.delete_alert.email_send_failed",
                     target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),

@@ -237,19 +237,25 @@ async fn main() -> color_eyre::eyre::Result<()> {
             .expect("Failed to connect to database"),
     );
 
-    // Set up lettre SMTP client
-    tracing::debug!("Loading SMTP client");
-    let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
-    let mailer = Arc::new(
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
-            .unwrap()
+    // Set up lettre SMTP client (only when smtp.enabled = true)
+    let mailer = if config.smtp.enabled {
+        tracing::debug!("Loading SMTP client");
+        let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
+        let transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
+            .expect("smtp.server must be valid when smtp.enabled = true")
             .port(config.smtp.port)
             .credentials(creds)
             .timeout(Some(std::time::Duration::from_secs(
                 config.smtp.timeout_secs,
             )))
-            .build(),
-    );
+            .build();
+        Some(Arc::new(transport))
+    } else {
+        tracing::info!(
+            "SMTP disabled — alert emails and email-dependent routes will not be available"
+        );
+        None
+    };
 
     // Apply federation configuration (timeout, private-target SSRF bypass) globally.
     // Must happen before the first request is handled.

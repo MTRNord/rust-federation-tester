@@ -67,18 +67,20 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .nest("/debug", debug::router())
         .routes(routes!(metrics::metrics));
 
-    // Conditionally add legacy magic link alerts API
-    if app_resources.config.oauth2.magic_links_enabled {
+    // Conditionally add legacy magic link alerts API (requires SMTP)
+    if app_resources.config.smtp.enabled && app_resources.config.oauth2.magic_links_enabled {
         router = router.nest("/api/alerts", alerts::router());
         tracing::info!("Legacy magic link alerts API enabled at /api/alerts/*");
+    } else if !app_resources.config.smtp.enabled {
+        tracing::info!("Legacy magic link alerts API disabled (smtp.enabled = false)");
     } else {
         tracing::info!(
             "Legacy magic link alerts API disabled (oauth2.magic_links_enabled = false)"
         );
     }
 
-    // Conditionally add OAuth2 endpoints if enabled
-    if app_resources.config.oauth2.enabled {
+    // Conditionally add OAuth2 endpoints if enabled (requires SMTP for email verification)
+    if app_resources.config.smtp.enabled && app_resources.config.oauth2.enabled {
         let oauth2_state = oauth2::OAuth2State::from_config(
             app_resources.db.clone(),
             &app_resources.config.oauth2,
@@ -97,6 +99,10 @@ pub async fn start_webserver<P: ConnectionProvider>(
             .nest("/oauth2/account", account::router());
         tracing::info!(
             "OAuth2 endpoints enabled at /oauth2/*, /api/v2/alerts/*, /oauth2/account/*"
+        );
+    } else if !app_resources.config.smtp.enabled && app_resources.config.oauth2.enabled {
+        tracing::info!(
+            "OAuth2 endpoints disabled (smtp.enabled = false — email verification is required)"
         );
     }
 

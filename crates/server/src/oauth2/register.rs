@@ -439,7 +439,12 @@ async fn send_verification_email(
                 ),
         )?;
 
-    resources.mailer.send(email_msg).await?;
+    resources
+        .mailer
+        .as_ref()
+        .expect("mailer must be set when OAuth2 routes are mounted")
+        .send(email_msg)
+        .await?;
 
     Ok(())
 }

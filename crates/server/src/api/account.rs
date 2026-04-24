@@ -941,6 +941,11 @@ async fn send_verification_email(
                 ),
         )?;
 
-    resources.mailer.send(msg).await?;
+    resources
+        .mailer
+        .as_ref()
+        .expect("mailer must be set when OAuth2 routes are mounted")
+        .send(msg)
+        .await?;
     Ok(())
 }

@@ -14,10 +14,19 @@ pub enum ConfigError {
 
 #[derive(Deserialize)]
 pub struct SmtpConfig {
+    /// When false, all email sending and email-dependent routes (alerts, OAuth2) are disabled.
+    /// Defaults to true for backward compatibility.
+    #[serde(default = "default_smtp_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
     pub server: String,
+    #[serde(default)]
     pub port: u16,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
     pub from: String,
     /// Timeout in seconds for SMTP connections and commands. Default: 10.
     ///
@@ -27,9 +36,28 @@ pub struct SmtpConfig {
     pub timeout_secs: u64,
 }
 
+fn default_smtp_enabled() -> bool {
+    true
+}
+
+impl Default for SmtpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server: String::new(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            from: String::new(),
+            timeout_secs: default_smtp_timeout_secs(),
+        }
+    }
+}
+
 impl fmt::Debug for SmtpConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SmtpConfig")
+            .field("enabled", &self.enabled)
             .field("server", &self.server)
             .field("port", &self.port)
             .field("username", &self.username)
@@ -439,8 +467,32 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
             "oauth2.account_client_secret must be set when oauth2.enabled = true".into(),
         ));
     }
-    if app.smtp.port == 0 {
-        return Err(ConfigError::Validation("smtp.port must be > 0".into()));
+    if app.smtp.enabled {
+        if app.smtp.server.is_empty() {
+            return Err(ConfigError::Validation(
+                "smtp.server must be set when smtp.enabled = true".into(),
+            ));
+        }
+        if app.smtp.port == 0 {
+            return Err(ConfigError::Validation(
+                "smtp.port must be > 0 when smtp.enabled = true".into(),
+            ));
+        }
+        if app.smtp.username.is_empty() {
+            return Err(ConfigError::Validation(
+                "smtp.username must be set when smtp.enabled = true".into(),
+            ));
+        }
+        if app.smtp.password.is_empty() {
+            return Err(ConfigError::Validation(
+                "smtp.password must be set when smtp.enabled = true".into(),
+            ));
+        }
+        if app.smtp.from.is_empty() {
+            return Err(ConfigError::Validation(
+                "smtp.from must be set when smtp.enabled = true".into(),
+            ));
+        }
     }
 
     if app.statistics.enabled
