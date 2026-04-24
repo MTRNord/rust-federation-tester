@@ -71,7 +71,7 @@ ARG TARGETPLATFORM
 # Create a non-root user for the application
 RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 # Create application directory with proper ownership
 WORKDIR /app
@@ -94,5 +94,8 @@ EXPOSE 8080
 LABEL security.capabilities.drop="ALL"
 LABEL security.no-new-privileges="true"
 LABEL security.read-only-rootfs="true"
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:8080/healthz || exit 1
 
 CMD ["sh", "-c", "migration up && rust-federation-tester"]
