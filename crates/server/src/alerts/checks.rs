@@ -130,15 +130,30 @@ pub async fn healthy_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
     resolver: Arc<Resolver<P>>,
     pool: ConnectionPool,
 ) {
+    let mut interval = tokio::time::interval(CHECK_INTERVAL);
+    let mut holding_lock = false;
     loop {
+        interval.tick().await;
+
         let ttl_ms = resources.config.redis.healthy_lock_ttl_secs * 1000;
-        if !lock.try_acquire("healthy_check_loop", ttl_ms).await {
+        let should_run = if holding_lock {
+            let ok = lock.try_renew("healthy_check_loop", ttl_ms).await;
+            if !ok {
+                holding_lock = false;
+            }
+            ok
+        } else {
+            let ok = lock.try_acquire("healthy_check_loop", ttl_ms).await;
+            holding_lock = ok;
+            ok
+        };
+
+        if !should_run {
             tracing::debug!(
                 name = "alerts.healthy_loop.skipped",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 message = "healthy_check_loop: another instance is running this cycle, skipping"
             );
-            tokio::time::sleep(CHECK_INTERVAL).await;
             continue;
         }
 
@@ -179,8 +194,6 @@ pub async fn healthy_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
 
         // 4. Housekeeping
         run_housekeeping(&resources.db).await;
-
-        tokio::time::sleep(CHECK_INTERVAL).await;
     }
 }
 
@@ -206,15 +219,30 @@ pub async fn active_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
     resolver: Arc<Resolver<P>>,
     pool: ConnectionPool,
 ) {
+    let mut interval = tokio::time::interval(ACTIVE_CHECK_INTERVAL);
+    let mut holding_lock = false;
     loop {
+        interval.tick().await;
+
         let ttl_ms = resources.config.redis.active_lock_ttl_secs * 1000;
-        if !lock.try_acquire("active_check_loop", ttl_ms).await {
+        let should_run = if holding_lock {
+            let ok = lock.try_renew("active_check_loop", ttl_ms).await;
+            if !ok {
+                holding_lock = false;
+            }
+            ok
+        } else {
+            let ok = lock.try_acquire("active_check_loop", ttl_ms).await;
+            holding_lock = ok;
+            ok
+        };
+
+        if !should_run {
             tracing::debug!(
                 name = "alerts.active_loop.skipped",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 message = "active_check_loop: another instance is running this cycle, skipping"
             );
-            tokio::time::sleep(ACTIVE_CHECK_INTERVAL).await;
             continue;
         }
 
@@ -266,8 +294,6 @@ pub async fn active_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
             });
         }
         while join_set.join_next().await.is_some() {}
-
-        tokio::time::sleep(ACTIVE_CHECK_INTERVAL).await;
     }
 }
 

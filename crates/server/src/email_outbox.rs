@@ -52,10 +52,11 @@ use crate::entity::email_outbox::{
 
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const BATCH_SIZE: u64 = 20;
-/// Lock TTL slightly longer than POLL_INTERVAL so a slow batch doesn't race
-/// with the next tick, but short enough that a crashed instance releases
-/// quickly.
-const LOCK_TTL_MS: u64 = 25_000;
+/// Lock TTL: 2× POLL_INTERVAL so a slow batch still has headroom, while a
+/// crashed holder is detected within one TTL + one poll = ~30 s.
+/// The holder renews on every tick, so processing happens every POLL_INTERVAL
+/// rather than once per TTL.
+const LOCK_TTL_MS: u64 = 20_000;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -150,15 +151,37 @@ pub async fn requeue_failed(db: &DatabaseConnection) -> Result<(u64, u64), sea_o
 
 async fn run_worker(resources: Arc<AppResources>, lock: Lock) {
     let mut interval = tokio::time::interval(POLL_INTERVAL);
+    let mut holding_lock = false;
     loop {
         interval.tick().await;
 
-        if !lock.try_acquire("email_outbox_worker", LOCK_TTL_MS).await {
-            tracing::debug!(
-                name = "email_outbox.worker.skipped",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                message = "outbox worker: another instance holds the lock, skipping cycle"
-            );
+        // If we already hold the lock, renew it; otherwise try a fresh acquire.
+        let should_process = if holding_lock {
+            let ok = lock.try_renew("email_outbox_worker", LOCK_TTL_MS).await;
+            if !ok {
+                holding_lock = false;
+                tracing::debug!(
+                    name = "email_outbox.worker.lock_lost",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    message =
+                        "outbox worker: lock lost (another instance took over), skipping cycle"
+                );
+            }
+            ok
+        } else {
+            let ok = lock.try_acquire("email_outbox_worker", LOCK_TTL_MS).await;
+            holding_lock = ok;
+            if !ok {
+                tracing::debug!(
+                    name = "email_outbox.worker.skipped",
+                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                    message = "outbox worker: another instance holds the lock, skipping cycle"
+                );
+            }
+            ok
+        };
+
+        if !should_process {
             continue;
         }
 
