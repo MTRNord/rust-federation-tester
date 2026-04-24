@@ -558,6 +558,7 @@ mod tests {
         AppConfig {
             database_url: "sqlite::memory:".into(),
             smtp: SmtpConfig {
+                enabled: true,
                 server: "localhost".into(),
                 port: 25,
                 username: "u".into(),
@@ -630,10 +631,10 @@ mod tests {
     async fn test_record_event_inserts_when_enabled() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(true, "salt123"));
-        let mailer = Arc::new(
+        let mailer = Some(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
                 .build(),
-        );
+        ));
         let resources = AppResources {
             db: Arc::new(db),
             mailer,
@@ -766,7 +767,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
         };
@@ -789,7 +790,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
         };
@@ -821,7 +822,7 @@ mod tests {
                 .build();
         let resources = AppResources {
             db: Arc::new(db),
-            mailer: Arc::new(dummy_mailer),
+            mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
         };
