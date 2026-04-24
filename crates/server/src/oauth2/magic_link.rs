@@ -5,6 +5,7 @@
 //! - Magic link verify (GET)  — decodes the JWT, creates/updates the user, redirects to consent
 
 use crate::AppResources;
+use crate::email_outbox;
 use crate::email_templates::MagicLinkEmailTemplate;
 use crate::entity::oauth2_user;
 use crate::oauth2::{OAUTH2_TAG, state::OAuth2State};
@@ -16,8 +17,6 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use lettre::AsyncTransport;
-use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -164,13 +163,16 @@ async fn magic_link_request(
         urlencoding::encode(&token)
     );
 
-    // Send the email (fire and forget — we show the same confirmation page
-    // regardless, to avoid leaking whether an account exists)
-    if let Err(e) = send_magic_link_email(&resources, &email, &verify_url).await {
-        tracing::error!(email = %email, "Failed to send magic link email: {}", e);
+    // Enqueue via outbox — fast DB insert. Actual SMTP happens in the background
+    // worker. The outbox entry carries the JWT expiry so stale links are not
+    // delivered after the token expires.
+    let jwt_expires_at = OffsetDateTime::from_unix_timestamp(exp as i64)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc());
+    if let Err(e) = send_magic_link_email(&resources, &email, &verify_url, jwt_expires_at).await {
+        tracing::error!(email = %email, "Failed to enqueue magic link email: {}", e);
         // Don't reveal failure to the user
     } else {
-        tracing::info!(email = %email, client_id = %form.client_id, "Magic link sent");
+        tracing::info!(email = %email, client_id = %form.client_id, "Magic link email queued");
     }
 
     // Ensure the user record exists (create if new, leave as-is if existing).
@@ -310,44 +312,29 @@ async fn send_magic_link_email(
     resources: &AppResources,
     email: &str,
     verify_url: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    jwt_expires_at: OffsetDateTime,
+) -> Result<(), sea_orm::DbErr> {
     let template = MagicLinkEmailTemplate {
         verify_url: verify_url.to_string(),
         environment_name: resources.config.environment_name.clone(),
     };
 
-    let html_body = template.render_html()?;
+    let html_body = template.render_html().unwrap_or_default();
     let text_body = template.render_text();
+    let subject = crate::email_templates::env_subject(
+        "Sign in to Federation Tester",
+        resources.config.environment_name.as_deref(),
+    );
 
-    let msg = lettre::Message::builder()
-        .from(resources.config.smtp.from.parse()?)
-        .to(email.parse()?)
-        .subject(crate::email_templates::env_subject(
-            "Sign in to Federation Tester",
-            resources.config.environment_name.as_deref(),
-        ))
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )?;
-
-    resources
-        .mailer
-        .as_ref()
-        .expect("mailer must be set when OAuth2 routes are mounted")
-        .send(msg)
-        .await?;
-    Ok(())
+    email_outbox::enqueue(
+        resources.db.as_ref(),
+        email,
+        &subject,
+        Some(html_body),
+        text_body,
+        Some(jwt_expires_at),
+    )
+    .await
 }
 
 /// Render a simple inline error page.

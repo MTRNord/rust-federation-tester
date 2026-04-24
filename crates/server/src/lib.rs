@@ -16,6 +16,7 @@ pub mod client;
 pub mod config;
 pub mod connection_pool;
 pub mod distributed;
+pub mod email_outbox;
 pub mod email_templates;
 pub mod entity;
 pub mod error;

@@ -14,7 +14,6 @@ use axum::{
 };
 use hyper::StatusCode;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use lettre::AsyncTransport;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -190,76 +189,39 @@ async fn register_alert(
         }
     }
 
-    // Send verification email (always for new or unverified)
+    // Enqueue the verification email via the outbox (fast DB insert).
     let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
-
     let template = crate::email_templates::VerificationEmailTemplate {
         server_name: payload.server_name.clone(),
         verify_url: verify_url.clone(),
         environment_name: resources.config.environment_name.clone(),
     };
-
     let subject = crate::email_templates::env_subject(
         "Please verify your email for Federation Alerts",
         resources.config.environment_name.as_deref(),
     );
-
-    // Render both HTML and plain text versions
-    let html_body = match template.render_html() {
-        Ok(html) => html,
-        Err(e) => {
-            tracing::error!(
-                name = "api.register_alert.template_render_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                error = %e,
-                message = "Failed to render HTML email template"
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to render email template" })),
-            );
-        }
-    };
+    let html_body = template.render_html().unwrap_or_default();
     let text_body = template.render_text();
 
-    // Create multipart email with both HTML and plain text
-    let email = lettre::Message::builder()
-        .from(resources.config.smtp.from.parse().unwrap())
-        .to(payload.email.parse().unwrap())
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .message_id(None)
-        .multipart(
-            lettre::message::MultiPart::alternative()
-                .singlepart(
-                    lettre::message::SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    lettre::message::SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .unwrap();
-
-    if let Err(e) = resources
-        .mailer
-        .as_ref()
-        .expect("mailer must be set when alerts API is mounted")
-        .send(email)
-        .await
+    if let Err(e) = crate::email_outbox::enqueue(
+        resources.db.as_ref(),
+        &payload.email,
+        &subject,
+        Some(html_body),
+        text_body,
+        None,
+    )
+    .await
     {
         tracing::error!(
-            name = "api.register_alert.email_send_failed",
+            name = "api.register_alert.email_enqueue_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = ?e,
-            message = "Failed to send verification email"
+            error = %e,
+            message = "Failed to enqueue verification email"
         );
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to send email: {e}") })),
+            Json(json!({ "error": "Failed to queue email" })),
         );
     }
 
@@ -502,44 +464,34 @@ async fn list_alerts(
     };
     let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
     let email_body = format!(
-        r#"Hello,
-
-You requested to view your alerts.
-
-Please verify by clicking the link below (valid for 1 hour):
-{verify_url}
-
-Best regards,
-The Federation Tester Team"#
+        "Hello,\n\nYou requested to view your alerts.\n\nPlease verify by clicking the link below (valid for 1 hour):\n{verify_url}\n\nBest regards,\nThe Federation Tester Team"
     );
-    let email = lettre::Message::builder()
-        .from(resources.config.smtp.from.parse().unwrap())
-        .to(payload.email.parse().unwrap())
-        .subject(crate::email_templates::env_subject(
-            "Verify to view your Federation Alerts",
-            resources.config.environment_name.as_deref(),
-        ))
-        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .message_id(None)
-        .body(email_body)
-        .unwrap();
-    if let Err(e) = resources
-        .mailer
-        .as_ref()
-        .expect("mailer must be set when alerts API is mounted")
-        .send(email)
-        .await
+    let subject = crate::email_templates::env_subject(
+        "Verify to view your Federation Alerts",
+        resources.config.environment_name.as_deref(),
+    );
+    // Token valid for 1 hour — no point delivering after expiry
+    let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
+
+    if let Err(e) = crate::email_outbox::enqueue(
+        resources.db.as_ref(),
+        &payload.email,
+        &subject,
+        None,
+        email_body,
+        Some(expires_at),
+    )
+    .await
     {
         tracing::error!(
-            name = "api.list_alerts.email_send_failed",
+            name = "api.list_alerts.email_enqueue_failed",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = ?e,
-            message = "Failed to send verification email"
+            error = %e,
+            message = "Failed to enqueue verification email"
         );
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to send email: {e}") })),
+            Json(json!({ "error": "Failed to queue email" })),
         );
     }
     (
@@ -616,45 +568,34 @@ async fn delete_alert(
             };
             let verify_url = format!("{}/verify?token={}", resources.config.frontend_url, token);
             let email_body = format!(
-                r#"Hello,
-
-You requested to delete your alert for server: {}
-
-Please verify by clicking the link below (valid for 1 hour):
-{}
-
-Best regards,
-The Federation Tester Team"#,
+                "Hello,\n\nYou requested to delete your alert for server: {}\n\nPlease verify by clicking the link below (valid for 1 hour):\n{}\n\nBest regards,\nThe Federation Tester Team",
                 a.server_name, verify_url
             );
-            let email = lettre::Message::builder()
-                .from(resources.config.smtp.from.parse().unwrap())
-                .to(a.email.parse().unwrap())
-                .subject(crate::email_templates::env_subject(
-                    "Verify to delete your Federation Alert",
-                    resources.config.environment_name.as_deref(),
-                ))
-                .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                .header(lettre::message::header::MIME_VERSION_1_0)
-                .message_id(None)
-                .body(email_body)
-                .unwrap();
-            if let Err(e) = resources
-                .mailer
-                .as_ref()
-                .expect("mailer must be set when alerts API is mounted")
-                .send(email)
-                .await
+            let subject = crate::email_templates::env_subject(
+                "Verify to delete your Federation Alert",
+                resources.config.environment_name.as_deref(),
+            );
+            let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
+
+            if let Err(e) = crate::email_outbox::enqueue(
+                resources.db.as_ref(),
+                &a.email,
+                &subject,
+                None,
+                email_body,
+                Some(expires_at),
+            )
+            .await
             {
                 tracing::error!(
-                    name = "api.delete_alert.email_send_failed",
+                    name = "api.delete_alert.email_enqueue_failed",
                     target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    error = ?e,
-                    message = "Failed to send verification email"
+                    error = %e,
+                    message = "Failed to enqueue verification email"
                 );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("Failed to send email: {e}") })),
+                    Json(json!({ "error": "Failed to queue email" })),
                 );
             }
             (

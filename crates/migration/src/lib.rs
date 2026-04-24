@@ -18,6 +18,7 @@ mod m20260307_000000_rename_oauth2_tables;
 mod m20260307_000001_account_features;
 mod m20260307_000002_internal_account_client;
 mod m20260408_163202_fix_oauth_alert_magic_token;
+mod m20260424_000000_add_email_outbox;
 
 pub struct Migrator;
 
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260307_000001_account_features::Migration),
             Box::new(m20260307_000002_internal_account_client::Migration),
             Box::new(m20260408_163202_fix_oauth_alert_magic_token::Migration),
+            Box::new(m20260424_000000_add_email_outbox::Migration),
         ]
     }
 }

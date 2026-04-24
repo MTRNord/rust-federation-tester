@@ -1,3 +1,4 @@
+use clap::{Parser, Subcommand};
 use hickory_resolver::Resolver;
 use hickory_resolver::config::ResolverOpts;
 use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
@@ -8,6 +9,7 @@ use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::distributed;
+use rust_federation_tester::email_outbox;
 use rust_federation_tester::federation::init_federation_config;
 
 use rustls::crypto;
@@ -173,6 +175,28 @@ fn initialize_layered_tracing() {
         .init();
 }
 
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(name = "federation-tester", about = "Matrix federation tester server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Re-enqueue failed outbox emails so the worker retries them.
+    ///
+    /// Use this after an SMTP server outage to retry emails that exhausted
+    /// their retry budget. Emails whose `expires_at` is in the past (e.g.
+    /// magic-link emails with stale JWTs) are skipped automatically; those
+    /// users must request a fresh magic link.
+    RequeueFailed,
+}
+
 fn is_debug_mode() -> bool {
     matches!(
         env::var("DEBUG_MODE").as_deref(),
@@ -182,6 +206,7 @@ fn is_debug_mode() -> bool {
 
 #[tokio::main]
 async fn main() -> color_eyre::eyre::Result<()> {
+    let cli = Cli::parse();
     color_eyre::install().expect("Failed to install `color_eyre::install`");
 
     // -------- Tracing Initialization --------
@@ -256,6 +281,24 @@ async fn main() -> color_eyre::eyre::Result<()> {
         );
         None
     };
+
+    // Handle CLI subcommands that only need DB access (no full server stack).
+    if let Some(Commands::RequeueFailed) = &cli.command {
+        tracing::info!("Running requeue-failed subcommand");
+        match email_outbox::requeue_failed(&db).await {
+            Ok((requeued, skipped)) => {
+                println!(
+                    "Requeued {requeued} failed email(s). Skipped {skipped} expired email(s) \
+                     (stale magic-link tokens — users must request a new magic link)."
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to requeue emails: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
 
     // Apply federation configuration (timeout, private-target SSRF bypass) globally.
     // Must happen before the first request is handled.
@@ -382,10 +425,13 @@ async fn main() -> color_eyre::eyre::Result<()> {
     tokio::spawn(active_check_loop(
         resources.clone(),
         registry,
-        lock,
+        lock.clone(),
         state.resolver.clone(),
         alert_pool,
     ));
+
+    tracing::debug!("Starting email outbox worker (10-s poll interval)");
+    email_outbox::spawn_worker(resources.clone(), lock);
 
     let debug_mode = is_debug_mode();
 

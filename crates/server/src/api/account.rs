@@ -24,8 +24,6 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header as JwtHeader, Validation, decode, encode};
-use lettre::AsyncTransport;
-use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
 };
@@ -703,8 +701,8 @@ async fn add_email(
         .map_err(|_| AuthError::server_error())?;
 
     if let Err(e) = send_verification_email(&resources, &email, &token).await {
-        tracing::error!("Failed to send additional-email verification: {}", e);
-        // Clean up the row so the user can retry
+        tracing::error!("Failed to enqueue additional-email verification: {}", e);
+        // Clean up the row so the user can retry cleanly
         let _ = user_email::Entity::delete_by_id(&inserted.id)
             .exec(resources.db.as_ref())
             .await;
@@ -901,7 +899,7 @@ async fn send_verification_email(
     resources: &AppResources,
     to_email: &str,
     token: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), sea_orm::DbErr> {
     let verify_url = format!(
         "{}/oauth2/account/emails/verify?token={}",
         resources.config.oauth2.issuer_url.trim_end_matches('/'),
@@ -918,34 +916,20 @@ async fn send_verification_email(
         "Verify your email address:\n{}\n\nThis link expires in 24 hours.",
         verify_url
     );
+    let subject = crate::email_templates::env_subject(
+        "Verify your email address - Federation Tester",
+        resources.config.environment_name.as_deref(),
+    );
 
-    let msg = lettre::Message::builder()
-        .from(resources.config.smtp.from.parse()?)
-        .to(to_email.parse()?)
-        .subject(crate::email_templates::env_subject(
-            "Verify your email address - Federation Tester",
-            resources.config.environment_name.as_deref(),
-        ))
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(body_text),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(body_html),
-                ),
-        )?;
+    let expires_at = time::OffsetDateTime::now_utc() + time::Duration::hours(24);
 
-    resources
-        .mailer
-        .as_ref()
-        .expect("mailer must be set when OAuth2 routes are mounted")
-        .send(msg)
-        .await?;
-    Ok(())
+    crate::email_outbox::enqueue(
+        resources.db.as_ref(),
+        to_email,
+        &subject,
+        Some(body_html),
+        body_text,
+        Some(expires_at),
+    )
+    .await
 }

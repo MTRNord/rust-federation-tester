@@ -4455,6 +4455,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "clap",
  "color-eyre",
  "config",
  "console-subscriber",

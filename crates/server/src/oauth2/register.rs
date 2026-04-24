@@ -16,8 +16,6 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use lettre::AsyncTransport;
-use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -62,7 +60,7 @@ pub struct RegisterQuery {
 }
 
 /// Form data for registration submission.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct RegisterForm {
     // OAuth2 flow parameters
     pub response_type: String,
@@ -276,17 +274,15 @@ async fn register_submit(
         return redirect_to_register_with_error(&form, "An error occurred. Please try again.");
     }
 
-    // Send verification email
     if let Err(e) = send_verification_email(&resources, &email, &verification_token, &form).await {
-        tracing::error!("Failed to send verification email: {}", e);
-        // Don't fail registration, but warn the user
+        tracing::error!("Failed to enqueue verification email: {}", e);
         return redirect_to_register_with_message(
             &form,
-            "Account created but we couldn't send the verification email. Please try again later.",
+            "Account created but we couldn't queue the verification email. Please try again later.",
         );
     }
 
-    tracing::info!(email = %email, "User registered, verification email sent");
+    tracing::info!(email = %email, "User registered, verification email queued");
 
     // Redirect back to registration page with success message
     redirect_to_register_with_message(
@@ -346,10 +342,10 @@ async fn resend_verification_or_error(
     // Resend the existing verification email
     if let Some(token) = &user.email_verification_token {
         if let Err(e) = send_verification_email(resources, &user.email, token, form).await {
-            tracing::error!("Failed to resend verification email: {}", e);
+            tracing::error!("Failed to enqueue resend verification email: {}", e);
             return redirect_to_register_with_error(
                 form,
-                "Couldn't send verification email. Please try again.",
+                "Couldn't queue verification email. Please try again.",
             );
         }
         redirect_to_register_with_message(
@@ -399,13 +395,12 @@ async fn update_and_resend_verification(
         return redirect_to_register_with_error(form, "An error occurred. Please try again.");
     }
 
-    // Send verification email
     if let Err(e) = send_verification_email(resources, &form.email, &verification_token, form).await
     {
-        tracing::error!("Failed to send verification email: {}", e);
+        tracing::error!("Failed to enqueue verification email: {}", e);
         return redirect_to_register_with_error(
             form,
-            "Couldn't send verification email. Please try again.",
+            "Couldn't queue verification email. Please try again.",
         );
     }
 
@@ -415,21 +410,20 @@ async fn update_and_resend_verification(
     )
 }
 
-/// Send the account verification email.
+/// Enqueue the account verification email via the outbox.
 async fn send_verification_email(
     resources: &AppResources,
     email: &str,
     token: &str,
     form: &RegisterForm,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Build verification URL with OAuth2 parameters
+) -> Result<(), sea_orm::DbErr> {
+    // Build verification URL with OAuth2 parameters so the user can continue
+    // the flow after clicking the link.
     let mut verify_url = format!(
         "{}/oauth2/verify-email?token={}",
         resources.config.oauth2.issuer_url.trim_end_matches('/'),
         urlencoding::encode(token)
     );
-
-    // Add OAuth2 parameters so user can continue after verification
     verify_url.push_str(&format!(
         "&client_id={}",
         urlencoding::encode(&form.client_id)
@@ -457,43 +451,29 @@ async fn send_verification_email(
     }
 
     let template = AccountVerificationEmailTemplate {
-        verify_url: verify_url.clone(),
+        verify_url,
         environment_name: resources.config.environment_name.clone(),
     };
 
-    let html_body = template.render_html()?;
+    let html_body = template.render_html().unwrap_or_default();
     let text_body = template.render_text();
+    let subject = crate::email_templates::env_subject(
+        "Verify your email - Federation Tester",
+        resources.config.environment_name.as_deref(),
+    );
 
-    let email_msg = lettre::Message::builder()
-        .from(resources.config.smtp.from.parse()?)
-        .to(email.parse()?)
-        .subject(crate::email_templates::env_subject(
-            "Verify your email - Federation Tester",
-            resources.config.environment_name.as_deref(),
-        ))
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )?;
+    // Verification tokens expire in 24 h — no point delivering after that.
+    let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(24);
 
-    resources
-        .mailer
-        .as_ref()
-        .expect("mailer must be set when OAuth2 routes are mounted")
-        .send(email_msg)
-        .await?;
-
-    Ok(())
+    crate::email_outbox::enqueue(
+        resources.db.as_ref(),
+        email,
+        &subject,
+        Some(html_body),
+        text_body,
+        Some(expires_at),
+    )
+    .await
 }
 
 /// Handle email verification link.

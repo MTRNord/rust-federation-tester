@@ -11,6 +11,7 @@ categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 argon2 = "0.5"
+clap = { version = "4", features = ["derive"] }
 askama = { version = "0.15.1", features = ["serde_json"] }
 axum = "0.8.4"
 axum-tracing-opentelemetry = {version="0.32.2", features=["tracing_level_info"]}
