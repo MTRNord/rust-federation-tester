@@ -215,8 +215,11 @@ async fn register_submit(
         .await
     {
         Ok(Some(existing_user)) => {
-            if existing_user.email_verified {
-                // User already exists and is verified
+            if existing_user.email_verified && existing_user.password_hash.is_none() {
+                // Magic-link account — user wants to add password login
+                return upgrade_to_password_login(&state, &form, existing_user).await;
+            } else if existing_user.email_verified {
+                // Fully registered account with a password
                 return redirect_to_register_with_error(
                     &form,
                     "An account with this email already exists. Please sign in instead.",
@@ -290,6 +293,47 @@ async fn register_submit(
         &form,
         "Account created! Please check your email for the verification link.",
     )
+}
+
+/// Set a password on an already-verified magic-link account.
+///
+/// The user is already verified (email_verified = true, password_hash = None), so
+/// no verification email is sent — they can sign in immediately after this step.
+async fn upgrade_to_password_login(
+    state: &OAuth2State,
+    form: &RegisterForm,
+    user: oauth2_user::Model,
+) -> Response {
+    let password_hash = match hash_password(&form.password) {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::error!("Failed to hash password during upgrade: {}", e);
+            return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+        }
+    };
+
+    let mut active: oauth2_user::ActiveModel = user.into();
+    active.password_hash = Set(Some(password_hash));
+
+    if let Err(e) = active.update(state.db.as_ref()).await {
+        tracing::error!("Failed to set password during magic-link upgrade: {}", e);
+        return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+    }
+
+    tracing::info!(email = %form.email, "Magic-link account upgraded to password login");
+
+    // Build a login redirect with a success message so the user can sign in immediately.
+    let login_url = format!(
+        "/oauth2/login?message={}&client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&login_hint={}",
+        urlencoding::encode("Password set successfully. You can now sign in."),
+        urlencoding::encode(&form.client_id),
+        urlencoding::encode(&form.redirect_uri),
+        urlencoding::encode(&form.scope),
+        urlencoding::encode(&form.state),
+        urlencoding::encode(&form.response_type),
+        urlencoding::encode(&form.email),
+    );
+    Redirect::to(&login_url).into_response()
 }
 
 /// Resend verification email for existing unverified user.
