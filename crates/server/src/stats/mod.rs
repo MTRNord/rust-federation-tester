@@ -662,10 +662,10 @@ mod tests {
     async fn test_record_event_no_insert_when_disabled() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(false, "salt123"));
-        let mailer = Arc::new(
+        let mailer = Some(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
                 .build(),
-        );
+        ));
         let resources = AppResources {
             db: Arc::new(db.clone()),
             mailer,
@@ -696,10 +696,10 @@ mod tests {
     async fn test_metrics_caching() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(true, "salt123"));
-        let mailer = Arc::new(
+        let mailer = Some(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
                 .build(),
-        );
+        ));
         let resources = AppResources {
             db: Arc::new(db.clone()),
             mailer,
