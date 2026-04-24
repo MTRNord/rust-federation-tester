@@ -7,3 +7,9 @@ repos:
         entry: cargo fmt --all -- --check --color always
         language: system
         pass_filenames: false
+      - id: clippy
+        name: clippy
+        description: Run clippy lints
+        entry: cargo clippy --workspace -- -D warnings
+        language: system
+        pass_filenames: false
