@@ -45,6 +45,8 @@ async fn create_test_user(
         password_hash: Set(None),
         email_verification_token: Set(None),
         email_verification_expires_at: Set(None),
+        password_reset_token: sea_orm::ActiveValue::NotSet,
+        password_reset_expires_at: sea_orm::ActiveValue::NotSet,
     };
     user.insert(db).await.expect("Failed to create test user")
 }

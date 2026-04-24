@@ -17,7 +17,11 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait,
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, EntityTrait, QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -258,6 +262,8 @@ async fn magic_link_verify(
                 password_hash: Set(None),
                 email_verification_token: Set(None),
                 email_verification_expires_at: Set(None),
+                password_reset_token: NotSet,
+                password_reset_expires_at: NotSet,
             };
             match new_user.insert(state.db.as_ref()).await {
                 Ok(u) => u,

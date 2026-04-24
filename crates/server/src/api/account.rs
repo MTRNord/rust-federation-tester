@@ -15,7 +15,9 @@ use crate::entity::{
     alert, alert_status_history, oauth2_authorization, oauth2_identity, oauth2_token, oauth2_user,
     user_email,
 };
-use crate::oauth2::generate_verification_token;
+use crate::oauth2::{
+    generate_verification_token, hash_password, validate_password_complexity, verify_password,
+};
 use askama::Template;
 use axum::{
     Extension, Json,
@@ -68,6 +70,8 @@ pub struct AccountInfoResponse {
     pub email_verified: bool,
     /// Whether the primary login email receives alert notifications.
     pub receives_alerts: bool,
+    /// Whether the user has a password set (false for magic-link-only accounts).
+    pub has_password: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -88,6 +92,20 @@ pub struct AddEmailRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateEmailRequest {
     pub receives_alerts: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ChangePasswordRequest {
+    /// Required when the account already has a password set.
+    pub current_password: Option<String>,
+    pub new_password: String,
+    pub confirm_new_password: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PasswordSetupResponse {
+    /// `"email_sent"` — a setup link has been sent to the account email.
+    pub status: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,6 +173,8 @@ pub fn router() -> OpenApiRouter {
         // GET /me returns JSON; PATCH/DELETE "" update/delete the account
         .routes(routes!(get_account))
         .routes(routes!(update_primary_settings, delete_account))
+        .routes(routes!(change_password))
+        .routes(routes!(send_password_setup_email))
         .routes(routes!(export_data))
         .routes(routes!(add_email))
         // verify must be registered before /{id} so the static segment wins
@@ -379,12 +399,14 @@ async fn get_account(
         .map(EmailDto::from)
         .collect();
 
+    let has_password = user.has_password();
     Ok(Json(AccountInfoResponse {
         user_id: user.id,
         email: user.email,
         name: user.name,
         email_verified: user.email_verified,
         receives_alerts: user.receives_alerts,
+        has_password,
         created_at: user.created_at,
         last_login_at: user.last_login_at,
         additional_emails,
@@ -436,15 +458,169 @@ async fn update_primary_settings(
         .map(EmailDto::from)
         .collect();
 
+    let has_password = updated.has_password();
     Ok(Json(AccountInfoResponse {
         user_id: updated.id,
         email: updated.email,
         name: updated.name,
         email_verified: updated.email_verified,
         receives_alerts: updated.receives_alerts,
+        has_password,
         created_at: updated.created_at,
         last_login_at: updated.last_login_at,
         additional_emails,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /oauth2/account/password  — change existing password (password users only)
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip(resources, auth, payload), fields(user_id = %auth.user_id))]
+#[utoipa::path(
+    patch,
+    path = "/password",
+    tag = ACCOUNT_TAG,
+    operation_id = "Change Password",
+    summary = "Change the account password",
+    description = "Only for accounts that already have a password. Requires `current_password` for \
+                   verification. Magic-link-only accounts must use the `POST /password/setup-email` \
+                   endpoint instead.",
+    security(("OAuth2" = ["openid"])),
+    request_body(content = ChangePasswordRequest),
+    responses(
+        (status = 204, description = "Password updated"),
+        (status = 400, description = "Invalid request", body = AuthError),
+        (status = 401, description = "Unauthorized", body = AuthError),
+    )
+)]
+async fn change_password(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, AuthError> {
+    if payload.new_password != payload.confirm_new_password {
+        return Err(AuthError::bad_request("Passwords do not match"));
+    }
+
+    validate_password_complexity(&payload.new_password).map_err(AuthError::bad_request)?;
+
+    let user = oauth2_user::Entity::find_by_id(&auth.user_id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("User not found"))?;
+
+    if !user.has_password() {
+        return Err(AuthError::bad_request(
+            "This account has no password set. Use the setup email endpoint instead.",
+        ));
+    }
+
+    let current = payload
+        .current_password
+        .as_deref()
+        .ok_or_else(|| AuthError::bad_request("Current password is required"))?;
+    if !verify_password(current, user.password_hash.as_deref().unwrap_or("")) {
+        return Err(AuthError::bad_request("Current password is incorrect"));
+    }
+
+    let hash = hash_password(&payload.new_password).map_err(|_| AuthError::server_error())?;
+
+    let mut active: oauth2_user::ActiveModel = user.into();
+    active.password_hash = sea_orm::ActiveValue::Set(Some(hash));
+    active
+        .update(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    tracing::info!(user_id = %auth.user_id, "Password changed");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// POST /oauth2/account/password/setup-email  — send setup link (magic-link users)
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip(resources, auth), fields(user_id = %auth.user_id))]
+#[utoipa::path(
+    post,
+    path = "/password/setup-email",
+    tag = ACCOUNT_TAG,
+    operation_id = "Send Password Setup Email",
+    summary = "Send a password setup link to the account email address",
+    description = "For magic-link-only accounts. Generates a one-time link and emails it to the \
+                   account email. Following the link lets the user set a password without needing \
+                   the current one. Fails if the account already has a password.",
+    security(("OAuth2" = ["openid"])),
+    responses(
+        (status = 200, description = "Email sent", body = PasswordSetupResponse),
+        (status = 400, description = "Account already has a password", body = AuthError),
+        (status = 401, description = "Unauthorized", body = AuthError),
+    )
+)]
+async fn send_password_setup_email(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+) -> Result<Json<PasswordSetupResponse>, AuthError> {
+    let user = oauth2_user::Entity::find_by_id(&auth.user_id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("User not found"))?;
+
+    if user.has_password() {
+        return Err(AuthError::bad_request(
+            "This account already has a password. Use the change password form instead.",
+        ));
+    }
+
+    let token = generate_verification_token();
+    let expires = OffsetDateTime::now_utc() + time::Duration::hours(1);
+
+    let mut active: oauth2_user::ActiveModel = user.into();
+    active.password_reset_token = sea_orm::ActiveValue::Set(Some(token.clone()));
+    active.password_reset_expires_at = sea_orm::ActiveValue::Set(Some(expires));
+    active
+        .update(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    let issuer = resources.config.oauth2.issuer_url.trim_end_matches('/');
+    let setup_url = format!(
+        "{}/oauth2/password-reset/confirm?token={}",
+        issuer,
+        urlencoding::encode(&token)
+    );
+
+    let template = crate::email_templates::PasswordResetEmailTemplate {
+        reset_url: setup_url,
+        environment_name: resources.config.environment_name.clone(),
+    };
+    let html_body = template.render_html().unwrap_or_default();
+    let text_body = template.render_text();
+    let subject = crate::email_templates::env_subject(
+        "Set your Federation Tester password",
+        resources.config.environment_name.as_deref(),
+    );
+
+    if let Err(e) = crate::email_outbox::enqueue(
+        resources.db.as_ref(),
+        &auth.email,
+        &subject,
+        Some(html_body),
+        text_body,
+        Some(expires),
+    )
+    .await
+    {
+        tracing::error!(user_id = %auth.user_id, "Failed to enqueue password setup email: {}", e);
+        return Err(AuthError::server_error());
+    }
+
+    tracing::info!(user_id = %auth.user_id, "Password setup email sent");
+    Ok(Json(PasswordSetupResponse {
+        status: "email_sent",
     }))
 }
 

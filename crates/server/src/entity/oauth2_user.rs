@@ -26,6 +26,12 @@ pub struct Model {
     /// When the email verification token expires
     #[serde(skip_serializing)]
     pub email_verification_expires_at: Option<OffsetDateTime>,
+    /// Token for password reset (sent by email)
+    #[serde(skip_serializing)]
+    pub password_reset_token: Option<String>,
+    /// When the password reset token expires
+    #[serde(skip_serializing)]
+    pub password_reset_expires_at: Option<OffsetDateTime>,
 }
 
 impl Model {
@@ -50,6 +56,14 @@ impl Model {
         match &self.email_verification_expires_at {
             Some(expires_at) => *expires_at <= OffsetDateTime::now_utc(),
             None => true,
+        }
+    }
+
+    /// Check if the password reset token is still valid
+    pub fn is_password_reset_valid(&self) -> bool {
+        match (&self.password_reset_token, &self.password_reset_expires_at) {
+            (Some(_), Some(expires_at)) => *expires_at > OffsetDateTime::now_utc(),
+            _ => false,
         }
     }
 }

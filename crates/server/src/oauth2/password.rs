@@ -29,6 +29,39 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
+/// Estimate password entropy in bits.
+pub fn password_entropy(password: &str) -> f64 {
+    if password.is_empty() {
+        return 0.0;
+    }
+    let mut pool: u32 = 0;
+    if password.chars().any(|c| c.is_ascii_lowercase()) {
+        pool += 26;
+    }
+    if password.chars().any(|c| c.is_ascii_uppercase()) {
+        pool += 26;
+    }
+    if password.chars().any(|c| c.is_ascii_digit()) {
+        pool += 10;
+    }
+    if password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        pool += 32;
+    }
+    password.len() as f64 * (pool as f64).log2()
+}
+
+/// Validate password complexity — same rules used everywhere passwords are set.
+///
+/// Returns `Err` with a human-readable message on failure.
+pub fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
+    if password_entropy(password) < 55.0 {
+        return Err(
+            "Password is too weak. Try making it longer or mixing letters, numbers, and symbols.",
+        );
+    }
+    Ok(())
+}
+
 /// Generate a secure random token for email verification.
 ///
 /// Returns a URL-safe base64-encoded string.

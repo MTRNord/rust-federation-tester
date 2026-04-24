@@ -5,7 +5,9 @@
 use crate::entity::{oauth2_client, oauth2_user};
 use crate::oauth2::registrar::DbRegistrar;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait,
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -121,6 +123,8 @@ impl OAuth2State {
             password_hash: Set(None),
             email_verification_token: Set(None),
             email_verification_expires_at: Set(None),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
         };
 
         user.insert(self.db.as_ref()).await

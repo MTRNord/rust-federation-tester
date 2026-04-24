@@ -246,6 +246,42 @@ The Federation Tester Team"#,
     }
 }
 
+/// Template for password reset emails
+#[derive(Template)]
+#[template(path = "password_reset_email.html")]
+pub struct PasswordResetEmailTemplate {
+    pub reset_url: String,
+    pub environment_name: Option<String>,
+}
+
+impl PasswordResetEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
+        format!(
+            r#"{}Hello,
+
+You requested a password reset for your Federation Tester account.
+
+Click the link below to set a new password (valid for 1 hour):
+{}
+
+If you did not request this, you can safely ignore this email. Your password will not be changed.
+
+Best regards,
+The Federation Tester Team"#,
+            env_banner, self.reset_url
+        )
+    }
+}
+
 /// Template for OAuth2 magic link sign-in emails
 #[derive(Template)]
 #[template(path = "magic_link_email.html")]

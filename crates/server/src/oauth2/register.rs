@@ -8,7 +8,9 @@
 use crate::AppResources;
 use crate::email_templates::AccountVerificationEmailTemplate;
 use crate::entity::{oauth2_client, oauth2_user};
-use crate::oauth2::{generate_verification_token, hash_password, state::OAuth2State};
+use crate::oauth2::{
+    generate_verification_token, hash_password, state::OAuth2State, validate_password_complexity,
+};
 use askama::Template;
 use axum::{
     Extension, Form,
@@ -16,7 +18,11 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait,
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, EntityTrait, QueryFilter,
+};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -267,6 +273,8 @@ async fn register_submit(
         password_hash: Set(Some(password_hash)),
         email_verification_token: Set(Some(verification_token.clone())),
         email_verification_expires_at: Set(Some(verification_expires)),
+        password_reset_token: NotSet,
+        password_reset_expires_at: NotSet,
     };
 
     if let Err(e) = user.insert(state.db.as_ref()).await {
@@ -614,45 +622,6 @@ fn render_verification_error(message: &str) -> Response {
         message
     );
     Html(html).into_response()
-}
-
-/// Estimate password entropy in bits.
-///
-/// Uses `entropy = length * log2(charset_size)` where charset_size
-/// is the union of character pools detected in the password:
-/// lowercase (26), uppercase (26), digits (10), other/special (32).
-fn password_entropy(password: &str) -> f64 {
-    if password.is_empty() {
-        return 0.0;
-    }
-    let mut pool: u32 = 0;
-    if password.chars().any(|c| c.is_ascii_lowercase()) {
-        pool += 26;
-    }
-    if password.chars().any(|c| c.is_ascii_uppercase()) {
-        pool += 26;
-    }
-    if password.chars().any(|c| c.is_ascii_digit()) {
-        pool += 10;
-    }
-    if password.chars().any(|c| !c.is_ascii_alphanumeric()) {
-        pool += 32;
-    }
-    password.len() as f64 * (pool as f64).log2()
-}
-
-/// Require at least 40 bits of entropy (rejects short/trivial passwords while
-/// allowing both long passphrases and shorter complex passwords).
-fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
-    if password.len() < 8 {
-        return Err("Password must be at least 8 characters long");
-    }
-    if password_entropy(password) < 55.0 {
-        return Err(
-            "Password is too weak. Try making it longer or mixing letters, numbers, and symbols.",
-        );
-    }
-    Ok(())
 }
 
 /// Redirect back to registration page with an error message.

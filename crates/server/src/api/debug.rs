@@ -4,7 +4,8 @@
 
 use crate::AppResources;
 use crate::email_templates::{
-    FailureEmailTemplate, RecoveryEmailTemplate, VerificationEmailTemplate,
+    FailureEmailTemplate, MagicLinkEmailTemplate, PasswordResetEmailTemplate,
+    RecoveryEmailTemplate, VerificationEmailTemplate,
 };
 use axum::{
     Extension,
@@ -23,6 +24,8 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(preview_verification_email))
         .routes(routes!(preview_failure_email))
         .routes(routes!(preview_recovery_email))
+        .routes(routes!(preview_magic_link_email))
+        .routes(routes!(preview_password_reset_email))
 }
 
 /// Check if the client IP is allowed to access debug endpoints.
@@ -161,6 +164,86 @@ pub async fn preview_recovery_email(
         server_name: "example.matrix.org".to_string(),
         check_url: "https://example.com/report/example.matrix.org".to_string(),
         unsubscribe_url: "https://example.com/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the magic link sign-in email template.
+#[utoipa::path(
+    get,
+    path = "/email/magic-link",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Magic Link Email",
+    summary = "Preview magic link sign-in email template",
+    description = "Renders the magic link sign-in email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_magic_link_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = MagicLinkEmailTemplate {
+        verify_url: "https://example.com/oauth2/magic-link/verify?token=sample-token-12345"
+            .to_string(),
+        environment_name: resources.config.environment_name.clone(),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the password reset email template.
+#[utoipa::path(
+    get,
+    path = "/email/password-reset",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Password Reset Email",
+    summary = "Preview password reset email template",
+    description = "Renders the password reset email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_password_reset_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = PasswordResetEmailTemplate {
+        reset_url: "https://example.com/oauth2/password-reset/confirm?token=sample-token-12345"
+            .to_string(),
         environment_name: resources.config.environment_name.clone(),
     };
 

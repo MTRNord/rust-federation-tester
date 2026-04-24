@@ -34,6 +34,7 @@ pub fn router(state: OAuth2State) -> OpenApiRouter {
         .merge(super::consent::router())
         .merge(super::magic_link::router())
         .with_state(state)
+        .merge(super::password_reset::router())
 }
 
 // =============================================================================

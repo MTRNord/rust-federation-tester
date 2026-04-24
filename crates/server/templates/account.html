@@ -224,6 +224,46 @@
                                 </form>
                             </section>
 
+                            <!-- Password section -->
+                            <section class="account-section" id="password-section">
+                                <h2 class="govuk-heading-m">Password</h2>
+
+                                <!-- Change password form (accounts with existing password) -->
+                                <div id="password-change-form" class="hidden">
+                                    <p class="govuk-body">Change your account password.</p>
+                                    <div id="password-feedback" class="hidden"></div>
+                                    <form id="change-password-form" onsubmit="changePassword(event)">
+                                        <div class="govuk-form-group">
+                                            <label class="govuk-label" for="current-password">Current password</label>
+                                            <input class="govuk-input govuk-input--width-20" id="current-password" type="password" autocomplete="current-password" />
+                                        </div>
+                                        <div class="govuk-form-group">
+                                            <label class="govuk-label" for="new-password">New password</label>
+                                            <div id="new-password-hint" class="govuk-hint">Use a mix of letters, numbers and symbols.</div>
+                                            <input class="govuk-input govuk-input--width-20" id="new-password" type="password" autocomplete="new-password" aria-describedby="new-password-hint" />
+                                        </div>
+                                        <div class="govuk-form-group">
+                                            <label class="govuk-label" for="confirm-password">Confirm new password</label>
+                                            <input class="govuk-input govuk-input--width-20" id="confirm-password" type="password" autocomplete="new-password" />
+                                        </div>
+                                        <button type="submit" class="govuk-button govuk-button--secondary" data-module="govuk-button">
+                                            Change password
+                                        </button>
+                                    </form>
+                                </div>
+
+                                <!-- Set password flow (magic-link-only accounts) -->
+                                <div id="password-setup" class="hidden">
+                                    <p class="govuk-body">
+                                        Your account currently uses magic link sign-in only. You can set a password for traditional sign-in.
+                                    </p>
+                                    <div id="password-setup-feedback" class="hidden"></div>
+                                    <button type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" onclick="sendPasswordSetupEmail()">
+                                        Set a password
+                                    </button>
+                                </div>
+                            </section>
+
                             <!-- Data export section -->
                             <section class="account-section">
                                 <h2 class="govuk-heading-m">
@@ -422,6 +462,15 @@
                     parseDate(data.created_at).toLocaleDateString();
 
                 renderEmailsList(data);
+                renderPasswordSection(data);
+            }
+
+            function renderPasswordSection(data) {
+                if (data.has_password) {
+                    show("password-change-form");
+                } else {
+                    show("password-setup");
+                }
             }
 
             function renderEmailsList(data) {
@@ -611,6 +660,67 @@
                 } else if (res) {
                     alert("Failed to delete account. Please try again.");
                 }
+            }
+
+            async function changePassword(e) {
+                e.preventDefault();
+                const current = document.getElementById("current-password").value;
+                const newPw = document.getElementById("new-password").value;
+                const confirm = document.getElementById("confirm-password").value;
+
+                const feedback = document.getElementById("password-feedback");
+                feedback.innerHTML = "";
+                hide("password-feedback");
+
+                if (newPw !== confirm) {
+                    feedback.innerHTML = '<p class="govuk-error-message"><span class="govuk-visually-hidden">Error:</span>Passwords do not match.</p>';
+                    show("password-feedback");
+                    return;
+                }
+
+                const res = await apiFetch("/oauth2/account/password", {
+                    method: "PATCH",
+                    body: JSON.stringify({ current_password: current, new_password: newPw, confirm_new_password: confirm }),
+                });
+                if (!res) return;
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    feedback.innerHTML = `<p class="govuk-error-message"><span class="govuk-visually-hidden">Error:</span>${escapeHtml(data.message || "Failed to change password.")}</p>`;
+                    show("password-feedback");
+                    return;
+                }
+
+                document.getElementById("current-password").value = "";
+                document.getElementById("new-password").value = "";
+                document.getElementById("confirm-password").value = "";
+                feedback.innerHTML =
+                    '<div class="govuk-notification-banner govuk-notification-banner--success" role="alert" data-module="govuk-notification-banner">' +
+                    '<div class="govuk-notification-banner__header"><h2 class="govuk-notification-banner__title">Success</h2></div>' +
+                    '<div class="govuk-notification-banner__content"><p class="govuk-body">Password changed successfully.</p></div></div>';
+                show("password-feedback");
+            }
+
+            async function sendPasswordSetupEmail() {
+                const feedback = document.getElementById("password-setup-feedback");
+                feedback.innerHTML = "";
+                hide("password-setup-feedback");
+
+                const res = await apiFetch("/oauth2/account/password/setup-email", { method: "POST" });
+                if (!res) return;
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    feedback.innerHTML = `<p class="govuk-error-message"><span class="govuk-visually-hidden">Error:</span>${escapeHtml(data.message || "Failed to send email.")}</p>`;
+                    show("password-setup-feedback");
+                    return;
+                }
+
+                feedback.innerHTML =
+                    '<div class="govuk-notification-banner govuk-notification-banner--success" role="alert" data-module="govuk-notification-banner">' +
+                    '<div class="govuk-notification-banner__header"><h2 class="govuk-notification-banner__title">Success</h2></div>' +
+                    '<div class="govuk-notification-banner__content"><p class="govuk-body">Check your email for a link to set your password.</p></div></div>';
+                show("password-setup-feedback");
             }
 
             async function signOut() {
