@@ -172,7 +172,7 @@ async fn get_report<P: ConnectionProvider>(
         .await;
 }
 
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state, resources))]
 #[utoipa::path(
     get,
     path = "/federation-ok",
@@ -272,7 +272,7 @@ async fn get_fed_ok<P: ConnectionProvider>(
 }
 
 // Debug-only endpoint (conditionally added to router when debug_mode=true), therefore no OpenAPI doc.
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state, resources, addr))]
 async fn cache_stats<P: ConnectionProvider>(
     State(state): State<AppState<P>>,
     axum::Extension(resources): axum::Extension<crate::AppResources>,

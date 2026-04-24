@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
 use thiserror::Error;
@@ -11,7 +12,7 @@ pub enum ConfigError {
     Validation(String),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct SmtpConfig {
     pub server: String,
     pub port: u16,
@@ -26,10 +27,23 @@ pub struct SmtpConfig {
     pub timeout_secs: u64,
 }
 
+impl fmt::Debug for SmtpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SmtpConfig")
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("from", &self.from)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
+
 fn default_smtp_timeout_secs() -> u64 {
     10
 }
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct AppConfig {
     pub database_url: String,
     pub smtp: SmtpConfig,
@@ -73,7 +87,25 @@ pub struct AppConfig {
     pub environment_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("database_url", &"[REDACTED]")
+            .field("smtp", &self.smtp)
+            .field("frontend_url", &self.frontend_url)
+            .field("magic_token_secret", &"[REDACTED]")
+            .field("debug_allowed_nets", &self.debug_allowed_nets)
+            .field("statistics", &self.statistics)
+            .field("oauth2", &self.oauth2)
+            .field("federation_timeout_secs", &self.federation_timeout_secs)
+            .field("allow_private_targets", &self.allow_private_targets)
+            .field("redis", &self.redis)
+            .field("environment_name", &self.environment_name)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Clone)]
 pub struct OAuth2Config {
     /// Whether OAuth2 is enabled
     #[serde(default)]
@@ -94,6 +126,19 @@ pub struct OAuth2Config {
     /// Required when oauth2.enabled = true. Generate with: openssl rand -hex 32
     #[serde(default)]
     pub account_client_secret: String,
+}
+
+impl fmt::Debug for OAuth2Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2Config")
+            .field("enabled", &self.enabled)
+            .field("issuer_url", &self.issuer_url)
+            .field("access_token_lifetime", &self.access_token_lifetime)
+            .field("refresh_token_lifetime", &self.refresh_token_lifetime)
+            .field("magic_links_enabled", &self.magic_links_enabled)
+            .field("account_client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Default for OAuth2Config {
@@ -174,7 +219,7 @@ impl Default for StatisticsConfig {
 /// ```
 ///
 /// Environment override: `REDIS__URL=redis://valkey:6379`
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct RedisConfig {
     /// Valkey or Redis connection URL.
     ///
@@ -228,6 +273,19 @@ pub struct RedisConfig {
     /// matters when the loop lock fails (Redis outage / fail-open).
     #[serde(default = "default_email_bucket_secs")]
     pub email_bucket_secs: u64,
+}
+
+impl fmt::Debug for RedisConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RedisConfig")
+            .field("url", &"[REDACTED]")
+            .field("pool_size", &self.pool_size)
+            .field("key_prefix", &self.key_prefix)
+            .field("healthy_lock_ttl_secs", &self.healthy_lock_ttl_secs)
+            .field("active_lock_ttl_secs", &self.active_lock_ttl_secs)
+            .field("email_bucket_secs", &self.email_bucket_secs)
+            .finish()
+    }
 }
 
 impl Default for RedisConfig {
