@@ -47,6 +47,11 @@ oauth2:
 ## and show an orange banner in the email body so recipients can tell emails apart.
 # environment_name: "staging"
 
+## Debug mode
+## Enables the /debug/cache-stats endpoint (restricted to debug_allowed_nets).
+## Set DEBUG_MODE=true (or 1 or yes) in the environment to enable.
+# (env var: DEBUG_MODE)
+
 ## Federation check settings
 # Network timeout in seconds for each individual federation check (DNS, TLS, HTTP).
 # Default: 3 — suitable for the public internet.

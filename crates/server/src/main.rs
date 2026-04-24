@@ -173,10 +173,11 @@ fn initialize_layered_tracing() {
         .init();
 }
 
-#[tracing::instrument()]
 fn is_debug_mode() -> bool {
-    env::var("RUST_LOG").unwrap_or_default().contains("debug")
-        || env::var("RUST_LOG").unwrap_or_default().contains("trace")
+    matches!(
+        env::var("DEBUG_MODE").as_deref(),
+        Ok("true") | Ok("1") | Ok("yes")
+    )
 }
 
 #[tokio::main]
