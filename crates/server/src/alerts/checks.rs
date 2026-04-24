@@ -275,6 +275,46 @@ pub async fn active_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
 // Per-alert check helpers
 // ---------------------------------------------------------------------------
 
+/// Handle the `Ok(report)` result of a healthy-loop check.
+async fn handle_healthy_report(
+    a: &alert::Model,
+    report: &Root,
+    registry: &Registry,
+    db: &sea_orm::DatabaseConnection,
+    now: OffsetDateTime,
+) {
+    let mut active = start_active_model(a, now);
+
+    if report.federation_ok {
+        active.last_success_at = ActiveValue::Set(Some(now));
+        let _ = active.update(db).await;
+        return;
+    }
+
+    let failure_reason = extract_failure_reason(report);
+    active.last_failure_at = ActiveValue::Set(Some(now));
+    registry.set(a.id, 1).await;
+    log_status_event(
+        db,
+        a.id,
+        &a.server_name,
+        EVENT_CHECK_FAIL,
+        false,
+        0,
+        Some(format!("confirmation: 1/{CONFIRMATION_THRESHOLD}")),
+        failure_reason,
+    )
+    .await;
+    let _ = active.update(db).await;
+    tracing::info!(
+        name = "alerts.state.confirmation_started",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        server_name = %a.server_name,
+        alert_id = a.id,
+        message = "Server failed healthy check, entering confirmation phase"
+    );
+}
+
 /// Run a single federation check for a healthy alert.
 ///
 /// On the first failure: inserts the alert into the registry with count 1 so
@@ -294,55 +334,58 @@ async fn run_healthy_check<P: ConnectionProvider>(
         message = "Running healthy federation check"
     );
 
-    let report = generate_json_report(&a.server_name, resolver, pool).await;
+    let Ok(report) = generate_json_report(&a.server_name, resolver, pool).await else {
+        tracing::error!(
+            name = "alerts.healthy_check.error",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            server_name = %a.server_name,
+            alert_id = a.id,
+            message = "Federation check error in healthy loop"
+        );
+        return;
+    };
+
     let now = OffsetDateTime::now_utc();
-    let db = resources.db.as_ref();
+    handle_healthy_report(&a, &report, registry, resources.db.as_ref(), now).await;
+}
 
-    match report {
-        Ok(report) => {
-            let mut active: alert::ActiveModel = a.clone().into();
-            active.last_check_at = ActiveValue::Set(Some(now));
-
-            if !report.federation_ok {
-                let failure_reason = extract_failure_reason(&report);
-                active.last_failure_at = ActiveValue::Set(Some(now));
-
-                // Enter confirmation phase — active loop takes over
-                registry.set(a.id, 1).await;
-
-                log_status_event(
-                    db,
-                    a.id,
-                    &a.server_name,
-                    EVENT_CHECK_FAIL,
-                    false,
-                    0,
-                    Some(format!("confirmation: 1/{CONFIRMATION_THRESHOLD}")),
-                    failure_reason,
-                )
-                .await;
-
-                let _ = active.update(db).await;
-
-                tracing::info!(
-                    name = "alerts.state.confirmation_started",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    server_name = %a.server_name,
-                    alert_id = a.id,
-                    message = "Server failed healthy check, entering confirmation phase"
-                );
-            } else {
-                active.last_success_at = ActiveValue::Set(Some(now));
-                let _ = active.update(db).await;
-            }
+/// Dispatch the outcome of an active-loop check to the correct state handler.
+async fn dispatch_active_result(
+    a: alert::Model,
+    state: AlertState,
+    report: &Root,
+    registry: &Registry,
+    resources: &AppResources,
+    now: OffsetDateTime,
+) {
+    match (state, report.federation_ok) {
+        (AlertState::InConfirmation { count }, false) => {
+            handle_confirmation_failure(
+                a,
+                count + 1,
+                registry,
+                resources,
+                now,
+                extract_failure_reason(report),
+            )
+            .await;
         }
-        Err(e) => {
-            tracing::error!(
-                name = "alerts.healthy_check.error",
+        (AlertState::InConfirmation { .. }, true) => {
+            handle_confirmation_recovery(a, registry, resources, now).await;
+        }
+        (AlertState::ConfirmedFailing, false) => {
+            handle_confirmed_failure(a, resources, now, extract_failure_reason(report)).await;
+        }
+        (AlertState::ConfirmedFailing, true) => {
+            handle_confirmed_recovery(a, resources, now).await;
+        }
+        (AlertState::Healthy, _) => {
+            tracing::warn!(
+                name = "alerts.active_check.unexpected_state",
                 target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
                 server_name = %a.server_name,
-                error = ?e,
-                message = "Federation check error in healthy loop"
+                alert_id = a.id,
+                message = "Alert in active loop but healthy and not in registry — skipping"
             );
         }
     }
@@ -374,56 +417,19 @@ async fn run_active_check<P: ConnectionProvider>(
         (None, false) => AlertState::Healthy,
     };
 
-    let report = generate_json_report(&a.server_name, resolver, pool).await;
-    let now = OffsetDateTime::now_utc();
+    let Ok(report) = generate_json_report(&a.server_name, resolver, pool).await else {
+        tracing::error!(
+            name = "alerts.active_check.error",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            server_name = %a.server_name,
+            alert_id = a.id,
+            message = "Federation check error in active loop"
+        );
+        return;
+    };
 
-    match report {
-        Ok(report) => {
-            match (state, report.federation_ok) {
-                (AlertState::InConfirmation { count }, false) => {
-                    handle_confirmation_failure(
-                        a,
-                        count + 1,
-                        registry,
-                        resources,
-                        now,
-                        extract_failure_reason(&report),
-                    )
-                    .await;
-                }
-                (AlertState::InConfirmation { .. }, true) => {
-                    handle_confirmation_recovery(a, registry, resources, now).await;
-                }
-                (AlertState::ConfirmedFailing, false) => {
-                    handle_confirmed_failure(a, resources, now, extract_failure_reason(&report))
-                        .await;
-                }
-                (AlertState::ConfirmedFailing, true) => {
-                    handle_confirmed_recovery(a, resources, now).await;
-                }
-                (AlertState::Healthy, _) => {
-                    // Alert should not be in the active loop if it is healthy
-                    // and not in the registry. Skip gracefully.
-                    tracing::warn!(
-                        name = "alerts.active_check.unexpected_state",
-                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                        server_name = %a.server_name,
-                        alert_id = a.id,
-                        message = "Alert in active loop but healthy and not in registry — skipping"
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(
-                name = "alerts.active_check.error",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                server_name = %a.server_name,
-                error = ?e,
-                message = "Federation check error in active loop"
-            );
-        }
-    }
+    let now = OffsetDateTime::now_utc();
+    dispatch_active_result(a, state, &report, registry, resources, now).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,8 +450,7 @@ async fn handle_confirmation_failure(
     failure_reason: Option<String>,
 ) {
     let db = resources.db.as_ref();
-    let mut active: alert::ActiveModel = a.clone().into();
-    active.last_check_at = ActiveValue::Set(Some(now));
+    let mut active = start_active_model(&a, now);
     active.last_failure_at = ActiveValue::Set(Some(now));
 
     log_status_event(
@@ -505,10 +510,7 @@ async fn handle_confirmation_failure(
                 None,
             )
             .await;
-
-            let mut email_update: alert::ActiveModel = updated.into();
-            email_update.last_email_sent_at = ActiveValue::Set(Some(now));
-            let _ = email_update.update(db).await;
+            update_email_sent_at(updated, now, db).await;
         }
     } else {
         // Accumulating confirmation failures — update registry and DB.
@@ -529,8 +531,7 @@ async fn handle_confirmation_recovery(
     let db = resources.db.as_ref();
     registry.remove(a.id).await;
 
-    let mut active: alert::ActiveModel = a.clone().into();
-    active.last_check_at = ActiveValue::Set(Some(now));
+    let mut active = start_active_model(&a, now);
     active.last_success_at = ActiveValue::Set(Some(now));
 
     log_status_event(
@@ -570,8 +571,7 @@ async fn handle_confirmed_failure(
     let new_failure_count = a.failure_count + 1;
     let send_reminder = should_send_reminder_email(&a, now);
 
-    let mut active: alert::ActiveModel = a.clone().into();
-    active.last_check_at = ActiveValue::Set(Some(now));
+    let mut active = start_active_model(&a, now);
     active.last_failure_at = ActiveValue::Set(Some(now));
     active.failure_count = ActiveValue::Set(new_failure_count);
 
@@ -618,10 +618,7 @@ async fn handle_confirmed_failure(
             None,
         )
         .await;
-
-        let mut email_update: alert::ActiveModel = updated.into();
-        email_update.last_email_sent_at = ActiveValue::Set(Some(now));
-        let _ = email_update.update(db).await;
+        update_email_sent_at(updated, now, db).await;
     }
 }
 
@@ -631,8 +628,7 @@ async fn handle_confirmed_failure(
 async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, now: OffsetDateTime) {
     let db = resources.db.as_ref();
 
-    let mut active: alert::ActiveModel = a.clone().into();
-    active.last_check_at = ActiveValue::Set(Some(now));
+    let mut active = start_active_model(&a, now);
     active.is_currently_failing = ActiveValue::Set(false);
     active.last_success_at = ActiveValue::Set(Some(now));
     active.last_recovery_at = ActiveValue::Set(Some(now));
@@ -677,9 +673,7 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
 
         // Fetch refreshed model to update last_email_sent_at.
         if let Ok(Some(refreshed)) = alert::Entity::find_by_id(a.id).one(db).await {
-            let mut email_update: alert::ActiveModel = refreshed.into();
-            email_update.last_email_sent_at = ActiveValue::Set(Some(now));
-            let _ = email_update.update(db).await;
+            update_email_sent_at(refreshed, now, db).await;
         }
     }
 
@@ -721,6 +715,24 @@ async fn run_housekeeping(db: &Arc<sea_orm::DatabaseConnection>) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Build an `ActiveModel` from an alert model, pre-setting `last_check_at`.
+fn start_active_model(a: &alert::Model, now: OffsetDateTime) -> alert::ActiveModel {
+    let mut active: alert::ActiveModel = a.clone().into();
+    active.last_check_at = ActiveValue::Set(Some(now));
+    active
+}
+
+/// Set `last_email_sent_at` on a model and persist it.
+async fn update_email_sent_at(
+    model: alert::Model,
+    now: OffsetDateTime,
+    db: &sea_orm::DatabaseConnection,
+) {
+    let mut active: alert::ActiveModel = model.into();
+    active.last_email_sent_at = ActiveValue::Set(Some(now));
+    let _ = active.update(db).await;
+}
 
 /// Extract a human-readable failure reason from a federation report.
 ///

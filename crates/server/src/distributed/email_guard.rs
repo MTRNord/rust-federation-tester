@@ -84,6 +84,9 @@ impl RedisEmailGuard {
         }
     }
 
+    // tracing macros expand to `if` blocks that inflate the cognitive complexity
+    // score beyond what the three logical branches here actually warrant.
+    #[allow(clippy::cognitive_complexity)]
     async fn try_claim(&self, alert_id: i32, kind: &str) -> bool {
         let bucket = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64 / self.bucket_secs;
         let key = format!("{}:email:{}:{}:{}", self.key_prefix, alert_id, kind, bucket);

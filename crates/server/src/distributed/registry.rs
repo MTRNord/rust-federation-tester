@@ -152,6 +152,17 @@ impl RedisRegistry {
         }
     }
 
+    /// Acquire a pooled Redis connection, logging a warning and returning `None` on failure.
+    async fn conn(&self, ctx: &str) -> Option<deadpool_redis::Connection> {
+        match self.pool.get().await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(error = %e, ctx, "Redis pool error in registry");
+                None
+            }
+        }
+    }
+
     async fn get(&self, alert_id: i32) -> Option<u32> {
         let mut conn = self.pool.get().await.ok()?;
         let val: Option<u32> = redis::cmd("HGET")
@@ -164,16 +175,8 @@ impl RedisRegistry {
     }
 
     async fn increment(&self, alert_id: i32) -> u32 {
-        let mut conn = match self.pool.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    alert_id = alert_id,
-                    error = %e,
-                    "Redis pool error in registry increment; returning 1"
-                );
-                return 1;
-            }
+        let Some(mut conn) = self.conn("increment").await else {
+            return 1;
         };
         let result: redis::RedisResult<i64> = redis::cmd("HINCRBY")
             .arg(&self.hash_key)
@@ -191,12 +194,8 @@ impl RedisRegistry {
     }
 
     async fn set(&self, alert_id: i32, count: u32) {
-        let mut conn = match self.pool.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(alert_id = alert_id, error = %e, "Redis pool error in registry set");
-                return;
-            }
+        let Some(mut conn) = self.conn("set").await else {
+            return;
         };
         let _: redis::RedisResult<()> = redis::cmd("HSET")
             .arg(&self.hash_key)
@@ -207,12 +206,8 @@ impl RedisRegistry {
     }
 
     async fn remove(&self, alert_id: i32) {
-        let mut conn = match self.pool.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(alert_id = alert_id, error = %e, "Redis pool error in registry remove");
-                return;
-            }
+        let Some(mut conn) = self.conn("remove").await else {
+            return;
         };
         let _: redis::RedisResult<()> = redis::cmd("HDEL")
             .arg(&self.hash_key)
@@ -222,12 +217,8 @@ impl RedisRegistry {
     }
 
     async fn all_ids(&self) -> HashSet<i32> {
-        let mut conn = match self.pool.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "Redis pool error in registry all_ids; returning empty set");
-                return HashSet::new();
-            }
+        let Some(mut conn) = self.conn("all_ids").await else {
+            return HashSet::new();
         };
         let result: redis::RedisResult<Vec<String>> = redis::cmd("HKEYS")
             .arg(&self.hash_key)

@@ -365,6 +365,9 @@ async fn resend_verification_or_error(
 }
 
 /// Update expired verification and resend email.
+// tracing macros expand to `if` blocks that inflate the cognitive complexity
+// score beyond what the three logical branches here actually warrant.
+#[allow(clippy::cognitive_complexity)]
 async fn update_and_resend_verification(
     state: &OAuth2State,
     resources: &AppResources,
