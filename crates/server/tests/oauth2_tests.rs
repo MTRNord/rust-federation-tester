@@ -132,6 +132,7 @@ fn create_test_config() -> AppConfig {
     AppConfig {
         database_url: "sqlite::memory:".into(),
         smtp: SmtpConfig {
+            enabled: true,
             server: "localhost".into(),
             port: 25,
             username: "test".into(),
@@ -162,10 +163,10 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
     let db = create_oauth2_test_db().await;
     let db = Arc::new(db);
     let config = Arc::new(create_test_config());
-    let mailer = Arc::new(
+    let mailer = Some(Arc::new(
         lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
             .build(),
-    );
+    ));
 
     let resources = AppResources {
         db: db.clone(),
