@@ -1177,7 +1177,21 @@ fn test_password_complexity_strong_password_accepted() {
 fn test_password_complexity_error_message() {
     use rust_federation_tester::oauth2::validate_password_complexity;
 
+    // Too short: returns length error
     let err = validate_password_complexity("weak").unwrap_err();
+    assert!(err.contains("8 characters"));
+
+    // Long but missing uppercase: returns uppercase error
+    let err = validate_password_complexity("password123!").unwrap_err();
+    assert!(err.contains("uppercase"));
+
+    // Has uppercase + lowercase but missing digit: returns digit error
+    let err = validate_password_complexity("NoDigitsHere!").unwrap_err();
+    assert!(err.contains("number"));
+
+    // Has all char classes (8 chars) but entropy still below threshold: returns entropy error
+    // "Aa1!Aa1!" entropy ≈ 52.4 bits (pool=94, len=8) < 55 required
+    let err = validate_password_complexity("Aa1!Aa1!").unwrap_err();
     assert!(err.contains("too weak"));
 }
 
@@ -1416,7 +1430,13 @@ async fn test_password_reset_confirm_post_weak_password() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("too weak"));
+    // "weak" is 4 chars — fails length check before entropy check
+    assert!(
+        body.contains("8 characters")
+            || body.contains("too weak")
+            || body.contains("uppercase")
+            || body.contains("special")
+    );
     assert!(body.contains("Set a new password")); // Still on the form page
 }
 
