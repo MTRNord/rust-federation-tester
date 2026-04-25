@@ -20,6 +20,7 @@ mod m20260307_000002_internal_account_client;
 mod m20260408_163202_fix_oauth_alert_magic_token;
 mod m20260424_000000_add_email_outbox;
 mod m20260424_000001_add_password_reset;
+mod m20260425_000000_add_alert_notification_emails;
 
 pub struct Migrator;
 
@@ -47,6 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260408_163202_fix_oauth_alert_magic_token::Migration),
             Box::new(m20260424_000000_add_email_outbox::Migration),
             Box::new(m20260424_000001_add_password_reset::Migration),
+            Box::new(m20260425_000000_add_alert_notification_emails::Migration),
         ]
     }
 }

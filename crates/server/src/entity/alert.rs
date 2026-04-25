@@ -33,11 +33,19 @@ pub enum Relation {
         to = "super::oauth2_user::Column::Id"
     )]
     User,
+    #[sea_orm(has_many = "super::alert_notification_email::Entity")]
+    AlertNotificationEmail,
 }
 
 impl Related<super::oauth2_user::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::User.def()
+    }
+}
+
+impl Related<super::alert_notification_email::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AlertNotificationEmail.def()
     }
 }
 

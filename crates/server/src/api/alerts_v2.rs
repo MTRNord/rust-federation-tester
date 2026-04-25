@@ -4,17 +4,19 @@
 //! - `GET /` - List all alerts for the authenticated user
 //! - `POST /` - Create a new alert subscription
 //! - `DELETE /{id}` - Delete an alert
-//!
-//! These endpoints use Bearer token authentication via the OAuth2Auth extractor.
+//! - `PUT /{id}/notify-emails` - Replace the notification email list for an alert
 
 use crate::AppResources;
 use crate::api::auth::{AuthError, OAuth2Auth, SCOPE_ALERTS_READ, SCOPE_ALERTS_WRITE};
-use crate::entity::alert;
+use crate::entity::{alert, alert_notification_email, oauth2_user, user_email};
 use crate::oauth2::IdentityService;
 use axum::{Extension, Json, extract::Path};
 use hyper::StatusCode;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -47,19 +49,8 @@ pub struct AlertDto {
     pub last_check_at: Option<OffsetDateTime>,
     /// Whether the server is currently failing federation checks
     pub is_currently_failing: bool,
-}
-
-impl From<alert::Model> for AlertDto {
-    fn from(alert: alert::Model) -> Self {
-        Self {
-            id: alert.id,
-            server_name: alert.server_name,
-            verified: alert.verified,
-            created_at: alert.created_at,
-            last_check_at: alert.last_check_at,
-            is_currently_failing: alert.is_currently_failing,
-        }
-    }
+    /// Email addresses that receive notifications for this alert
+    pub notify_emails: Vec<String>,
 }
 
 /// Request to create a new alert.
@@ -82,12 +73,95 @@ pub struct CreateAlertResponse {
     pub created_at: OffsetDateTime,
 }
 
+/// Request to replace the notification email list for an alert.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateNotifyEmailsRequest {
+    /// Email addresses to receive notifications (must all be verified by the user)
+    pub emails: Vec<String>,
+}
+
 /// Creates the v2 alerts API router.
 #[tracing::instrument(skip_all)]
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(list_alerts_v2, create_alert_v2))
         .routes(routes!(delete_alert_v2))
+        .routes(routes!(update_notify_emails))
+}
+
+/// Build `AlertDto` values from alert models and a pre-loaded email map.
+fn build_alert_dtos(
+    alerts: Vec<alert::Model>,
+    emails_by_alert: &HashMap<i32, Vec<String>>,
+) -> Vec<AlertDto> {
+    alerts
+        .into_iter()
+        .map(|a| {
+            let notify_emails = emails_by_alert.get(&a.id).cloned().unwrap_or_default();
+            AlertDto {
+                id: a.id,
+                server_name: a.server_name,
+                verified: a.verified,
+                created_at: a.created_at,
+                last_check_at: a.last_check_at,
+                is_currently_failing: a.is_currently_failing,
+                notify_emails,
+            }
+        })
+        .collect()
+}
+
+/// Batch-load notification emails for a slice of alert IDs (2 queries total).
+async fn load_emails_by_alert(
+    db: &sea_orm::DatabaseConnection,
+    alert_ids: &[i32],
+) -> Result<HashMap<i32, Vec<String>>, AuthError> {
+    if alert_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.is_in(alert_ids.to_vec()))
+        .all(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading notification emails: {}", e);
+            AuthError::server_error()
+        })?;
+
+    let mut map: HashMap<i32, Vec<String>> = HashMap::new();
+    for row in rows {
+        map.entry(row.alert_id).or_default().push(row.email);
+    }
+    Ok(map)
+}
+
+/// Collect the set of verified email addresses owned by a user.
+async fn verified_email_set(
+    db: &sea_orm::DatabaseConnection,
+    user_id: &str,
+) -> Result<HashSet<String>, AuthError> {
+    let user = oauth2_user::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(AuthError::server_error)?;
+
+    let mut set: HashSet<String> = HashSet::new();
+    if user.email_verified {
+        set.insert(user.email);
+    }
+
+    let additional = user_email::Entity::find()
+        .filter(user_email::Column::UserId.eq(user_id))
+        .filter(user_email::Column::Verified.eq(true))
+        .all(db)
+        .await
+        .map_err(|_| AuthError::server_error())?;
+    for ue in additional {
+        set.insert(ue.email);
+    }
+
+    Ok(set)
 }
 
 /// List all alerts for the authenticated user.
@@ -113,16 +187,11 @@ async fn list_alerts_v2(
     Extension(resources): Extension<AppResources>,
     OAuth2Auth(auth): OAuth2Auth,
 ) -> Result<Json<AlertsListResponse>, AuthError> {
-    // Validate scope
     if !auth.has_scope(SCOPE_ALERTS_READ) {
         return Err(AuthError::insufficient_scope(SCOPE_ALERTS_READ));
     }
 
-    // Use IdentityService for backward-compatible lookup
-    // SECURITY: email_verified is passed to prevent account takeover
-    // Users with unverified emails only see alerts explicitly linked to their user_id
     let identity_service = IdentityService::new(resources.db.clone());
-
     let alerts = identity_service
         .get_user_alerts(&auth.user_id, &auth.email, auth.email_verified)
         .await
@@ -131,8 +200,11 @@ async fn list_alerts_v2(
             AuthError::server_error()
         })?;
 
+    let alert_ids: Vec<i32> = alerts.iter().map(|a| a.id).collect();
+    let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &alert_ids).await?;
+
     let total = alerts.len();
-    let alert_dtos: Vec<AlertDto> = alerts.into_iter().map(AlertDto::from).collect();
+    let alert_dtos = build_alert_dtos(alerts, &emails_by_alert);
 
     Ok(Json(AlertsListResponse {
         alerts: alert_dtos,
@@ -168,12 +240,10 @@ async fn create_alert_v2(
     OAuth2Auth(auth): OAuth2Auth,
     Json(payload): Json<CreateAlertRequest>,
 ) -> Result<(StatusCode, Json<CreateAlertResponse>), AuthError> {
-    // Validate scope
     if !auth.has_scope(SCOPE_ALERTS_WRITE) {
         return Err(AuthError::insufficient_scope(SCOPE_ALERTS_WRITE));
     }
 
-    // Validate server name is not empty
     let server_name = payload.server_name.trim().to_lowercase();
     if server_name.is_empty() {
         return Err(AuthError::bad_request("Server name cannot be empty"));
@@ -181,7 +251,6 @@ async fn create_alert_v2(
 
     let now = OffsetDateTime::now_utc();
 
-    // Check for existing alert
     let existing = alert::Entity::find()
         .filter(alert::Column::Email.eq(&auth.email))
         .filter(alert::Column::ServerName.eq(&server_name))
@@ -202,15 +271,13 @@ async fn create_alert_v2(
         });
     }
 
-    // Check if user's email is verified
     let is_verified = auth.email_verified;
 
-    // Create alert
     let new_alert = alert::ActiveModel {
         email: Set(auth.email.clone()),
         server_name: Set(server_name.clone()),
         verified: Set(is_verified),
-        magic_token: Set(None), // No magic token needed for OAuth2
+        magic_token: Set(None),
         created_at: Set(now),
         user_id: Set(Some(auth.user_id.clone())),
         ..Default::default()
@@ -218,6 +285,20 @@ async fn create_alert_v2(
 
     let inserted = new_alert.insert(resources.db.as_ref()).await.map_err(|e| {
         tracing::error!("Failed to create alert: {}", e);
+        AuthError::server_error()
+    })?;
+
+    // Seed notification email with the user's primary email.
+    alert_notification_email::ActiveModel {
+        alert_id: Set(inserted.id),
+        email: Set(auth.email.clone()),
+        created_at: Set(now),
+        ..Default::default()
+    }
+    .insert(resources.db.as_ref())
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create initial notification email: {}", e);
         AuthError::server_error()
     })?;
 
@@ -266,12 +347,10 @@ async fn delete_alert_v2(
     OAuth2Auth(auth): OAuth2Auth,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, AuthError> {
-    // Validate scope
     if !auth.has_scope(SCOPE_ALERTS_WRITE) {
         return Err(AuthError::insufficient_scope(SCOPE_ALERTS_WRITE));
     }
 
-    // Find the alert
     let alert_entity = alert::Entity::find_by_id(id)
         .one(resources.db.as_ref())
         .await
@@ -281,7 +360,6 @@ async fn delete_alert_v2(
         })?
         .ok_or_else(|| AuthError::not_found("Alert not found"))?;
 
-    // Verify ownership: alert must belong to user by user_id OR email
     let is_owner = alert_entity
         .user_id
         .as_ref()
@@ -301,7 +379,6 @@ async fn delete_alert_v2(
         return Err(AuthError::forbidden("You do not own this alert"));
     }
 
-    // Delete the alert
     alert::Entity::delete_by_id(id)
         .exec(resources.db.as_ref())
         .await
@@ -313,4 +390,121 @@ async fn delete_alert_v2(
     tracing::info!(alert_id = id, "Deleted alert via OAuth2");
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Replace the notification email list for an alert.
+#[tracing::instrument(skip(resources, auth, payload), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    put,
+    path = "/{id}/notify-emails",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Update Alert Notification Emails",
+    summary = "Replace the notification email list for an alert",
+    description = "Replaces all notification emails for the given alert. Every email in the list \
+                   must be one of the user's verified addresses (primary or additional).\n\n\
+                   **Authentication:** Requires OAuth2 Bearer token with `alerts:write` scope.",
+    security(("OAuth2" = ["alerts:write"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    request_body(content = UpdateNotifyEmailsRequest, description = "New notification email list"),
+    responses(
+        (status = 200, description = "Notification emails updated", body = AlertDto),
+        (status = 400, description = "Email not in user's verified set", body = AuthError),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Missing required scope or not owner", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn update_notify_emails(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+    Json(payload): Json<UpdateNotifyEmailsRequest>,
+) -> Result<Json<AlertDto>, AuthError> {
+    if !auth.has_scope(SCOPE_ALERTS_WRITE) {
+        return Err(AuthError::insufficient_scope(SCOPE_ALERTS_WRITE));
+    }
+
+    let alert_entity = alert::Entity::find_by_id(id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error finding alert {}: {}", id, e);
+            AuthError::server_error()
+        })?
+        .ok_or_else(|| AuthError::not_found("Alert not found"))?;
+
+    // Only OAuth2-linked alerts can have per-alert notification emails.
+    let is_owner = alert_entity
+        .user_id
+        .as_ref()
+        .map(|uid| uid == &auth.user_id)
+        .unwrap_or(false);
+    if !is_owner {
+        return Err(AuthError::forbidden("You do not own this alert"));
+    }
+
+    // Validate: every requested email must be in the user's verified set.
+    let verified = verified_email_set(resources.db.as_ref(), &auth.user_id).await?;
+    for email in &payload.emails {
+        if !verified.contains(email) {
+            return Err(AuthError::bad_request(format!(
+                "email_not_verified: {} is not a verified address on your account",
+                email
+            )));
+        }
+    }
+
+    // Atomically replace the notification email list.
+    let db = resources.db.as_ref();
+    let txn = db.begin().await.map_err(|_| AuthError::server_error())?;
+
+    alert_notification_email::Entity::delete_many()
+        .filter(alert_notification_email::Column::AlertId.eq(id))
+        .exec(&txn)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete old notification emails: {}", e);
+            AuthError::server_error()
+        })?;
+
+    if !payload.emails.is_empty() {
+        let now = OffsetDateTime::now_utc();
+        let models: Vec<alert_notification_email::ActiveModel> = payload
+            .emails
+            .iter()
+            .map(|email| alert_notification_email::ActiveModel {
+                alert_id: Set(id),
+                email: Set(email.clone()),
+                created_at: Set(now),
+                ..Default::default()
+            })
+            .collect();
+        alert_notification_email::Entity::insert_many(models)
+            .exec(&txn)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to insert new notification emails: {}", e);
+                AuthError::server_error()
+            })?;
+    }
+
+    txn.commit().await.map_err(|_| AuthError::server_error())?;
+
+    tracing::info!(
+        alert_id = id,
+        email_count = payload.emails.len(),
+        "Updated notification emails"
+    );
+
+    let dto = AlertDto {
+        id: alert_entity.id,
+        server_name: alert_entity.server_name,
+        verified: alert_entity.verified,
+        created_at: alert_entity.created_at,
+        last_check_at: alert_entity.last_check_at,
+        is_currently_failing: alert_entity.is_currently_failing,
+        notify_emails: payload.emails,
+    };
+
+    Ok(Json(dto))
 }

@@ -4,8 +4,13 @@
 //! can be used to manage alerts.
 
 use migration::MigratorTrait;
-use rust_federation_tester::entity::{alert, oauth2_client, oauth2_token, oauth2_user};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection, EntityTrait};
+use rust_federation_tester::entity::{
+    alert, alert_notification_email, oauth2_client, oauth2_token, oauth2_user, user_email,
+};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Database, DatabaseConnection, EntityTrait,
+    QueryFilter,
+};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
@@ -506,4 +511,311 @@ fn test_auth_error_not_found() {
 
     let error = AuthError::not_found("Alert not found");
     assert_eq!(error.error, "not_found");
+}
+
+// =============================================================================
+// Helpers for notification email tests
+// =============================================================================
+
+async fn create_notification_email(
+    db: &DatabaseConnection,
+    alert_id: i32,
+    email: &str,
+) -> alert_notification_email::Model {
+    let now = OffsetDateTime::now_utc();
+    alert_notification_email::ActiveModel {
+        alert_id: Set(alert_id),
+        email: Set(email.to_string()),
+        created_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .expect("Failed to create notification email")
+}
+
+async fn create_additional_email(
+    db: &DatabaseConnection,
+    user_id: &str,
+    email: &str,
+    verified: bool,
+) -> user_email::Model {
+    let now = OffsetDateTime::now_utc();
+    user_email::ActiveModel {
+        id: Set(uuid::Uuid::new_v4().to_string()),
+        user_id: Set(user_id.to_string()),
+        email: Set(email.to_string()),
+        verified: Set(verified),
+        receives_alerts: Set(true),
+        verification_token: Set(None),
+        verification_expires_at: Set(None),
+        created_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .expect("Failed to create additional email")
+}
+
+// =============================================================================
+// Alert Notification Email Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_notification_email_created_with_alert() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+
+    // Manually insert a notification email (simulating what create_alert_v2 does)
+    let ne = create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+    assert_eq!(ne.alert_id, alert.id);
+    assert_eq!(ne.email, "user@example.com");
+}
+
+#[tokio::test]
+async fn test_notification_emails_multiple_per_alert() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+
+    create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+    create_notification_email(db.as_ref(), alert.id, "other@example.com").await;
+
+    let rows = alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query notification emails");
+
+    assert_eq!(rows.len(), 2);
+    let emails: Vec<&str> = rows.iter().map(|r| r.email.as_str()).collect();
+    assert!(emails.contains(&"user@example.com"));
+    assert!(emails.contains(&"other@example.com"));
+}
+
+#[tokio::test]
+async fn test_notification_email_cascade_delete() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+    create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+    create_notification_email(db.as_ref(), alert.id, "other@example.com").await;
+
+    // Delete the alert — FK cascade should remove notification email rows.
+    alert::Entity::delete_by_id(alert.id)
+        .exec(db.as_ref())
+        .await
+        .expect("Failed to delete alert");
+
+    let rows = alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query notification emails after delete");
+
+    assert!(
+        rows.is_empty(),
+        "Notification email rows should be cascade-deleted with the alert"
+    );
+}
+
+#[tokio::test]
+async fn test_get_notification_emails_oauth2_alert() {
+    use rust_federation_tester::alerts::checks::get_notification_emails;
+
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+    create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+    create_notification_email(db.as_ref(), alert.id, "extra@example.com").await;
+
+    let emails = get_notification_emails(db.as_ref(), &alert).await;
+    assert_eq!(emails.len(), 2);
+    assert!(emails.contains(&"user@example.com".to_string()));
+    assert!(emails.contains(&"extra@example.com".to_string()));
+}
+
+#[tokio::test]
+async fn test_get_notification_emails_legacy_alert() {
+    use rust_federation_tester::alerts::checks::get_notification_emails;
+
+    let db = setup_test_db().await;
+    // Legacy alert: user_id is None
+    let alert = create_test_alert(
+        db.as_ref(),
+        "legacy@example.com",
+        "old.server.com",
+        None,
+        true,
+    )
+    .await;
+
+    let emails = get_notification_emails(db.as_ref(), &alert).await;
+    assert_eq!(emails, vec!["legacy@example.com".to_string()]);
+}
+
+#[tokio::test]
+async fn test_get_notification_emails_empty_table_fallback() {
+    use rust_federation_tester::alerts::checks::get_notification_emails;
+
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    // OAuth2 alert but NO rows in alert_notification_email
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+
+    let emails = get_notification_emails(db.as_ref(), &alert).await;
+    // Falls back to alert.email when the table is empty
+    assert_eq!(emails, vec!["user@example.com".to_string()]);
+}
+
+#[tokio::test]
+async fn test_verified_email_set_primary_only() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+
+    // The user has no additional emails — only the primary verified email.
+    let verified = user_email::Entity::find()
+        .filter(user_email::Column::UserId.eq(&user.id))
+        .filter(user_email::Column::Verified.eq(true))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query user_email");
+
+    assert!(verified.is_empty());
+    // Primary email is verified via oauth2_user.email_verified = true
+    assert!(user.email_verified);
+    assert_eq!(user.email, "user@example.com");
+}
+
+#[tokio::test]
+async fn test_verified_email_set_with_additional() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    create_additional_email(db.as_ref(), &user.id, "extra@example.com", true).await;
+    create_additional_email(db.as_ref(), &user.id, "unverified@example.com", false).await;
+
+    let verified_additional = user_email::Entity::find()
+        .filter(user_email::Column::UserId.eq(&user.id))
+        .filter(user_email::Column::Verified.eq(true))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query verified additional emails");
+
+    // Only extra@example.com is verified; unverified@example.com should not appear.
+    assert_eq!(verified_additional.len(), 1);
+    assert_eq!(verified_additional[0].email, "extra@example.com");
+}
+
+#[tokio::test]
+async fn test_notification_email_replace_list() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+    create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+    create_notification_email(db.as_ref(), alert.id, "old@example.com").await;
+
+    // Simulate the replace: delete all, insert new set.
+    alert_notification_email::Entity::delete_many()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .exec(db.as_ref())
+        .await
+        .expect("Failed to delete old notification emails");
+
+    let now = OffsetDateTime::now_utc();
+    let new_emails = vec!["user@example.com", "new@example.com"];
+    for email in &new_emails {
+        alert_notification_email::ActiveModel {
+            alert_id: Set(alert.id),
+            email: Set(email.to_string()),
+            created_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("Failed to insert notification email");
+    }
+
+    let rows = alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query notification emails");
+
+    assert_eq!(rows.len(), 2);
+    let emails: Vec<&str> = rows.iter().map(|r| r.email.as_str()).collect();
+    assert!(emails.contains(&"user@example.com"));
+    assert!(emails.contains(&"new@example.com"));
+    assert!(!emails.contains(&"old@example.com"));
+}
+
+#[tokio::test]
+async fn test_notification_email_empty_list_allowed() {
+    let db = setup_test_db().await;
+    let user = create_test_user(db.as_ref(), "user-1", "user@example.com", true).await;
+    let alert = create_test_alert(
+        db.as_ref(),
+        "user@example.com",
+        "matrix.org",
+        Some(&user.id),
+        true,
+    )
+    .await;
+    create_notification_email(db.as_ref(), alert.id, "user@example.com").await;
+
+    // Delete all notification emails (empty list).
+    alert_notification_email::Entity::delete_many()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .exec(db.as_ref())
+        .await
+        .expect("Failed to delete notification emails");
+
+    let rows = alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .all(db.as_ref())
+        .await
+        .expect("Failed to query notification emails");
+
+    assert!(rows.is_empty());
 }

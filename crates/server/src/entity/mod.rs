@@ -1,4 +1,5 @@
 pub mod alert;
+pub mod alert_notification_email;
 pub mod alert_status_history;
 pub mod email_log;
 pub mod email_outbox;

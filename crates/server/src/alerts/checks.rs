@@ -31,7 +31,7 @@ use crate::AppResources;
 use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
 use crate::connection_pool::ConnectionPool;
 use crate::distributed::{Lock, Registry};
-use crate::entity::{alert, alert_status_history};
+use crate::entity::{alert, alert_notification_email, alert_status_history};
 use crate::response::{Root, generate_json_report};
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
@@ -512,31 +512,40 @@ async fn handle_confirmation_failure(
         };
         if let Some(mailer) = &resources.mailer
             && resources.email_guard.try_claim(a.id, "failure").await
-            && send_failure_email(
-                mailer,
-                &resources.config,
-                &resources.db,
-                &a.email,
-                &a.server_name,
-                a.id,
-                updated.failure_count,
-                failure_reason,
-            )
-            .await
-            .is_ok()
         {
-            log_status_event(
-                db,
-                a.id,
-                &a.server_name,
-                EVENT_EMAIL_FAILURE,
-                false,
-                1,
-                None,
-                None,
-            )
-            .await;
-            update_email_sent_at(updated, now, db).await;
+            let emails = get_notification_emails(db, &a).await;
+            let mut any_sent = false;
+            for email in &emails {
+                if send_failure_email(
+                    mailer,
+                    &resources.config,
+                    &resources.db,
+                    email,
+                    &a.server_name,
+                    a.id,
+                    updated.failure_count,
+                    failure_reason.clone(),
+                )
+                .await
+                .is_ok()
+                {
+                    any_sent = true;
+                }
+            }
+            if any_sent {
+                log_status_event(
+                    db,
+                    a.id,
+                    &a.server_name,
+                    EVENT_EMAIL_FAILURE,
+                    false,
+                    1,
+                    None,
+                    None,
+                )
+                .await;
+                update_email_sent_at(updated, now, db).await;
+            }
         }
     } else {
         // Accumulating confirmation failures — update registry and DB.
@@ -620,31 +629,40 @@ async fn handle_confirmed_failure(
     if send_reminder
         && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "reminder").await
-        && send_failure_email(
-            mailer,
-            &resources.config,
-            &resources.db,
-            &a.email,
-            &a.server_name,
-            a.id,
-            updated.failure_count,
-            failure_reason,
-        )
-        .await
-        .is_ok()
     {
-        log_status_event(
-            db,
-            a.id,
-            &a.server_name,
-            EVENT_EMAIL_REMINDER,
-            false,
-            updated.failure_count,
-            None,
-            None,
-        )
-        .await;
-        update_email_sent_at(updated, now, db).await;
+        let emails = get_notification_emails(db, &a).await;
+        let mut any_sent = false;
+        for email in &emails {
+            if send_failure_email(
+                mailer,
+                &resources.config,
+                &resources.db,
+                email,
+                &a.server_name,
+                a.id,
+                updated.failure_count,
+                failure_reason.clone(),
+            )
+            .await
+            .is_ok()
+            {
+                any_sent = true;
+            }
+        }
+        if any_sent {
+            log_status_event(
+                db,
+                a.id,
+                &a.server_name,
+                EVENT_EMAIL_REMINDER,
+                false,
+                updated.failure_count,
+                None,
+                None,
+            )
+            .await;
+            update_email_sent_at(updated, now, db).await;
+        }
     }
 }
 
@@ -674,32 +692,39 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
     if active.update(db).await.is_ok()
         && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "recovery").await
-        && send_recovery_email(
-            mailer,
-            &resources.config,
-            &resources.db,
-            &a.email,
-            &a.server_name,
-            a.id,
-        )
-        .await
-        .is_ok()
     {
-        log_status_event(
-            db,
-            a.id,
-            &a.server_name,
-            EVENT_EMAIL_RECOVERY,
-            true,
-            a.failure_count,
-            None,
-            None,
-        )
-        .await;
-
-        // Fetch refreshed model to update last_email_sent_at.
-        if let Ok(Some(refreshed)) = alert::Entity::find_by_id(a.id).one(db).await {
-            update_email_sent_at(refreshed, now, db).await;
+        let emails = get_notification_emails(db, &a).await;
+        let mut any_sent = false;
+        for email in &emails {
+            if send_recovery_email(
+                mailer,
+                &resources.config,
+                &resources.db,
+                email,
+                &a.server_name,
+                a.id,
+            )
+            .await
+            .is_ok()
+            {
+                any_sent = true;
+            }
+        }
+        if any_sent {
+            log_status_event(
+                db,
+                a.id,
+                &a.server_name,
+                EVENT_EMAIL_RECOVERY,
+                true,
+                a.failure_count,
+                None,
+                None,
+            )
+            .await;
+            if let Ok(Some(refreshed)) = alert::Entity::find_by_id(a.id).one(db).await {
+                update_email_sent_at(refreshed, now, db).await;
+            }
         }
     }
 
@@ -758,6 +783,29 @@ async fn update_email_sent_at(
     let mut active: alert::ActiveModel = model.into();
     active.last_email_sent_at = ActiveValue::Set(Some(now));
     let _ = active.update(db).await;
+}
+
+/// Return the notification email addresses for an alert.
+///
+/// For OAuth2 alerts (`user_id` set): queries `alert_notification_email`.
+/// Falls back to `alert.email` if the table is empty (e.g. pre-migration row).
+/// For legacy magic-link alerts (`user_id` unset): always uses `alert.email`.
+pub async fn get_notification_emails(
+    db: &sea_orm::DatabaseConnection,
+    alert: &alert::Model,
+) -> Vec<String> {
+    if alert.user_id.is_some() {
+        match alert_notification_email::Entity::find()
+            .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+            .all(db)
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => rows.into_iter().map(|r| r.email).collect(),
+            _ => vec![alert.email.clone()],
+        }
+    } else {
+        vec![alert.email.clone()]
+    }
 }
 
 /// Extract a human-readable failure reason from a federation report.
