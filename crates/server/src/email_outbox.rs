@@ -40,7 +40,7 @@ use lettre::AsyncTransport;
 use lettre::message::{MultiPart, SinglePart, header};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    QueryOrder, QuerySelect, sea_query::Expr,
 };
 use time::OffsetDateTime;
 
@@ -206,6 +206,9 @@ async fn process_batch(resources: &AppResources) -> Result<(), sea_orm::DbErr> {
 
     let db = resources.db.as_ref();
     let now = OffsetDateTime::now_utc();
+    // How long to hold a row claim. A second instance can only re-process a
+    // row if delivery takes longer than this (crash recovery path).
+    const CLAIM_WINDOW: time::Duration = time::Duration::minutes(5);
 
     let pending = EmailOutboxEntity::find()
         .filter(email_outbox::Column::Status.eq(STATUS_PENDING))
@@ -216,6 +219,30 @@ async fn process_batch(resources: &AppResources) -> Result<(), sea_orm::DbErr> {
         .await?;
 
     for item in pending {
+        // Row-level claim: atomically bump next_attempt_at before delivery so
+        // a second instance that picks up the same row (e.g. after the batch
+        // lock expires mid-iteration) will see rows_affected == 0 and skip it.
+        let claim = EmailOutboxEntity::update_many()
+            .col_expr(
+                email_outbox::Column::NextAttemptAt,
+                Expr::value(now + CLAIM_WINDOW),
+            )
+            .filter(email_outbox::Column::Id.eq(&item.id))
+            .filter(email_outbox::Column::Status.eq(STATUS_PENDING))
+            .filter(email_outbox::Column::NextAttemptAt.lte(now))
+            .exec(db)
+            .await?;
+
+        if claim.rows_affected == 0 {
+            tracing::debug!(
+                name = "email_outbox.worker.race_skip",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                id = %item.id,
+                message = "Email outbox: row claimed by another instance, skipping"
+            );
+            continue;
+        }
+
         // Before attempting delivery, check whether the email's embedded
         // content has expired (e.g. a magic-link JWT with a 1-hour TTL).
         if let Some(exp) = item.expires_at
