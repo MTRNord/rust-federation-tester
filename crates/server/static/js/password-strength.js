@@ -1,7 +1,7 @@
 // Shared password strength indicator.
 // Mirrors the server-side entropy formula: entropy = length × log2(pool_size)
 // Pool: lowercase (26) + uppercase (26) + digits (10) + other ASCII (32)
-// Server minimum for acceptance: 55 bits (Fair level).
+// Server requirements: uppercase, lowercase, digit, special character, entropy >= 55 bits.
 (function (global) {
     var LEVELS = [
         { max: 40,       label: "Very weak",   color: "#d4351c", pct: 10,  accepted: false },
@@ -58,12 +58,16 @@
             label.textContent = lvl.label + " (" + Math.round(entropy) + " bits)";
             label.style.color = textColor;
             if (hint) {
-                if (lvl.accepted) {
-                    hint.textContent = "✓ Acceptable";
-                    hint.style.color = "#00703c";
-                } else {
+                var issues = checkRequirements(input.value);
+                if (issues.length > 0) {
+                    hint.textContent = "✗ Missing: " + issues.join(", ");
+                    hint.style.color = "#d4351c";
+                } else if (!lvl.accepted) {
                     hint.textContent = "✗ Too weak — aim for at least Fair";
                     hint.style.color = "#d4351c";
+                } else {
+                    hint.textContent = "✓ Meets all requirements";
+                    hint.style.color = "#00703c";
                 }
             }
             if (confirm && confirm.value) updateMatch();
@@ -85,6 +89,17 @@
         if (confirm) confirm.addEventListener("input", updateMatch);
     }
 
+    function checkRequirements(pw) {
+        var issues = [];
+        if (pw.length < 8)              issues.push("at least 8 characters");
+        if (!/[A-Z]/.test(pw))          issues.push("one uppercase letter");
+        if (!/[a-z]/.test(pw))          issues.push("one lowercase letter");
+        if (!/[0-9]/.test(pw))          issues.push("one number");
+        if (!/[^a-zA-Z0-9]/.test(pw))   issues.push("one special character");
+        return issues;
+    }
+
     global.passwordEntropy = passwordEntropy;
+    global.checkRequirements = checkRequirements;
     global.initPasswordStrength = initPasswordStrength;
 })(window);

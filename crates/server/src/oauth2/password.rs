@@ -54,6 +54,21 @@ pub fn password_entropy(password: &str) -> f64 {
 ///
 /// Returns `Err` with a human-readable message on failure.
 pub fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters.");
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err("Password must contain at least one uppercase letter.");
+    }
+    if !password.chars().any(|c| c.is_ascii_lowercase()) {
+        return Err("Password must contain at least one lowercase letter.");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Password must contain at least one number.");
+    }
+    if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        return Err("Password must contain at least one special character.");
+    }
     if password_entropy(password) < 55.0 {
         return Err(
             "Password is too weak. Try making it longer or mixing letters, numbers, and symbols.",
