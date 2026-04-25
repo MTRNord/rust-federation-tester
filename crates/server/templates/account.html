@@ -23,6 +23,26 @@
             }
             .hidden { display: none; }
             .govuk-table .govuk-table__cell { vertical-align: middle; }
+            .password-strength {
+                margin-top: 8px;
+            }
+            .password-strength__bar-track {
+                height: 8px;
+                background: #b1b4b6;
+                border-radius: 4px;
+                overflow: hidden;
+            }
+            .password-strength__bar-fill {
+                height: 100%;
+                width: 0;
+                border-radius: 4px;
+                transition: width 0.2s ease, background-color 0.2s ease;
+            }
+            .password-strength__label {
+                font-size: 0.875rem;
+                margin-top: 4px;
+                font-weight: 600;
+            }
         </style>
     </head>
 
@@ -240,17 +260,19 @@
                                         <div class="govuk-form-group">
                                             <label class="govuk-label" for="new-password">New password</label>
                                             <div id="new-password-hint" class="govuk-hint">Use a mix of letters, numbers and symbols to create a strong password.</div>
-                                            <input class="govuk-input govuk-input--width-20" id="new-password" type="password" autocomplete="new-password" aria-describedby="new-password-hint" oninput="updatePasswordStrength(this.value)" />
-                                            <div id="password-strength-indicator" style="display:none; margin-top: 6px; max-width: 20ex;">
-                                                <div style="height: 6px; background: #b1b4b6; border-radius: 3px; overflow: hidden;">
-                                                    <div id="password-strength-fill" style="height: 100%; width: 0%; transition: width 0.2s, background-color 0.2s;"></div>
+                                            <input class="govuk-input govuk-input--width-20" id="new-password" type="password" autocomplete="new-password" aria-describedby="new-password-hint new-password-strength-label" />
+                                            <div class="password-strength" aria-live="polite">
+                                                <div class="password-strength__bar-track">
+                                                    <div class="password-strength__bar-fill" id="new-password-strength-bar"></div>
                                                 </div>
-                                                <p id="password-strength-text" class="govuk-hint" style="margin-top: 4px; margin-bottom: 0;"></p>
+                                                <p class="password-strength__label govuk-body-s" id="new-password-strength-label"></p>
+                                                <p class="govuk-body-s" id="new-password-strength-hint" style="margin-top:2px;margin-bottom:0"></p>
                                             </div>
                                         </div>
                                         <div class="govuk-form-group">
                                             <label class="govuk-label" for="confirm-password">Confirm new password</label>
-                                            <input class="govuk-input govuk-input--width-20" id="confirm-password" type="password" autocomplete="new-password" />
+                                            <input class="govuk-input govuk-input--width-20" id="confirm-password" type="password" autocomplete="new-password" aria-describedby="confirm-password-match-hint" />
+                                            <p class="govuk-body-s" id="confirm-password-match-hint" style="margin-top:6px;margin-bottom:0" aria-live="polite"></p>
                                         </div>
                                         <button type="submit" class="govuk-button govuk-button--secondary" data-module="govuk-button">
                                             Change password
@@ -362,6 +384,7 @@
             import { initAll } from "/assets/govuk/govuk-frontend.min.js";
             initAll();
         </script>
+        <script src="/assets/js/password-strength.js"></script>
 
         <script>
             // ---------------------------------------------------------------------------
@@ -393,34 +416,6 @@
             // ---------------------------------------------------------------------------
             function show(id) { document.getElementById(id).classList.remove("hidden"); }
             function hide(id) { document.getElementById(id).classList.add("hidden"); }
-
-            function passwordEntropy(pw) {
-                if (!pw) return 0;
-                let pool = 0;
-                if (/[a-z]/.test(pw)) pool += 26;
-                if (/[A-Z]/.test(pw)) pool += 26;
-                if (/[0-9]/.test(pw)) pool += 10;
-                if (/[^a-zA-Z0-9]/.test(pw)) pool += 32;
-                return pool > 0 ? Math.log2(pool) * pw.length : 0;
-            }
-
-            function updatePasswordStrength(value) {
-                const indicator = document.getElementById("password-strength-indicator");
-                const fill = document.getElementById("password-strength-fill");
-                const text = document.getElementById("password-strength-text");
-                if (!indicator) return;
-                if (!value) { indicator.style.display = "none"; return; }
-                indicator.style.display = "block";
-                const entropy = passwordEntropy(value);
-                let pct, color, label;
-                if (entropy < 30)      { pct = 15;  color = "#d4351c"; label = "Very weak"; }
-                else if (entropy < 45) { pct = 35;  color = "#f47738"; label = "Weak"; }
-                else if (entropy < 55) { pct = 65;  color = "#ffdd00"; label = "Moderate — try a longer or more varied password"; }
-                else                   { pct = 100; color = "#00703c"; label = "Strong"; }
-                fill.style.width = pct + "%";
-                fill.style.backgroundColor = color;
-                text.textContent = label;
-            }
 
             function showState(name) {
                 ["state-loading", "state-unauth", "state-error", "state-account"]
@@ -771,6 +766,16 @@
                 hide("nav-signout");
                 showState("unauth");
             }
+
+            // Wire up password strength indicator for the change-password form.
+            initPasswordStrength({
+                inputId: "new-password",
+                barId: "new-password-strength-bar",
+                labelId: "new-password-strength-label",
+                hintId: "new-password-strength-hint",
+                confirmId: "confirm-password",
+                matchHintId: "confirm-password-match-hint"
+            });
 
             // Run on load.
             loadAccount();

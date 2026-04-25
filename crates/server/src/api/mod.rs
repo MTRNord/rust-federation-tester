@@ -144,7 +144,8 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .nest_service(
             "/assets/images",
             ServeDir::new(static_dir.join("govuk/images")),
-        );
+        )
+        .nest_service("/assets/js", ServeDir::new(static_dir.join("js")));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     tracing::info!("Server running at 0.0.0.0:8080");
