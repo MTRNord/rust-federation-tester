@@ -97,7 +97,18 @@ fn build_alert_dtos(
     alerts
         .into_iter()
         .map(|a| {
-            let notify_emails = emails_by_alert.get(&a.id).cloned().unwrap_or_default();
+            // Return effective recipients: explicit rows when present, otherwise
+            // fall back to alert.email so the frontend never shows an empty list.
+            let notify_emails = match emails_by_alert.get(&a.id) {
+                Some(emails) if !emails.is_empty() => emails.clone(),
+                _ => {
+                    if a.email.is_empty() {
+                        vec![]
+                    } else {
+                        vec![a.email.clone()]
+                    }
+                }
+            };
             AlertDto {
                 id: a.id,
                 server_name: a.server_name,
@@ -433,12 +444,14 @@ async fn update_notify_emails(
         })?
         .ok_or_else(|| AuthError::not_found("Alert not found"))?;
 
-    // Only OAuth2-linked alerts can have per-alert notification emails.
+    // Allow ownership by user_id (OAuth2 alerts) OR by email for legacy alerts
+    // (user_id IS NULL, same logic as the delete endpoint).
     let is_owner = alert_entity
         .user_id
         .as_ref()
         .map(|uid| uid == &auth.user_id)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || (alert_entity.user_id.is_none() && alert_entity.email == auth.email);
     if !is_owner {
         return Err(AuthError::forbidden("You do not own this alert"));
     }

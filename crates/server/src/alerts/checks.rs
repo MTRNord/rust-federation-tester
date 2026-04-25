@@ -794,17 +794,26 @@ pub async fn get_notification_emails(
     db: &sea_orm::DatabaseConnection,
     alert: &alert::Model,
 ) -> Vec<String> {
-    if alert.user_id.is_some() {
-        match alert_notification_email::Entity::find()
-            .filter(alert_notification_email::Column::AlertId.eq(alert.id))
-            .all(db)
-            .await
-        {
-            Ok(rows) if !rows.is_empty() => rows.into_iter().map(|r| r.email).collect(),
-            _ => vec![alert.email.clone()],
+    // Check the table for ALL alerts (both OAuth2 and legacy). A legacy alert
+    // that the user has updated via PUT /notify-emails will have rows here.
+    match alert_notification_email::Entity::find()
+        .filter(alert_notification_email::Column::AlertId.eq(alert.id))
+        .all(db)
+        .await
+    {
+        Ok(rows) if !rows.is_empty() => rows
+            .into_iter()
+            .map(|r| r.email)
+            .filter(|e| !e.is_empty())
+            .collect(),
+        _ => {
+            // Fall back to alert.email for uninitialized or legacy alerts.
+            if alert.email.is_empty() {
+                vec![]
+            } else {
+                vec![alert.email.clone()]
+            }
         }
-    } else {
-        vec![alert.email.clone()]
     }
 }
 
