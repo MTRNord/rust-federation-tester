@@ -154,37 +154,9 @@ async fn run_worker(resources: Arc<AppResources>, lock: Lock) {
     let mut holding_lock = false;
     loop {
         interval.tick().await;
-
-        // If we already hold the lock, renew it; otherwise try a fresh acquire.
-        let should_process = if holding_lock {
-            let ok = lock.try_renew("email_outbox_worker", LOCK_TTL_MS).await;
-            if !ok {
-                holding_lock = false;
-                tracing::debug!(
-                    name = "email_outbox.worker.lock_lost",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    message =
-                        "outbox worker: lock lost (another instance took over), skipping cycle"
-                );
-            }
-            ok
-        } else {
-            let ok = lock.try_acquire("email_outbox_worker", LOCK_TTL_MS).await;
-            holding_lock = ok;
-            if !ok {
-                tracing::debug!(
-                    name = "email_outbox.worker.skipped",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    message = "outbox worker: another instance holds the lock, skipping cycle"
-                );
-            }
-            ok
-        };
-
-        if !should_process {
+        if !tick_lock(&lock, &mut holding_lock).await {
             continue;
         }
-
         if let Err(e) = process_batch(&resources).await {
             tracing::error!(
                 name = "email_outbox.worker.batch_error",
@@ -193,6 +165,37 @@ async fn run_worker(resources: Arc<AppResources>, lock: Lock) {
                 message = "Email outbox batch processing failed"
             );
         }
+    }
+}
+
+/// Acquire or renew the outbox worker lock for this tick.
+/// Returns `true` if this instance should process the current cycle.
+// tracing! macros expand to `if` blocks that inflate the cognitive complexity
+// score beyond what the two logical branches here actually warrant.
+#[allow(clippy::cognitive_complexity)]
+async fn tick_lock(lock: &Lock, holding: &mut bool) -> bool {
+    if *holding {
+        let ok = lock.try_renew("email_outbox_worker", LOCK_TTL_MS).await;
+        if !ok {
+            *holding = false;
+            tracing::debug!(
+                name = "email_outbox.worker.lock_lost",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                message = "outbox worker: lock lost (another instance took over), skipping cycle"
+            );
+        }
+        ok
+    } else {
+        let ok = lock.try_acquire("email_outbox_worker", LOCK_TTL_MS).await;
+        *holding = ok;
+        if !ok {
+            tracing::debug!(
+                name = "email_outbox.worker.skipped",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                message = "outbox worker: another instance holds the lock, skipping cycle"
+            );
+        }
+        ok
     }
 }
 
