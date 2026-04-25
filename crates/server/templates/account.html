@@ -216,7 +216,7 @@
                             <section class="account-section">
                                 <h2 class="govuk-heading-m">Email addresses</h2>
                                 <p class="govuk-body">
-                                    Your primary email is used to sign in. Additional addresses can also receive alert notifications once verified.
+                                    Your primary email is used to sign in. Additional verified addresses can be added as notification recipients for individual alerts in the Alerts section.
                                 </p>
 
                                 <div id="emails-list"></div>
@@ -517,18 +517,6 @@
                                 ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
                                 : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>'}
                         </td>
-                        <td class="govuk-table__cell">
-                            <div class="govuk-checkboxes govuk-checkboxes--small">
-                                <div class="govuk-checkboxes__item">
-                                    <input class="govuk-checkboxes__input" id="primary-receives-alerts"
-                                        type="checkbox" ${data.receives_alerts ? "checked" : ""}
-                                        onchange="togglePrimaryAlerts(this)" />
-                                    <label class="govuk-label govuk-checkboxes__label" for="primary-receives-alerts">
-                                        Receive alerts
-                                    </label>
-                                </div>
-                            </div>
-                        </td>
                         <td class="govuk-table__cell">—</td>
                     </tr>`;
 
@@ -539,19 +527,6 @@
                             ${e.verified
                                 ? '<strong class="govuk-tag govuk-tag--green">Verified</strong>'
                                 : '<strong class="govuk-tag govuk-tag--yellow">Unverified</strong>'}
-                        </td>
-                        <td class="govuk-table__cell">
-                            ${e.verified ? `
-                            <div class="govuk-checkboxes govuk-checkboxes--small">
-                                <div class="govuk-checkboxes__item">
-                                    <input class="govuk-checkboxes__input" id="email-alerts-${e.id}"
-                                        type="checkbox" ${e.receives_alerts ? "checked" : ""}
-                                        onchange="toggleEmailAlerts('${e.id}', this.checked)" />
-                                    <label class="govuk-label govuk-checkboxes__label" for="email-alerts-${e.id}">
-                                        Receive alerts
-                                    </label>
-                                </div>
-                            </div>` : "—"}
                         </td>
                         <td class="govuk-table__cell">
                             <button type="button"
@@ -567,7 +542,6 @@
                             <tr class="govuk-table__row">
                                 <th scope="col" class="govuk-table__header">Email address</th>
                                 <th scope="col" class="govuk-table__header">Status</th>
-                                <th scope="col" class="govuk-table__header">Alert notifications</th>
                                 <th scope="col" class="govuk-table__header">Actions</th>
                             </tr>
                         </thead>
@@ -586,27 +560,6 @@
             // ---------------------------------------------------------------------------
             // Actions
             // ---------------------------------------------------------------------------
-            async function togglePrimaryAlerts(checkbox) {
-                const res = await apiFetch("/oauth2/account", {
-                    method: "PATCH",
-                    body: JSON.stringify({ receives_alerts: checkbox.checked }),
-                });
-                if (!res || !res.ok) {
-                    checkbox.checked = !checkbox.checked; // revert
-                }
-            }
-
-            async function toggleEmailAlerts(id, value) {
-                const res = await apiFetch("/oauth2/account/emails/" + id, {
-                    method: "PATCH",
-                    body: JSON.stringify({ receives_alerts: value }),
-                });
-                if (!res || !res.ok) {
-                    // Reload to get consistent state.
-                    await loadAccount();
-                }
-            }
-
             async function addEmail(e) {
                 e.preventDefault();
                 const email = document.getElementById("new-email").value.trim();
