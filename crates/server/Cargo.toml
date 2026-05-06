@@ -154,3 +154,7 @@ otlp = ["dep:opentelemetry-otlp", "tracing-opentelemetry"]
 # Recommended backend: Valkey (BSD-3-Clause, Linux Foundation backed).
 # See src/distributed/mod.rs for details.
 redis-backend = ["dep:redis", "dep:deadpool-redis"]
+
+[[bench]]
+name = "federation"
+harness = false

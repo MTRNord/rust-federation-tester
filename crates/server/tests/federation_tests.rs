@@ -163,7 +163,6 @@ mod federation_tests {
             "4.msc4040.s.resolvematrix.dev",
             "5.s.resolvematrix.dev",
             "rory.gay",
-            "draupnir.midnightthoughts.space",
             "continuwuity.codestorm.net",
             "continuwuity.org",
             // Known broken as of now

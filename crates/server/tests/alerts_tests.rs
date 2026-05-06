@@ -28,6 +28,10 @@ fn make_alert(
         is_currently_failing,
         last_recovery_at: None,
         user_id: None,
+        notify_server_name_change: false,
+        notify_version_change: false,
+        notify_tls_cert_change: false,
+        notify_tls_expiry: false,
     }
 }
 
