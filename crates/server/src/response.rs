@@ -9,6 +9,7 @@ use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -113,6 +114,9 @@ pub struct Certificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "DNSNames")]
     pub dnsnames: Option<Vec<String>>,
+    /// Certificate expiry time — omitted from the public JSON API, used only by the alert subsystem.
+    #[serde(skip)]
+    pub not_after: Option<OffsetDateTime>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

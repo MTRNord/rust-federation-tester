@@ -373,6 +373,7 @@ async fn run_healthy_check<P: ConnectionProvider>(
 
     let now = OffsetDateTime::now_utc();
     handle_healthy_report(&a, &report, registry, resources.db.as_ref(), now).await;
+    crate::alerts::change_checks::check_change_alerts(&a, &report, resources, now).await;
 }
 
 /// Dispatch the outcome of an active-loop check to the correct state handler.
@@ -455,6 +456,8 @@ async fn run_active_check<P: ConnectionProvider>(
     };
 
     let now = OffsetDateTime::now_utc();
+    // Change detection borrows `a`; dispatch consumes it — order matters.
+    crate::alerts::change_checks::check_change_alerts(&a, &report, resources, now).await;
     dispatch_active_result(a, state, &report, registry, resources, now).await;
 }
 
@@ -846,7 +849,7 @@ fn extract_failure_reason(report: &Root) -> Option<String> {
 
 /// Log a status event to the `alert_status_history` table.
 #[allow(clippy::too_many_arguments)]
-async fn log_status_event(
+pub(crate) async fn log_status_event(
     db: &sea_orm::DatabaseConnection,
     alert_id: i32,
     server_name: &str,

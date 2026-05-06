@@ -23,6 +23,14 @@ pub struct Model {
     /// Optional link to OAuth2 user for migrated accounts.
     /// Null for legacy magic-link-only alerts.
     pub user_id: Option<String>,
+    /// Send email when the server's self-reported name or well-known delegation target changes.
+    pub notify_server_name_change: bool,
+    /// Send email when the server's software version changes.
+    pub notify_version_change: bool,
+    /// Send email when the set of TLS certificate fingerprints changes.
+    pub notify_tls_cert_change: bool,
+    /// Send email when a TLS certificate is expiring within 14 days.
+    pub notify_tls_expiry: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

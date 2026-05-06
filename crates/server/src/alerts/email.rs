@@ -3,7 +3,10 @@
 //! Handles sending failure and recovery notification emails.
 
 use crate::api::alerts::MagicClaims;
-use crate::email_templates::{FailureEmailTemplate, RecoveryEmailTemplate, env_subject};
+use crate::email_templates::{
+    FailureEmailTemplate, RecoveryEmailTemplate, ServerNameChangeEmailTemplate,
+    TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VersionChangeEmailTemplate, env_subject,
+};
 use crate::entity::email_log;
 use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
 use lettre::AsyncTransport;
@@ -347,6 +350,421 @@ pub async fn send_recovery_email(
     }
 
     Ok(())
+}
+
+/// Send a server name change notification email.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(mailer, config, db, email))]
+pub async fn send_server_name_change_email(
+    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    old_server_name: Option<String>,
+    new_server_name: Option<String>,
+    old_well_known: Vec<String>,
+    new_well_known: Vec<String>,
+) -> Result<(), EmailError> {
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
+    let unsubscribe_url = generate_list_unsubscribe_url(
+        &config.magic_token_secret,
+        email,
+        server_name,
+        alert_id,
+        &config.frontend_url,
+    );
+
+    let template = ServerNameChangeEmailTemplate {
+        server_name: server_name.to_string(),
+        old_server_name,
+        new_server_name,
+        old_well_known,
+        new_well_known,
+        check_url,
+        unsubscribe_url: unsubscribe_url.clone(),
+        environment_name: config.environment_name.clone(),
+    };
+
+    let subject = env_subject(
+        &format!("Federation Alert: server name changed for {server_name}"),
+        config.environment_name.as_deref(),
+    );
+
+    send_change_email(
+        mailer,
+        config,
+        db,
+        email,
+        server_name,
+        alert_id,
+        subject,
+        &template,
+    )
+    .await
+}
+
+/// Send a version change notification email.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(mailer, config, db, email))]
+pub async fn send_version_change_email(
+    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    old_version_name: String,
+    old_version_string: String,
+    new_version_name: String,
+    new_version_string: String,
+) -> Result<(), EmailError> {
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
+    let unsubscribe_url = generate_list_unsubscribe_url(
+        &config.magic_token_secret,
+        email,
+        server_name,
+        alert_id,
+        &config.frontend_url,
+    );
+
+    let template = VersionChangeEmailTemplate {
+        server_name: server_name.to_string(),
+        old_version_name,
+        old_version_string,
+        new_version_name,
+        new_version_string,
+        check_url,
+        unsubscribe_url: unsubscribe_url.clone(),
+        environment_name: config.environment_name.clone(),
+    };
+
+    let subject = env_subject(
+        &format!("Federation Alert: version updated for {server_name}"),
+        config.environment_name.as_deref(),
+    );
+
+    send_change_email(
+        mailer,
+        config,
+        db,
+        email,
+        server_name,
+        alert_id,
+        subject,
+        &template,
+    )
+    .await
+}
+
+/// Send a TLS certificate change notification email.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(mailer, config, db, email))]
+pub async fn send_tls_cert_change_email(
+    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    added_fingerprints: Vec<String>,
+    removed_fingerprints: Vec<String>,
+) -> Result<(), EmailError> {
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
+    let unsubscribe_url = generate_list_unsubscribe_url(
+        &config.magic_token_secret,
+        email,
+        server_name,
+        alert_id,
+        &config.frontend_url,
+    );
+
+    let template = TlsCertChangeEmailTemplate {
+        server_name: server_name.to_string(),
+        added_fingerprints,
+        removed_fingerprints,
+        check_url,
+        unsubscribe_url: unsubscribe_url.clone(),
+        environment_name: config.environment_name.clone(),
+    };
+
+    let subject = env_subject(
+        &format!("Federation Alert: TLS certificates changed for {server_name}"),
+        config.environment_name.as_deref(),
+    );
+
+    send_change_email(
+        mailer,
+        config,
+        db,
+        email,
+        server_name,
+        alert_id,
+        subject,
+        &template,
+    )
+    .await
+}
+
+/// Send a TLS certificate expiry warning email.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(mailer, config, db, email))]
+pub async fn send_tls_expiry_email(
+    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    expires_at: time::OffsetDateTime,
+    days_remaining: i64,
+) -> Result<(), EmailError> {
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
+    let unsubscribe_url = generate_list_unsubscribe_url(
+        &config.magic_token_secret,
+        email,
+        server_name,
+        alert_id,
+        &config.frontend_url,
+    );
+
+    let expires_at_str = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        expires_at.year(),
+        expires_at.month() as u8,
+        expires_at.day(),
+        expires_at.hour(),
+        expires_at.minute(),
+    );
+
+    let template = TlsExpiryEmailTemplate {
+        server_name: server_name.to_string(),
+        expires_at: expires_at_str,
+        days_remaining,
+        check_url,
+        unsubscribe_url: unsubscribe_url.clone(),
+        environment_name: config.environment_name.clone(),
+    };
+
+    let subject = env_subject(
+        &format!(
+            "Federation Alert: TLS certificate for {server_name} expires in {days_remaining} day{}",
+            if days_remaining == 1 { "" } else { "s" }
+        ),
+        config.environment_name.as_deref(),
+    );
+
+    send_change_email(
+        mailer,
+        config,
+        db,
+        email,
+        server_name,
+        alert_id,
+        subject,
+        &template,
+    )
+    .await
+}
+
+/// Shared email-sending helper for all change-notification types.
+///
+/// Renders the template, builds the MIME message, sends via SMTP, and logs
+/// the send to the `email_log` table. The `email_type` recorded in the log
+/// is derived from the template's `email_type()` method.
+#[allow(clippy::too_many_arguments)]
+async fn send_change_email<T>(
+    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    config: &Arc<crate::config::AppConfig>,
+    db: &Arc<sea_orm::DatabaseConnection>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    subject: String,
+    template: &T,
+) -> Result<(), EmailError>
+where
+    T: ChangeEmailTemplate,
+{
+    use lettre::message::{MultiPart, SinglePart};
+
+    let html_body = template.render_html_change().map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_change_email.template_render_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            server_name = %server_name,
+            alert_id = alert_id,
+            email_type = template.email_type(),
+            message = "Failed to render HTML email template"
+        );
+        EmailError::TemplateFailed(e.to_string())
+    })?;
+    let text_body = template.render_text_change();
+    let unsubscribe_url = template.unsubscribe_url();
+
+    let from_mailbox: lettre::message::Mailbox =
+        config
+            .smtp
+            .from
+            .parse()
+            .map_err(|e| EmailError::InvalidAddress {
+                address: config.smtp.from.clone(),
+                detail: format!("{e}"),
+            })?;
+    let to_mailbox: lettre::message::Mailbox =
+        email.parse().map_err(|e| EmailError::InvalidAddress {
+            address: email.to_string(),
+            detail: format!("{e}"),
+        })?;
+
+    let email_msg = lettre::Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .header(lettre::message::header::MIME_VERSION_1_0)
+        .header(UnsubscribeHeader::from(unsubscribe_url))
+        .message_id(None)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                        .body(text_body),
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(lettre::message::header::ContentType::TEXT_HTML)
+                        .body(html_body),
+                ),
+        )
+        .map_err(EmailError::BuildFailed)?;
+
+    mailer.send(email_msg).await.map_err(|e| {
+        tracing::error!(
+            name = "alerts.send_change_email.send_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            server_name = %server_name,
+            alert_id = alert_id,
+            email_type = template.email_type(),
+            message = "Failed to send change alert email"
+        );
+        EmailError::SendFailed(e)
+    })?;
+
+    tracing::info!(
+        target: "rust-federation-tester",
+        email_type = template.email_type(),
+        server_name = %server_name,
+        alert_id = alert_id,
+        "Sent change alert email"
+    );
+
+    let email_log_entry = email_log::ActiveModel {
+        id: ActiveValue::NotSet,
+        alert_id: ActiveValue::Set(alert_id),
+        email: ActiveValue::Set(email.to_string()),
+        server_name: ActiveValue::Set(server_name.to_string()),
+        email_type: ActiveValue::Set(template.email_type().to_string()),
+        sent_at: ActiveValue::Set(time::OffsetDateTime::now_utc()),
+        failure_count: ActiveValue::NotSet,
+    };
+    if let Err(e) = email_log_entry.insert(db.as_ref()).await {
+        tracing::error!(
+            name = "alerts.send_change_email.log_insert_failed",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            error = %e,
+            message = "Failed to log change email to database"
+        );
+    }
+
+    Ok(())
+}
+
+/// Trait implemented by all change-notification email templates.
+trait ChangeEmailTemplate {
+    fn render_html_change(&self) -> Result<String, askama::Error>;
+    fn render_text_change(&self) -> String;
+    fn unsubscribe_url(&self) -> String;
+    fn email_type(&self) -> &'static str;
+}
+
+impl ChangeEmailTemplate for ServerNameChangeEmailTemplate {
+    fn render_html_change(&self) -> Result<String, askama::Error> {
+        self.render_html()
+    }
+    fn render_text_change(&self) -> String {
+        self.render_text()
+    }
+    fn unsubscribe_url(&self) -> String {
+        self.unsubscribe_url.clone()
+    }
+    fn email_type(&self) -> &'static str {
+        "server_name_change"
+    }
+}
+
+impl ChangeEmailTemplate for VersionChangeEmailTemplate {
+    fn render_html_change(&self) -> Result<String, askama::Error> {
+        self.render_html()
+    }
+    fn render_text_change(&self) -> String {
+        self.render_text()
+    }
+    fn unsubscribe_url(&self) -> String {
+        self.unsubscribe_url.clone()
+    }
+    fn email_type(&self) -> &'static str {
+        "version_change"
+    }
+}
+
+impl ChangeEmailTemplate for TlsCertChangeEmailTemplate {
+    fn render_html_change(&self) -> Result<String, askama::Error> {
+        self.render_html()
+    }
+    fn render_text_change(&self) -> String {
+        self.render_text()
+    }
+    fn unsubscribe_url(&self) -> String {
+        self.unsubscribe_url.clone()
+    }
+    fn email_type(&self) -> &'static str {
+        "tls_cert_change"
+    }
+}
+
+impl ChangeEmailTemplate for TlsExpiryEmailTemplate {
+    fn render_html_change(&self) -> Result<String, askama::Error> {
+        self.render_html()
+    }
+    fn render_text_change(&self) -> String {
+        self.render_text()
+    }
+    fn unsubscribe_url(&self) -> String {
+        self.unsubscribe_url.clone()
+    }
+    fn email_type(&self) -> &'static str {
+        "tls_expiry_warning"
+    }
 }
 
 /// Generates a List-Unsubscribe URL for the given alert.

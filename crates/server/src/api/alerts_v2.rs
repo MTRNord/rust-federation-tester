@@ -51,6 +51,14 @@ pub struct AlertDto {
     pub is_currently_failing: bool,
     /// Email addresses that receive notifications for this alert
     pub notify_emails: Vec<String>,
+    /// Notify when the server's self-reported name or well-known delegation target changes
+    pub notify_server_name_change: bool,
+    /// Notify when the server's software version changes
+    pub notify_version_change: bool,
+    /// Notify when the set of TLS certificate fingerprints changes
+    pub notify_tls_cert_change: bool,
+    /// Notify when a TLS certificate is expiring within 14 days
+    pub notify_tls_expiry: bool,
 }
 
 /// Request to create a new alert.
@@ -80,6 +88,16 @@ pub struct UpdateNotifyEmailsRequest {
     pub emails: Vec<String>,
 }
 
+/// Request to update change-notification settings for an alert.
+/// All fields are optional — only provided fields are updated.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateAlertSettingsRequest {
+    pub notify_server_name_change: Option<bool>,
+    pub notify_version_change: Option<bool>,
+    pub notify_tls_cert_change: Option<bool>,
+    pub notify_tls_expiry: Option<bool>,
+}
+
 /// Creates the v2 alerts API router.
 #[tracing::instrument(skip_all)]
 pub fn router() -> OpenApiRouter {
@@ -87,6 +105,7 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(list_alerts_v2, create_alert_v2))
         .routes(routes!(delete_alert_v2))
         .routes(routes!(update_notify_emails))
+        .routes(routes!(update_alert_settings))
 }
 
 /// Build `AlertDto` values from alert models and a pre-loaded email map.
@@ -117,6 +136,10 @@ fn build_alert_dtos(
                 last_check_at: a.last_check_at,
                 is_currently_failing: a.is_currently_failing,
                 notify_emails,
+                notify_server_name_change: a.notify_server_name_change,
+                notify_version_change: a.notify_version_change,
+                notify_tls_cert_change: a.notify_tls_cert_change,
+                notify_tls_expiry: a.notify_tls_expiry,
             }
         })
         .collect()
@@ -291,6 +314,12 @@ async fn create_alert_v2(
         magic_token: Set(None),
         created_at: Set(now),
         user_id: Set(Some(auth.user_id.clone())),
+        // Enable sensible defaults for new registrations; existing alerts
+        // keep the DB default of false (no unexpected emails).
+        notify_server_name_change: Set(true),
+        notify_version_change: Set(true),
+        notify_tls_cert_change: Set(false),
+        notify_tls_expiry: Set(true),
         ..Default::default()
     };
 
@@ -517,7 +546,109 @@ async fn update_notify_emails(
         last_check_at: alert_entity.last_check_at,
         is_currently_failing: alert_entity.is_currently_failing,
         notify_emails: payload.emails,
+        notify_server_name_change: alert_entity.notify_server_name_change,
+        notify_version_change: alert_entity.notify_version_change,
+        notify_tls_cert_change: alert_entity.notify_tls_cert_change,
+        notify_tls_expiry: alert_entity.notify_tls_expiry,
     };
 
     Ok(Json(dto))
+}
+
+/// Update change-notification settings for an alert.
+#[tracing::instrument(skip(resources, auth, payload), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    put,
+    path = "/{id}/settings",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Update Alert Settings",
+    summary = "Update change-notification settings for an alert",
+    description = "Partially updates the change-notification flags for the given alert. \
+                   Only the fields that are present in the request body are modified.\n\n\
+                   **Authentication:** Requires OAuth2 Bearer token with `alerts:write` scope.",
+    security(("OAuth2" = ["alerts:write"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    request_body(content = UpdateAlertSettingsRequest, description = "Settings to update"),
+    responses(
+        (status = 200, description = "Settings updated", body = AlertDto),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Missing required scope or not owner", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn update_alert_settings(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+    Json(payload): Json<UpdateAlertSettingsRequest>,
+) -> Result<Json<AlertDto>, AuthError> {
+    if !auth.has_scope(SCOPE_ALERTS_WRITE) {
+        return Err(AuthError::insufficient_scope(SCOPE_ALERTS_WRITE));
+    }
+
+    let alert_entity = alert::Entity::find_by_id(id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error finding alert {}: {}", id, e);
+            AuthError::server_error()
+        })?
+        .ok_or_else(|| AuthError::not_found("Alert not found"))?;
+
+    let is_owner = alert_entity
+        .user_id
+        .as_ref()
+        .map(|uid| uid == &auth.user_id)
+        .unwrap_or(false)
+        || (alert_entity.user_id.is_none() && alert_entity.email == auth.email);
+    if !is_owner {
+        return Err(AuthError::forbidden("You do not own this alert"));
+    }
+
+    let mut active: alert::ActiveModel = alert_entity.clone().into();
+    if let Some(v) = payload.notify_server_name_change {
+        active.notify_server_name_change = Set(v);
+    }
+    if let Some(v) = payload.notify_version_change {
+        active.notify_version_change = Set(v);
+    }
+    if let Some(v) = payload.notify_tls_cert_change {
+        active.notify_tls_cert_change = Set(v);
+    }
+    if let Some(v) = payload.notify_tls_expiry {
+        active.notify_tls_expiry = Set(v);
+    }
+
+    let updated = active.update(resources.db.as_ref()).await.map_err(|e| {
+        tracing::error!("Failed to update alert settings for {}: {}", id, e);
+        AuthError::server_error()
+    })?;
+
+    tracing::info!(alert_id = id, "Updated alert notification settings");
+
+    let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &[id]).await?;
+    let notify_emails = match emails_by_alert.get(&id) {
+        Some(emails) if !emails.is_empty() => emails.clone(),
+        _ => {
+            if updated.email.is_empty() {
+                vec![]
+            } else {
+                vec![updated.email.clone()]
+            }
+        }
+    };
+
+    Ok(Json(AlertDto {
+        id: updated.id,
+        server_name: updated.server_name,
+        verified: updated.verified,
+        created_at: updated.created_at,
+        last_check_at: updated.last_check_at,
+        is_currently_failing: updated.is_currently_failing,
+        notify_emails,
+        notify_server_name_change: updated.notify_server_name_change,
+        notify_version_change: updated.notify_version_change,
+        notify_tls_cert_change: updated.notify_tls_cert_change,
+        notify_tls_expiry: updated.notify_tls_expiry,
+    }))
 }

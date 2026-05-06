@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Server Name Change: {{ server_name }} - Federation Tester</title>
+    <style type="text/css">
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+        table { border-collapse: collapse !important; }
+        body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; }
+        @media only screen and (max-width: 620px) {
+            .email-container { width: 100% !important; }
+            .mobile-padding { padding: 15px !important; }
+        }
+    </style>
+</head>
+
+<body style="margin: 0; padding: 0; background-color: #f3f2f1; font-family: Arial, sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f3f2f1;">
+        <tr>
+            <td align="center" style="padding: 0;">
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" class="email-container" style="background-color: #ffffff;">
+                    <tr>
+                        <td style="padding: 20px; background-color: #1d70b8;">
+                            <span style="color: #ffffff; font-size: 24px; font-weight: 700; text-decoration: none;">Federation Tester</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px 20px; background-color: #ffffff; border-bottom: 1px solid #b1b4b6;">
+                            <span style="display: inline-block; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #ffffff; background-color: #1d70b8; padding: 4px 8px 3px; margin-right: 10px;">Beta</span>
+                            <span style="color: #0b0c0c; font-size: 14px;">This is a community service for testing Matrix federation.</span>
+                        </td>
+                    </tr>
+                    {% if let Some(env) = environment_name %}
+                    {% if !env.is_empty() && env.to_lowercase() != "production" %}
+                    <tr>
+                        <td style="padding: 10px 20px; background-color: #f47738; border-bottom: 1px solid #b1b4b6;">
+                            <span style="color: #ffffff; font-size: 14px; font-weight: 700;">&#9888; Sent from the {{ env|upper }} environment — not production</span>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endif %}
+                    <tr>
+                        <td style="padding: 40px 20px; background-color: #ffffff;" class="mobile-padding">
+                            <!-- Alert Banner -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 30px;">
+                                <tr>
+                                    <td style="padding: 15px; background-color: #f47738; border: 5px solid #f47738;">
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                            <tr>
+                                                <td style="padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.3);">
+                                                    <span style="color: #ffffff; font-size: 16px; font-weight: 700;">Server name changed</span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding-top: 15px;">
+                                                    <h2 style="color: #ffffff; font-size: 24px; font-weight: 700; line-height: 1.25; margin: 0 0 10px 0;">
+                                                        A change was detected for {{ server_name }}
+                                                    </h2>
+                                                    <p style="color: #ffffff; font-size: 19px; line-height: 1.3; margin: 0;">
+                                                        The server identity has changed since the last check.
+                                                    </p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            {% if let Some(old) = old_server_name %}
+                            {% if let Some(new) = new_server_name %}
+                            {% if old != new %}
+                            <!-- Self-reported name change -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                <tr>
+                                    <td style="padding: 15px 15px 15px 25px; border-left: 10px solid #f47738; background-color: #fef9f0;">
+                                        <p style="color: #0b0c0c; font-size: 16px; font-weight: 700; margin: 0 0 8px 0;">Self-reported server name:</p>
+                                        <p style="color: #0b0c0c; font-size: 16px; margin: 0 0 4px 0;">Was: <code style="font-family: monospace; background: #f3f2f1; padding: 2px 4px;">{{ old }}</code></p>
+                                        <p style="color: #0b0c0c; font-size: 16px; margin: 0;">Now: <code style="font-family: monospace; background: #f3f2f1; padding: 2px 4px;">{{ new }}</code></p>
+                                    </td>
+                                </tr>
+                            </table>
+                            {% endif %}
+                            {% endif %}
+                            {% endif %}
+
+                            {% if old_well_known != new_well_known %}
+                            <!-- Well-known change -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                <tr>
+                                    <td style="padding: 15px 15px 15px 25px; border-left: 10px solid #f47738; background-color: #fef9f0;">
+                                        <p style="color: #0b0c0c; font-size: 16px; font-weight: 700; margin: 0 0 8px 0;">Well-known delegation target(s):</p>
+                                        <p style="color: #0b0c0c; font-size: 16px; font-weight: 600; margin: 0 0 4px 0;">Was:</p>
+                                        {% for entry in old_well_known %}
+                                        <p style="color: #0b0c0c; font-size: 14px; font-family: monospace; margin: 0 0 2px 8px; word-break: break-all;">{{ entry }}</p>
+                                        {% endfor %}
+                                        <p style="color: #0b0c0c; font-size: 16px; font-weight: 600; margin: 8px 0 4px 0;">Now:</p>
+                                        {% for entry in new_well_known %}
+                                        <p style="color: #0b0c0c; font-size: 14px; font-family: monospace; margin: 0 0 2px 8px; word-break: break-all;">{{ entry }}</p>
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                            </table>
+                            {% endif %}
+
+                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0 0 30px 0;">
+                                This may indicate a server migration, reconfiguration, or misconfiguration. Review the full report for details.
+                            </p>
+
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                                <tr>
+                                    <td style="background-color: #00703c;">
+                                        <a href="{{ check_url }}" target="_blank" style="display: inline-block; padding: 12px 20px 10px 20px; font-size: 19px; font-weight: 700; color: #ffffff; text-decoration: none; box-shadow: 0 2px 0 #002d18;">
+                                            View full report
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 30px 20px; background-color: #f0f4f5; border-top: 10px solid #1d70b8;">
+                            <p style="color: #0b0c0c; font-size: 16px; line-height: 1.25; margin: 0 0 15px 0;">
+                                Federation Tester is a community project for testing Matrix homeserver federation.
+                            </p>
+                            <p style="margin: 0;">
+                                <a href="{{ unsubscribe_url }}" style="color: #1d70b8; font-size: 16px; text-decoration: underline;">Unsubscribe from these alerts</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+
+</html>

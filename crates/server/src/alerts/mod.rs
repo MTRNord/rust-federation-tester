@@ -10,6 +10,7 @@
 //! - `email` - Email sending for notifications
 //! - `checks` - Two batch check loops and reminder logic
 
+pub mod change_checks;
 pub mod checks;
 pub mod email;
 

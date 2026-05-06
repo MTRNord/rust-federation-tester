@@ -282,6 +282,235 @@ The Federation Tester Team"#,
     }
 }
 
+/// Template for server name change notification emails
+#[derive(Template)]
+#[template(path = "server_name_change_email.html")]
+pub struct ServerNameChangeEmailTemplate {
+    pub server_name: String,
+    pub old_server_name: Option<String>,
+    pub new_server_name: Option<String>,
+    pub old_well_known: Vec<String>,
+    pub new_well_known: Vec<String>,
+    pub check_url: String,
+    pub unsubscribe_url: String,
+    pub environment_name: Option<String>,
+}
+
+impl ServerNameChangeEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+        let mut changes = String::new();
+
+        if let (Some(old), Some(new)) = (&self.old_server_name, &self.new_server_name)
+            && old != new
+        {
+            changes.push_str(&format!(
+                "\nSelf-reported server name:\n  Was: {old}\n  Now: {new}\n"
+            ));
+        }
+        if self.old_well_known != self.new_well_known {
+            changes.push_str("\nWell-known delegation target(s):\n  Was:");
+            for e in &self.old_well_known {
+                changes.push_str(&format!("\n    {e}"));
+            }
+            changes.push_str("\n  Now:");
+            for e in &self.new_well_known {
+                changes.push_str(&format!("\n    {e}"));
+            }
+            changes.push('\n');
+        }
+
+        format!(
+            r#"{}Hello,
+
+A change was detected for your server '{}'.
+{}
+This may indicate a server migration, reconfiguration, or misconfiguration. Review the full report for details.
+
+{}
+
+Best regards,
+The Federation Tester Team
+
+---
+Unsubscribe: {}"#,
+            env_banner, self.server_name, changes, self.check_url, self.unsubscribe_url
+        )
+    }
+}
+
+/// Template for server version change notification emails
+#[derive(Template)]
+#[template(path = "version_change_email.html")]
+pub struct VersionChangeEmailTemplate {
+    pub server_name: String,
+    pub old_version_name: String,
+    pub old_version_string: String,
+    pub new_version_name: String,
+    pub new_version_string: String,
+    pub check_url: String,
+    pub unsubscribe_url: String,
+    pub environment_name: Option<String>,
+}
+
+impl VersionChangeEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+        format!(
+            r#"{}Hello,
+
+A software update was detected for your server '{}'.
+
+  Was: {} {}
+  Now: {} {}
+
+This is an informational notification. No action is required unless this update was unexpected.
+
+{}
+
+Best regards,
+The Federation Tester Team
+
+---
+Unsubscribe: {}"#,
+            env_banner,
+            self.server_name,
+            self.old_version_name,
+            self.old_version_string,
+            self.new_version_name,
+            self.new_version_string,
+            self.check_url,
+            self.unsubscribe_url
+        )
+    }
+}
+
+/// Template for TLS certificate change notification emails
+#[derive(Template)]
+#[template(path = "tls_cert_change_email.html")]
+pub struct TlsCertChangeEmailTemplate {
+    pub server_name: String,
+    pub added_fingerprints: Vec<String>,
+    pub removed_fingerprints: Vec<String>,
+    pub check_url: String,
+    pub unsubscribe_url: String,
+    pub environment_name: Option<String>,
+}
+
+impl TlsCertChangeEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+        let mut body = String::new();
+
+        if !self.added_fingerprints.is_empty() {
+            body.push_str("\nNew certificates (added):\n");
+            for fp in &self.added_fingerprints {
+                body.push_str(&format!("  {fp}\n"));
+            }
+        }
+        if !self.removed_fingerprints.is_empty() {
+            body.push_str("\nOld certificates (removed):\n");
+            for fp in &self.removed_fingerprints {
+                body.push_str(&format!("  {fp}\n"));
+            }
+        }
+
+        format!(
+            r#"{}Hello,
+
+The TLS certificate fingerprints changed for your server '{}'.
+{}
+Certificate rotation is normal for Let's Encrypt and similar CAs. Verify this change was expected.
+
+{}
+
+Best regards,
+The Federation Tester Team
+
+---
+Unsubscribe: {}"#,
+            env_banner, self.server_name, body, self.check_url, self.unsubscribe_url
+        )
+    }
+}
+
+/// Template for TLS certificate expiry warning emails
+#[derive(Template)]
+#[template(path = "tls_expiry_email.html")]
+pub struct TlsExpiryEmailTemplate {
+    pub server_name: String,
+    /// Pre-formatted expiry date string (UTC).
+    pub expires_at: String,
+    pub days_remaining: i64,
+    pub check_url: String,
+    pub unsubscribe_url: String,
+    pub environment_name: Option<String>,
+}
+
+impl TlsExpiryEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+        let urgency = if self.days_remaining <= 7 {
+            "URGENT: "
+        } else {
+            ""
+        };
+        format!(
+            r#"{}Hello,
+
+{}A TLS certificate for your server '{}' expires in {} day{}.
+
+Expiry date: {}
+
+An expired TLS certificate will cause federation checks to fail and prevent other Matrix homeservers from connecting to yours. Renew your certificate before it expires.
+
+{}
+
+Best regards,
+The Federation Tester Team
+
+---
+Unsubscribe: {}"#,
+            env_banner,
+            urgency,
+            self.server_name,
+            self.days_remaining,
+            if self.days_remaining == 1 { "" } else { "s" },
+            self.expires_at,
+            self.check_url,
+            self.unsubscribe_url
+        )
+    }
+}
+
 /// Template for OAuth2 magic link sign-in emails
 #[derive(Template)]
 #[template(path = "magic_link_email.html")]

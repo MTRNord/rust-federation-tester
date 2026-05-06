@@ -44,6 +44,10 @@ pub fn extract_certificate_info(
         }
     }
 
+    let not_after =
+        ::time::OffsetDateTime::from_unix_timestamp(x509_cert.validity().not_after.timestamp())
+            .ok();
+
     Some(Certificate {
         subject_common_name: subject_cn,
         issuer_common_name: issuer_cn,
@@ -53,5 +57,6 @@ pub fn extract_certificate_info(
         } else {
             Some(dns_names)
         },
+        not_after,
     })
 }
