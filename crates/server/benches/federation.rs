@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// Criterion benchmarks for the main federation-check path.
 ///
 /// # Note
@@ -10,8 +12,6 @@
 /// cargo bench --bench federation -- full_check
 /// cargo bench --bench federation -- validation_only
 /// ```
-use std::time::Duration;
-
 use criterion::{Criterion, criterion_group, criterion_main};
 use hickory_resolver::Resolver;
 use hickory_resolver::config::ResolverConfig;
@@ -46,14 +46,13 @@ fn bench_full_check(c: &mut Criterion) {
     let pool = ConnectionPool::default();
 
     let mut group = c.benchmark_group("full_check");
-    // Real network I/O: each sample can take several seconds.
-    group.sample_size(10);
-    group.measurement_time(Duration::from_secs(60));
+    group.sample_size(200);
+    group.measurement_time(Duration::from_mins(2));
 
-    group.bench_function("matrix.org", |b| {
+    group.bench_function("mtrnord.blog", |b| {
         b.iter(|| {
             rt.block_on(async {
-                generate_json_report("matrix.org", &resolver, &pool)
+                generate_json_report("mtrnord.blog", &resolver, &pool)
                     .await
                     .expect("federation check failed")
             })
@@ -73,7 +72,6 @@ fn bench_validation_only(c: &mut Criterion) {
     let pool = ConnectionPool::default();
 
     let mut group = c.benchmark_group("validation_only");
-    // No network — fast enough for a large sample count.
     group.sample_size(200);
 
     // Server name that fails parse_and_validate_server_name immediately.

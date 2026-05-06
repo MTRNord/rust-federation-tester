@@ -348,42 +348,21 @@ pub async fn generate_json_report<P: ConnectionProvider>(
         }
     } else {
         // We have per-IP well-known outcomes — handle each IP individually.
+        // Parallelize DNS lookups for IPs that had successful well-known responses.
+        let mut dns_futures: FuturesUnordered<_> = FuturesUnordered::new();
+
         for (probed_ip, found_server_opt) in &well_known_phase.per_ip_found_server {
             match found_server_opt {
                 Some(delegated_server) => {
                     // Well-known succeeded on this IP.  The delegated server may resolve to
                     // different IPs (or the same), so we run the normal DNS phase for it.
-                    let dns_phase = lookup_server(delegated_server, resolver).await;
-
-                    // Merge DNS results into resp_data for reporting (dedup addrs).
-                    for addr in &dns_phase.addrs {
-                        if !resp_data.dnsresult.addrs.contains(addr) {
-                            resp_data.dnsresult.addrs.push(addr.clone());
-                        }
-                    }
-                    for (k, v) in &dns_phase.srv_targets {
-                        resp_data
-                            .dnsresult
-                            .srv_targets
-                            .entry(k.clone())
-                            .or_insert_with(|| v.clone());
-                    }
-                    if dns_phase.srvskipped {
-                        resp_data.dnsresult.srvskipped = true;
-                    }
-
-                    for addr in &dns_phase.addrs {
-                        connection_targets.push((
-                            addr.clone(),
-                            delegated_server.clone(),
-                            delegated_server.clone(),
-                        ));
-                    }
-
-                    // Record which connection addresses this well-known IP led to.
-                    if let Some(wk_result) = resp_data.well_known_result.get_mut(probed_ip) {
-                        wk_result.connection_addresses = dns_phase.addrs.clone();
-                    }
+                    let probed_ip = probed_ip.clone();
+                    let delegated_server = delegated_server.clone();
+                    let resolver = resolver.clone();
+                    dns_futures.push(async move {
+                        let dns_phase = lookup_server(&delegated_server, &resolver).await;
+                        (probed_ip, delegated_server, dns_phase)
+                    });
                 }
                 None => {
                     // Well-known failed on this IP → spec step 6: use port 8448 directly.
@@ -418,6 +397,39 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                         wk_result.connection_addresses = vec![fallback_addr];
                     }
                 }
+            }
+        }
+
+        // Collect all parallel DNS results and merge them.
+        while let Some((probed_ip, delegated_server, dns_phase)) = dns_futures.next().await {
+            // Merge DNS results into resp_data for reporting (dedup addrs).
+            for addr in &dns_phase.addrs {
+                if !resp_data.dnsresult.addrs.contains(addr) {
+                    resp_data.dnsresult.addrs.push(addr.clone());
+                }
+            }
+            for (k, v) in &dns_phase.srv_targets {
+                resp_data
+                    .dnsresult
+                    .srv_targets
+                    .entry(k.clone())
+                    .or_insert_with(|| v.clone());
+            }
+            if dns_phase.srvskipped {
+                resp_data.dnsresult.srvskipped = true;
+            }
+
+            for addr in &dns_phase.addrs {
+                connection_targets.push((
+                    addr.clone(),
+                    delegated_server.clone(),
+                    delegated_server.clone(),
+                ));
+            }
+
+            // Record which connection addresses this well-known IP led to.
+            if let Some(wk_result) = resp_data.well_known_result.get_mut(&probed_ip) {
+                wk_result.connection_addresses = dns_phase.addrs.clone();
             }
         }
 

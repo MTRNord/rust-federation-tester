@@ -32,16 +32,22 @@ pub async fn connection_check(
         (v_first, k_first, false, false)
     } else {
         sleep(Duration::from_millis(500)).await;
-        let v = if v_err {
-            query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c).await
-        } else {
-            v_first
-        };
-        let k = if k_err {
-            fetch_keys(&addr_c, &server_host_c, &sni_c).await
-        } else {
-            k_first
-        };
+        let (v, k) = tokio::join!(
+            async {
+                if v_err {
+                    query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c).await
+                } else {
+                    v_first
+                }
+            },
+            async {
+                if k_err {
+                    fetch_keys(&addr_c, &server_host_c, &sni_c).await
+                } else {
+                    k_first
+                }
+            },
+        );
         (v, k, v_err, k_err)
     };
 

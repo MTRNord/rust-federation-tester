@@ -78,15 +78,21 @@ pub async fn lookup_server<P: ConnectionProvider>(
     let mut errors: Vec<Error> = vec![];
 
     if !server_name.contains(':') {
+        // Fire both SRV lookups simultaneously — halves worst-case latency when either times out.
+        let fed_name = format!("_matrix-fed._tcp.{server_name}.");
+        let matrix_name = format!("_matrix._tcp.{server_name}.");
+        let (fed_result, matrix_result) = tokio::join!(
+            timeout(network_timeout(), resolver.srv_lookup(&fed_name)),
+            timeout(network_timeout(), resolver.srv_lookup(&matrix_name)),
+        );
+
         let mut found_srv_records = false;
         let mut srv_errors = vec![];
-        for srv_prefix in ["_matrix-fed._tcp", "_matrix._tcp"] {
-            let srv_records = match timeout(
-                network_timeout(),
-                resolver.srv_lookup(&format!("{srv_prefix}.{server_name}.")),
-            )
-            .await
-            {
+        for (srv_prefix, timeout_result) in [
+            ("_matrix-fed._tcp", fed_result),
+            ("_matrix._tcp", matrix_result),
+        ] {
+            let srv_records = match timeout_result {
                 Ok(r) => r,
                 Err(e) => {
                     srv_errors.push(Error {
@@ -218,15 +224,16 @@ pub async fn lookup_server<P: ConnectionProvider>(
         srvskipped = true;
     }
 
+    let pending: Vec<(String, Vec<SRVData>)> =
+        std::mem::take(&mut srv_targets).into_iter().collect();
     let mut lookup_tasks = FuturesUnordered::new();
-    for (host, records) in srv_targets.clone() {
+    for (host, records) in pending {
         let resolver = resolver.clone();
         let host = if host.ends_with('.') {
             host
         } else {
             format!("{host}.")
         };
-        let records = records.clone();
         lookup_tasks.push(async move {
             // Run CNAME, A, and AAAA lookups in parallel so a CNAME timeout
             // does not delay the A/AAAA results.
