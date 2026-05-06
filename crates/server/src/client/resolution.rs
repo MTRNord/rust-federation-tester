@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HomeserverInfo {
@@ -16,9 +19,8 @@ struct WellKnown {
 
 #[tracing::instrument()]
 pub async fn resolve_client_side_api(server_name: &str) -> String {
-    // Fetch the well-known configuration
     let url = format!("https://{}/.well-known/matrix/client", server_name);
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let resp = client
         .get(&url)
         .header("User-Agent", "rust-federation-tester/0.1")
@@ -72,7 +74,7 @@ pub async fn fetch_client_server_versions(cs_server_address: &str) -> ClientVers
         message = "Fetching client versions",
         url = %url
     );
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let resp = client
         .get(&url)
         .header("User-Agent", "rust-federation-tester/0.1")

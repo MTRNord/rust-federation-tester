@@ -17,7 +17,7 @@ use axum::{
     response::IntoResponse,
 };
 use hickory_resolver::{Resolver, name_server::ConnectionProvider};
-use hyper::{HeaderMap, StatusCode};
+use hyper::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -59,7 +59,48 @@ pub fn router<P: ConnectionProvider>(state: AppState<P>, debug_mode: bool) -> Op
     r.with_state(state)
 }
 
-#[tracing::instrument(skip(state, headers, resources))]
+/// Spawn stats collection in the background so it does not block the response.
+fn spawn_stats(
+    params_server_name: String,
+    server_name_lower: String,
+    federation_ok: bool,
+    version_name: String,
+    version_string: String,
+    resources: crate::AppResources,
+) {
+    tokio::spawn(async move {
+        let (unstable_enabled, unstable_announced) = if federation_ok {
+            let cs_address = resolve_client_side_api(&params_server_name).await;
+            let cs_versions = fetch_client_server_versions(&cs_address).await;
+            if let Some(features) = cs_versions.unstable_features {
+                let enabled: Vec<String> = features
+                    .iter()
+                    .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
+                    .collect();
+                let announced: Vec<String> = features.keys().cloned().collect();
+                (Some(enabled), Some(announced))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        stats::record_event(
+            &resources,
+            StatEvent {
+                server_name: &server_name_lower,
+                federation_ok,
+                version_name: Some(&version_name),
+                version_string: Some(&version_string),
+                unstable_features_enabled: unstable_enabled.as_deref(),
+                unstable_features_announced: unstable_announced.as_deref(),
+            },
+        )
+        .await;
+    });
+}
+
+#[tracing::instrument(skip(state, resources))]
 #[utoipa::path(
     get,
     path = "/report",
@@ -84,92 +125,53 @@ pub fn router<P: ConnectionProvider>(state: AppState<P>, debug_mode: bool) -> Op
 )]
 async fn get_report<P: ConnectionProvider>(
     Query(params): Query<ApiParams>,
-    headers: HeaderMap,
     State(state): State<AppState<P>>,
     axum::Extension(resources): axum::Extension<crate::AppResources>,
-) -> impl IntoResponse {
-    let span = tracing::span!(
-        tracing::Level::INFO,
-        "Received request for federation report"
-    );
-    return span
-        .in_scope(async move || {
-            tracing::info!(
-                "Received request for federation report with headers: {:?}",
-                headers
-            );
-            if params.server_name.is_empty() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "server_name parameter is required" })),
+) -> axum::response::Response {
+    if params.server_name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "server_name parameter is required" })),
+        )
+            .into_response();
+    }
+
+    let server_name_lower = params.server_name.to_lowercase();
+
+    match generate_json_report(
+        &server_name_lower,
+        state.resolver.as_ref(),
+        &state.connection_pool,
+    )
+    .await
+    {
+        Ok(report) => {
+            if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
+                spawn_stats(
+                    params.server_name.clone(),
+                    server_name_lower,
+                    report.federation_ok,
+                    report.version.name.clone(),
+                    report.version.version.clone(),
+                    resources,
                 );
             }
-
-            let server_name_lower = params.server_name.to_lowercase();
-
-            match generate_json_report(
-                &server_name_lower,
-                state.resolver.as_ref(),
-                &state.connection_pool,
+            (StatusCode::OK, Json(report)).into_response()
+        }
+        Err(e) => {
+            tracing::error!(
+                name = "api.get_report.failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = ?e,
+                message = "Error generating report"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Failed to generate report: {e}") })),
             )
-            .await
-            {
-                Ok(report) => {
-                    if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
-                        // Fetch client-server versions for unstable features tracking
-                        let (unstable_enabled, unstable_announced) = if report.federation_ok {
-                            let cs_address = resolve_client_side_api(&params.server_name).await;
-                            let cs_versions = fetch_client_server_versions(&cs_address).await;
-
-                            if let Some(features) = cs_versions.unstable_features {
-                                let enabled: Vec<String> = features
-                                    .iter()
-                                    .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
-                                    .collect();
-                                let announced: Vec<String> = features.keys().cloned().collect();
-                                (Some(enabled), Some(announced))
-                            } else {
-                                (None, None)
-                            }
-                        } else {
-                            (None, None)
-                        };
-
-                        stats::record_event(
-                            &resources,
-                            StatEvent {
-                                server_name: &server_name_lower,
-                                federation_ok: report.federation_ok,
-                                version_name: Some(&report.version.name),
-                                version_string: Some(&report.version.version),
-                                unstable_features_enabled: unstable_enabled.as_deref(),
-                                unstable_features_announced: unstable_announced.as_deref(),
-                            },
-                        )
-                        .await;
-                    }
-                    // Convert the report to a Value for JSON serialization
-                    let report = serde_json::to_value(report)
-                        .unwrap_or_else(|_| json!({ "error": "Failed to serialize report" }));
-                    (StatusCode::OK, Json(report))
-                }
-                Err(e) => {
-                    tracing::error!(
-                        name = "api.get_report.failed",
-                        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                        error = ?e,
-                        message = "Error generating report"
-                    );
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": format!("Failed to generate report: {}", e)
-                        })),
-                    )
-                }
-            }
-        })
-        .await;
+                .into_response()
+        }
+    }
 }
 
 #[tracing::instrument(skip(state, resources))]
@@ -215,37 +217,14 @@ async fn get_fed_ok<P: ConnectionProvider>(
     {
         Ok(report) => {
             if params.stats_opt_in.unwrap_or(false) && resources.config.statistics.enabled {
-                // Fetch client-server versions for unstable features tracking
-                let (unstable_enabled, unstable_announced) = if report.federation_ok {
-                    let cs_address = resolve_client_side_api(&params.server_name).await;
-                    let cs_versions = fetch_client_server_versions(&cs_address).await;
-
-                    if let Some(features) = cs_versions.unstable_features {
-                        let enabled: Vec<String> = features
-                            .iter()
-                            .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
-                            .collect();
-                        let announced: Vec<String> = features.keys().cloned().collect();
-                        (Some(enabled), Some(announced))
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                };
-
-                stats::record_event(
-                    &resources,
-                    StatEvent {
-                        server_name: &server_name_lower,
-                        federation_ok: report.federation_ok,
-                        version_name: Some(&report.version.name),
-                        version_string: Some(&report.version.version),
-                        unstable_features_enabled: unstable_enabled.as_deref(),
-                        unstable_features_announced: unstable_announced.as_deref(),
-                    },
-                )
-                .await;
+                spawn_stats(
+                    params.server_name.clone(),
+                    server_name_lower,
+                    report.federation_ok,
+                    report.version.name.clone(),
+                    report.version.version.clone(),
+                    resources,
+                );
             }
             (
                 StatusCode::OK,
