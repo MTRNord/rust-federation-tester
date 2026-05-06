@@ -104,14 +104,19 @@ jobs:
             !~/.cargo/registry/src
           key: rust-registry-${{hashFiles('**/Cargo.lock') }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Cargo Test
         run: |
-          cargo test \
+          cargo nextest run \
             --workspace \
             --locked \
-            --profile test \
+            --cargo-profile test \
             --all-targets \
-            --no-fail-fast
+            --profile ci
 
       - name: Show sccache stats
         if: always()

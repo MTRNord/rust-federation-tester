@@ -1,4 +1,4 @@
-# This workflow runs code coverage using cargo-llvm-cov and uploads as GitHub artifact
+# This workflow runs code coverage using cargo-llvm-cov + cargo-nextest and uploads as GitHub artifact
 # No external services required
 
 name: Coverage
@@ -16,24 +16,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+      - name: Add llvm-tools component
+        run: rustup component add llvm-tools-preview
+
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
         with:
-          toolchain: nightly
-          components: llvm-tools-preview
+          tool: cargo-llvm-cov,nextest
 
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov
-
-      - name: Generate coverage report
+      - name: Collect coverage data
         run: |
-          cargo llvm-cov --workspace --exclude loadtest --exclude migration --lcov --output-path lcov.info
-          cargo llvm-cov --workspace --exclude loadtest --exclude migration --html --output-dir target/coverage/html
+          cargo llvm-cov nextest \
+            --workspace \
+            --exclude loadtest \
+            --exclude migration \
+            --profile ci \
+            --no-report
+
+      - name: Generate coverage reports
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --html --output-dir target/coverage/html
 
       - name: Extract coverage percentage
         id: coverage
         run: |
-          COVERAGE=$(cargo llvm-cov --workspace --exclude loadtest --exclude migration --summary-only | grep -oP '\d+\.\d+(?=%)' | tail -1)
+          COVERAGE=$(cargo llvm-cov report --summary-only | grep -oP '\d+\.\d+(?=%)' | tail -1)
           echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
           echo "Coverage: $COVERAGE%"
 
@@ -56,13 +64,13 @@ jobs:
           script: |
             const coverage = '${{ steps.coverage.outputs.percentage }}';
             const comment = `## Coverage Report
-            
+
             **Current Coverage: ${coverage}%**
-            
+
             📊 [View detailed HTML report](../../actions/runs/${{ github.run_id }})
-            
+
             Target: 60-80% coverage`;
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
