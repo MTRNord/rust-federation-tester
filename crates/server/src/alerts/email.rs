@@ -18,6 +18,14 @@ use tracing::info;
 /// Email sending policy configuration - reminder interval.
 pub const REMINDER_EMAIL_INTERVAL: Duration = Duration::from_secs(12 * 3600); // 12 hours
 
+/// Return `url` with exactly one trailing slash.
+///
+/// Prevents double-slash URLs when the configured `frontend_url` already
+/// ends with `/` and it is concatenated with a path segment.
+fn frontend_base(url: &str) -> String {
+    format!("{}/", url.trim_end_matches('/'))
+}
+
 /// Error type for email sending operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EmailError {
@@ -44,7 +52,11 @@ pub async fn send_failure_email(
     failure_count: i32,
     failure_reason: Option<String>,
 ) -> Result<(), EmailError> {
-    let check_url = format!("{}results?serverName={}", config.frontend_url, server_name);
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
@@ -203,7 +215,11 @@ pub async fn send_recovery_email(
     server_name: &str,
     alert_id: i32,
 ) -> Result<(), EmailError> {
-    let check_url = format!("{}?serverName={}", config.frontend_url, server_name);
+    let check_url = format!(
+        "{}results?serverName={}",
+        frontend_base(&config.frontend_url),
+        server_name
+    );
 
     let unsubscribe_url = generate_list_unsubscribe_url(
         &config.magic_token_secret,
@@ -357,7 +373,7 @@ pub fn generate_list_unsubscribe_url(
         &EncodingKey::from_secret(secret),
     )
     .unwrap_or_default();
-    format!("{frontend_url}/verify?token={token}")
+    format!("{}verify?token={token}", frontend_base(frontend_url))
 }
 
 /// Custom List-Unsubscribe header for email messages.
