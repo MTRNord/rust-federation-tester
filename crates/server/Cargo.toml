@@ -156,5 +156,9 @@ otlp = ["dep:opentelemetry-otlp", "tracing-opentelemetry"]
 redis-backend = ["dep:redis", "dep:deadpool-redis"]
 
 [[bench]]
-name = "federation"
+name = "full_check"
+harness = false
+
+[[bench]]
+name = "validation_only"
 harness = false

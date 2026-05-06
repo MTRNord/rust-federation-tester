@@ -99,7 +99,7 @@ pub async fn fetch_url_pooled_simple(
         using_connection_pool = true
     );
     match connection_pool.get_connection(addr, sni).await {
-        Ok(mut sender) => {
+        Ok((mut sender, tls_info)) => {
             let req = Request::builder()
                 .uri(path)
                 .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
@@ -109,7 +109,7 @@ pub async fn fetch_url_pooled_simple(
             match sender.send_request(req).await {
                 Ok(response) => {
                     connection_pool
-                        .return_connection(addr, sni, "anonymous", sender)
+                        .return_connection(addr, sni, "anonymous", sender, tls_info)
                         .await;
                     return Ok(Some(response));
                 }
@@ -154,6 +154,28 @@ pub async fn fetch_url_pooled_simple(
         .connect(domain, stream)
         .await
         .map_err(|e| FetchError::Tls(e.to_string()))?;
+
+    let (_, conn_info) = tls_stream.get_ref();
+    let tls_info = std::sync::Arc::new(crate::connection_pool::TlsConnectionInfo {
+        protocol: conn_info
+            .protocol_version()
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_default(),
+        cipher_suite: conn_info
+            .negotiated_cipher_suite()
+            .map(|c| c.suite().as_str().unwrap_or("unknown").to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        certificates: conn_info
+            .peer_certificates()
+            .map(|certs| {
+                certs
+                    .iter()
+                    .filter_map(crate::federation::certificate::extract_certificate_info)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    });
+
     let io = TokioIo::new(tls_stream);
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
         .await
@@ -179,7 +201,7 @@ pub async fn fetch_url_pooled_simple(
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
     connection_pool
-        .return_connection(addr, sni, "anonymous", sender)
+        .return_connection(addr, sni, "anonymous", sender, tls_info)
         .await;
     Ok(Some(response))
 }

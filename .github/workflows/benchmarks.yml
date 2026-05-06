@@ -15,8 +15,11 @@ permissions:
 
 jobs:
   benchmarks:
-    name: Run benchmarks
+    name: Run benchmarks (${{ matrix.bench }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bench: [full_check, validation_only]
     steps:
       - uses: actions/checkout@v5
       - name: Setup rust toolchain, cache and cargo-codspeed binary
@@ -25,10 +28,32 @@ jobs:
           channel: stable
           cache-target: release
           bins: cargo-codspeed
-      - name: Build the benchmark target(s)
-        run: cargo codspeed build
+      - name: Build the benchmark target
+        run: cargo codspeed build --bench ${{ matrix.bench }}
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v4
         with:
           mode: simulation
-          run: cargo codspeed run
+          run: cargo codspeed run --bench ${{ matrix.bench }}
+
+  memory:
+    name: Memory benchmarks (${{ matrix.bench }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bench: [full_check, validation_only]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup rust toolchain, cache and cargo-codspeed binary
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+      - name: Build the benchmark target
+        run: cargo codspeed build --bench ${{ matrix.bench }}
+      - name: Run the memory benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: memory
+          run: cargo codspeed run --bench ${{ matrix.bench }}

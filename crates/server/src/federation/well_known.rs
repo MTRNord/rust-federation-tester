@@ -276,7 +276,13 @@ async fn fetch_url_with_redirects(
     loop {
         let response = timeout(
             timeout_duration,
-            fetch_url_custom_sni_host(&current_path, &current_addr, &current_host, &current_sni),
+            fetch_url_custom_sni_host(
+                &current_path,
+                &current_addr,
+                &current_host,
+                &current_sni,
+                None,
+            ),
         )
         .await;
         match response {

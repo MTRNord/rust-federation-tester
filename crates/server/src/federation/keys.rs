@@ -1,3 +1,4 @@
+use crate::connection_pool::ConnectionPool;
 use crate::error::FetchError;
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::federation::well_known::network_timeout;
@@ -23,16 +24,17 @@ pub struct FullKeysResponse {
     pub keys_string: String,
 }
 
-#[tracing::instrument()]
+#[tracing::instrument(skip(pool))]
 pub async fn fetch_keys(
     addr: &str,
     server_name: &str,
     sni: &str,
+    pool: &ConnectionPool,
 ) -> color_eyre::eyre::Result<FullKeysResponse> {
     let timeout_duration = network_timeout();
     let response = timeout(
         timeout_duration,
-        fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni),
+        fetch_url_custom_sni_host("/_matrix/key/v2/server", addr, server_name, sni, Some(pool)),
     )
     .await
     .map_err(|_| color_eyre::eyre::eyre!("Timeout while fetching keys"))?

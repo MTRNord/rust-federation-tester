@@ -21,7 +21,7 @@ pub async fn connection_check(
     // First attempt: run version and keys fetches in parallel.
     let (v_first, k_first) = tokio::join!(
         query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c),
-        fetch_keys(&addr_c, &server_host_c, &sni_c)
+        fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c)
     );
     let (v_err, k_err) = (v_first.is_err(), k_first.is_err());
 
@@ -42,7 +42,7 @@ pub async fn connection_check(
             },
             async {
                 if k_err {
-                    fetch_keys(&addr_c, &server_host_c, &sni_c).await
+                    fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c).await
                 } else {
                     k_first
                 }

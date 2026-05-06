@@ -1,4 +1,6 @@
+use crate::federation::certificate::extract_certificate_info;
 use crate::optimization::get_shared_tls_config;
+use crate::response::Certificate;
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::FutureExt;
@@ -14,7 +16,19 @@ use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
 
 type ConnectionKey = (Arc<str>, Arc<str>); // (addr, sni)
-type PooledConnection = SendRequest<Empty<Bytes>>;
+type PooledConnection = (SendRequest<Empty<Bytes>>, Arc<TlsConnectionInfo>);
+
+/// TLS metadata captured at handshake time and stored alongside the pooled connection.
+///
+/// Reusing a pooled connection means no new TLS handshake, so this cached info is
+/// returned to callers (like `fetch_keys`) that need cert/protocol data without paying
+/// the cost of a fresh handshake.
+#[derive(Debug, Clone, Default)]
+pub struct TlsConnectionInfo {
+    pub protocol: String,
+    pub cipher_suite: String,
+    pub certificates: Vec<Certificate>,
+}
 
 /// Tracks how many live connections a single client (identified by IP) currently holds.
 /// Used to enforce the per-client connection cap and prevent one caller from exhausting
@@ -100,7 +114,7 @@ impl ConnectionPool {
         }
     }
 
-    /// Get a connection from the pool or create a new one.
+    /// Get a connection from the pool or create a new one, returning TLS metadata.
     ///
     /// Uses `"anonymous"` as the client ID. Call [`get_connection_with_client_id`] when
     /// the caller's IP is available to enforce per-client limits.
@@ -109,7 +123,7 @@ impl ConnectionPool {
         &self,
         addr: &str,
         sni: &str,
-    ) -> color_eyre::eyre::Result<PooledConnection> {
+    ) -> color_eyre::eyre::Result<(SendRequest<Empty<Bytes>>, Arc<TlsConnectionInfo>)> {
         self.get_connection_with_client_id(addr, sni, "anonymous")
             .await
     }
@@ -118,13 +132,17 @@ impl ConnectionPool {
     ///
     /// Returns an error immediately if the client has reached `max_connections_per_client`
     /// live connections — this is intentional back-pressure, not a server error.
+    ///
+    /// The returned `Arc<TlsConnectionInfo>` holds the cert/protocol/cipher data captured
+    /// when the connection was originally established. Callers that don't need this can
+    /// ignore it but must pass it back to `return_connection` to preserve it in the pool.
     #[tracing::instrument(skip(self))]
     pub async fn get_connection_with_client_id(
         &self,
         addr: &str,
         sni: &str,
         client_id: &str,
-    ) -> color_eyre::eyre::Result<PooledConnection> {
+    ) -> color_eyre::eyre::Result<(SendRequest<Empty<Bytes>>, Arc<TlsConnectionInfo>)> {
         if !self.client_within_limit(client_id) {
             return Err(color_eyre::eyre::eyre!("Client connection limit exceeded"));
         }
@@ -134,11 +152,11 @@ impl ConnectionPool {
         // Try to reuse an idle connection from the pool.
         if let Some(pool) = self.pools.get(&key) {
             let mut connections = pool.lock().await;
-            while let Some(mut conn) = connections.pop() {
-                if conn.ready().await.is_ok() {
+            while let Some((mut sender, tls_info)) = connections.pop() {
+                if sender.ready().await.is_ok() {
                     tracing::debug!(addr, sni, client_id, "reusing pooled connection");
                     self.increment_client_usage(client_id);
-                    return Ok(conn);
+                    return Ok((sender, tls_info));
                 }
                 // Connection is dead — discard and try the next one.
             }
@@ -150,25 +168,29 @@ impl ConnectionPool {
         }
 
         tracing::debug!(addr, sni, client_id, "creating new pooled connection");
-        let conn = self.create_new_connection(addr, sni).await?;
+        let (sender, tls_info) = self.create_new_connection(addr, sni).await?;
         self.increment_client_usage(client_id);
-        Ok(conn)
+        Ok((sender, tls_info))
     }
 
     /// Return a connection to the pool so it can be reused by the next caller.
     ///
+    /// `tls_info` must be the value returned by `get_connection` / `get_connection_with_client_id`
+    /// so the TLS metadata is preserved for the next caller that needs it.
+    ///
     /// Uses `now_or_never()` rather than `.await` on the readiness check deliberately:
     /// we don't want to block the caller while probing a connection that might be slow
     /// to signal health. If it isn't immediately ready we simply discard it.
-    #[tracing::instrument(skip(self, conn))]
+    #[tracing::instrument(skip(self, sender))]
     pub async fn return_connection(
         &self,
         addr: &str,
         sni: &str,
         client_id: &str,
-        mut conn: PooledConnection,
+        mut sender: SendRequest<Empty<Bytes>>,
+        tls_info: Arc<TlsConnectionInfo>,
     ) {
-        if conn.ready().now_or_never().is_some_and(|r| r.is_ok()) {
+        if sender.ready().now_or_never().is_some_and(|r| r.is_ok()) {
             let key = (Arc::from(addr), Arc::from(sni));
             let pool = self.pools.entry(key).or_insert_with(|| {
                 Arc::new(Mutex::new(Vec::with_capacity(self.max_connections_per_key)))
@@ -177,7 +199,7 @@ impl ConnectionPool {
             let mut connections = pool.lock().await;
             if connections.len() < self.max_connections_per_key {
                 tracing::debug!(addr, sni, "returned connection to pool");
-                connections.push(conn);
+                connections.push((sender, tls_info));
             }
         }
 
@@ -195,9 +217,9 @@ impl ConnectionPool {
             let before = connections.len();
 
             let mut healthy = Vec::with_capacity(connections.len());
-            for mut conn in connections.drain(..) {
-                if conn.ready().now_or_never().is_some_and(|r| r.is_ok()) {
-                    healthy.push(conn);
+            for (mut sender, tls_info) in connections.drain(..) {
+                if sender.ready().now_or_never().is_some_and(|r| r.is_ok()) {
+                    healthy.push((sender, tls_info));
                 }
             }
             *connections = healthy;
@@ -276,13 +298,13 @@ impl ConnectionPool {
         }
     }
 
-    /// Open a fresh TCP + TLS connection and complete the HTTP/1.1 handshake.
+    /// Open a fresh TCP + TLS connection, capturing TLS metadata, and complete the HTTP/1.1 handshake.
     #[tracing::instrument(skip(self))]
     async fn create_new_connection(
         &self,
         addr: &str,
         sni: &str,
-    ) -> color_eyre::eyre::Result<PooledConnection> {
+    ) -> color_eyre::eyre::Result<(SendRequest<Empty<Bytes>>, Arc<TlsConnectionInfo>)> {
         // Strip brackets and port to get the bare hostname for SNI.
         let sni_host = if sni.starts_with('[') {
             &sni[1..sni.find(']').unwrap_or(sni.len())]
@@ -298,6 +320,27 @@ impl ConnectionPool {
             .map_err(|_| color_eyre::eyre::eyre!("Invalid domain name: {}", sni_host))?;
 
         let tls_stream = connector.connect(domain, stream).await?;
+
+        // Capture TLS metadata before consuming the stream into TokioIo.
+        let (_, conn_info) = tls_stream.get_ref();
+        let protocol = conn_info
+            .protocol_version()
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_default();
+        let cipher_suite = conn_info
+            .negotiated_cipher_suite()
+            .map(|c| c.suite().as_str().unwrap_or("unknown").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let certificates = conn_info
+            .peer_certificates()
+            .map(|certs| certs.iter().filter_map(extract_certificate_info).collect())
+            .unwrap_or_default();
+        let tls_info = Arc::new(TlsConnectionInfo {
+            protocol,
+            cipher_suite,
+            certificates,
+        });
+
         let io = TokioIo::new(tls_stream);
 
         let (sender, conn) = hyper::client::conn::http1::handshake(io).await?;
@@ -308,7 +351,7 @@ impl ConnectionPool {
             }
         });
 
-        Ok(sender)
+        Ok((sender, tls_info))
     }
 
     /// Evict idle connections until we are back within `max_total_connections`.
