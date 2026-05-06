@@ -1,3 +1,6 @@
+[experimental]
+benchmarks = true
+
 [profile.default]
 slow-timeout = { period = "60s" }
 
