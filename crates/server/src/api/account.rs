@@ -1,13 +1,15 @@
 //! Account management API endpoints (OAuth2-authenticated).
 //!
-//! - `GET    /`               Account info + additional emails
-//! - `PATCH  /`               Toggle primary email receives_alerts
-//! - `DELETE /`               Delete account (GDPR)
-//! - `GET    /export`         GDPR data export (JSON download)
-//! - `POST   /emails`         Add an additional email
-//! - `GET    /emails/verify`  Verify an additional email via token link
-//! - `PATCH  /emails/{id}`    Toggle receives_alerts on an additional email
-//! - `DELETE /emails/{id}`    Remove an additional email
+//! - `GET    /`                      Account info + additional emails
+//! - `PATCH  /`                      Toggle primary email receives_alerts
+//! - `DELETE /`                      Delete account (GDPR)
+//! - `GET    /export`                GDPR data export (JSON download)
+//! - `POST   /emails`                Add an additional email
+//! - `GET    /emails/verify`         Verify an additional email via token link
+//! - `PATCH  /emails/{id}`           Toggle receives_alerts on an additional email
+//! - `DELETE /emails/{id}`           Remove an additional email
+//! - `POST   /emails/{id}/primary`   Promote additional email to primary
+//! - `POST   /emails/{id}/resend`    Re-send verification email for an additional email
 
 use crate::AppResources;
 use crate::api::auth::{AuthError, OAuth2Auth};
@@ -180,6 +182,8 @@ pub fn router() -> OpenApiRouter {
         // verify must be registered before /{id} so the static segment wins
         .routes(routes!(verify_email))
         .routes(routes!(update_email, remove_email))
+        .routes(routes!(make_primary_email))
+        .routes(routes!(resend_verification_email))
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,6 +1074,144 @@ async fn find_owned_email(
 
     Ok(row)
 }
+
+// ---------------------------------------------------------------------------
+// POST /emails/{id}/resend  — re-send verification for an unverified additional email
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip(resources, auth), fields(user_id = %auth.user_id, email_id = %id))]
+#[utoipa::path(
+    post,
+    path = "/emails/{id}/resend",
+    tag = ACCOUNT_TAG,
+    operation_id = "Resend Verification Email",
+    summary = "Re-send the verification email for an unverified additional email address",
+    security(("OAuth2" = ["openid"])),
+    params(("id" = String, Path, description = "Email record ID")),
+    responses(
+        (status = 204, description = "Verification email queued"),
+        (status = 400, description = "Email is already verified", body = AuthError),
+        (status = 401, description = "Unauthorized", body = AuthError),
+        (status = 404, description = "Not found", body = AuthError),
+    )
+)]
+async fn resend_verification_email(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AuthError> {
+    let row = find_owned_email(&resources, &id, &auth.user_id).await?;
+
+    if row.verified {
+        return Err(AuthError::bad_request("Email is already verified"));
+    }
+
+    let token = generate_verification_token();
+    let now = OffsetDateTime::now_utc();
+    let expires = now + time::Duration::hours(24);
+
+    let mut active: user_email::ActiveModel = row.into();
+    active.verification_token = Set(Some(token.clone()));
+    active.verification_expires_at = Set(Some(expires));
+    let updated = active
+        .update(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    if let Err(e) = send_verification_email(&resources, &updated.email, &token).await {
+        tracing::error!("Failed to enqueue re-verification email: {}", e);
+        return Err(AuthError::server_error());
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// POST /emails/{id}/primary  — promote an additional email to primary
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip(resources, auth), fields(user_id = %auth.user_id, email_id = %id))]
+#[utoipa::path(
+    post,
+    path = "/emails/{id}/primary",
+    tag = ACCOUNT_TAG,
+    operation_id = "Make Email Primary",
+    summary = "Promote a verified additional email to be the primary login email",
+    security(("OAuth2" = ["openid"])),
+    params(("id" = String, Path, description = "Email record ID")),
+    responses(
+        (status = 204, description = "Primary email updated"),
+        (status = 400, description = "Email must be verified first", body = AuthError),
+        (status = 401, description = "Unauthorized", body = AuthError),
+        (status = 404, description = "Not found", body = AuthError),
+    )
+)]
+async fn make_primary_email(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AuthError> {
+    let row = find_owned_email(&resources, &id, &auth.user_id).await?;
+
+    if !row.verified {
+        return Err(AuthError::bad_request(
+            "Email must be verified before making it primary",
+        ));
+    }
+
+    let db = resources.db.as_ref();
+    let new_primary = row.email.clone();
+    let old_primary = auth.email.clone();
+
+    let user = oauth2_user::Entity::find_by_id(&auth.user_id)
+        .one(db)
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(AuthError::server_error)?;
+
+    // Demote old primary → additional email unless already there
+    let already_secondary = user_email::Entity::find()
+        .filter(user_email::Column::Email.eq(&old_primary))
+        .filter(user_email::Column::UserId.eq(&auth.user_id))
+        .one(db)
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    if already_secondary.is_none() {
+        user_email::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            user_id: Set(auth.user_id.clone()),
+            email: Set(old_primary),
+            verified: Set(user.email_verified),
+            receives_alerts: Set(user.receives_alerts),
+            verification_token: Set(None),
+            verification_expires_at: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+        }
+        .insert(db)
+        .await
+        .map_err(|_| AuthError::server_error())?;
+    }
+
+    // Promote new primary in oauth2_user
+    let mut user_active: oauth2_user::ActiveModel = user.into();
+    user_active.email = Set(new_primary);
+    user_active.email_verified = Set(true);
+    user_active
+        .update(db)
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    // Remove the promoted address from the secondary table
+    user_email::Entity::delete_by_id(&id)
+        .exec(db)
+        .await
+        .map_err(|_| AuthError::server_error())?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
 
 async fn send_verification_email(
     resources: &AppResources,
