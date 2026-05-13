@@ -18,6 +18,8 @@ pub struct Model {
     pub verified: bool,
     /// Whether this address receives alert notification emails.
     pub receives_alerts: bool,
+    /// IANA timezone name used for quiet-hours interpretation (e.g. "Europe/Berlin").
+    pub timezone: String,
     #[serde(skip_serializing)]
     pub verification_token: Option<String>,
     #[serde(skip_serializing)]

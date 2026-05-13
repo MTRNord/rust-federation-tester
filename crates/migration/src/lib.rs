@@ -24,6 +24,7 @@ mod m20260425_000000_add_alert_notification_emails;
 mod m20260425_000001_add_change_alert_support;
 mod m20260506_000000_add_missing_indexes;
 mod m20260513_000001_add_quiet_hours;
+mod m20260513_000002_add_email_timezone;
 
 pub struct Migrator;
 
@@ -55,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260425_000001_add_change_alert_support::Migration),
             Box::new(m20260506_000000_add_missing_indexes::Migration),
             Box::new(m20260513_000001_add_quiet_hours::Migration),
+            Box::new(m20260513_000002_add_email_timezone::Migration),
         ]
     }
 }

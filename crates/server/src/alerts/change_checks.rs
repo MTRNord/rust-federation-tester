@@ -269,8 +269,8 @@ async fn check_server_name_change(
         return;
     }
 
-    let emails = get_notification_emails(db, a).await;
-    for email in &emails {
+    let recipients = get_notification_emails(db, a).await;
+    for email in recipients.iter().map(|r| r.email.as_str()) {
         if let Err(e) = send_server_name_change_email(
             mailer,
             &resources.config,
@@ -361,8 +361,8 @@ async fn check_version_change(
         return;
     }
 
-    let emails = get_notification_emails(db, a).await;
-    for email in &emails {
+    let recipients = get_notification_emails(db, a).await;
+    for email in recipients.iter().map(|r| r.email.as_str()) {
         if let Err(e) = send_version_change_email(
             mailer,
             &resources.config,
@@ -461,8 +461,8 @@ async fn check_tls_cert_change(
         return;
     }
 
-    let emails = get_notification_emails(db, a).await;
-    for email in &emails {
+    let recipients = get_notification_emails(db, a).await;
+    for email in recipients.iter().map(|r| r.email.as_str()) {
         if let Err(e) = send_tls_cert_change_email(
             mailer,
             &resources.config,
@@ -545,9 +545,9 @@ async fn check_tls_expiry(
         return None;
     }
 
-    let emails = get_notification_emails(db, a).await;
+    let recipients = get_notification_emails(db, a).await;
     let mut any_sent = false;
-    for email in &emails {
+    for email in recipients.iter().map(|r| r.email.as_str()) {
         if send_tls_expiry_email(
             mailer,
             &resources.config,

@@ -275,6 +275,7 @@ async fn register_submit(
         email_verification_expires_at: Set(Some(verification_expires)),
         password_reset_token: NotSet,
         password_reset_expires_at: NotSet,
+        timezone: Set("UTC".to_string()),
     };
 
     if let Err(e) = user.insert(state.db.as_ref()).await {

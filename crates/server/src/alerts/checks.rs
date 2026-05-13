@@ -33,7 +33,9 @@ use crate::connection_pool::ConnectionPool;
 use crate::distributed::{Lock, Registry};
 use crate::email_outbox;
 use crate::email_templates::{FailureEmailTemplate, env_subject};
-use crate::entity::{alert, alert_notification_email, alert_status_history};
+use crate::entity::{
+    alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
+};
 use crate::response::{Root, generate_json_report};
 use hickory_resolver::Resolver;
 use hickory_resolver::name_server::ConnectionProvider;
@@ -42,6 +44,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time_tz::{OffsetDateTimeExt, PrimitiveDateTimeExt, timezones};
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 
@@ -76,7 +79,8 @@ const EVENT_EMAIL_RECOVERY: &str = "email_recovery";
 // Quiet hours helper
 // ---------------------------------------------------------------------------
 
-/// Check whether `now` (UTC) falls within the quiet window defined by `from`/`to` (both "HH:MM").
+/// Check whether `now` (UTC) falls within the quiet window defined by `from`/`to` (both "HH:MM"),
+/// interpreted in the recipient's `timezone` (IANA name, e.g. "Europe/Berlin").
 /// Handles overnight windows (e.g., "22:00" → "07:00").
 ///
 /// Returns `Some(wake_at)` — the UTC time when the quiet window ends — if we are currently
@@ -86,12 +90,13 @@ fn quiet_hours_end(
     from: &str,
     to: &str,
     now: OffsetDateTime,
+    timezone: &str,
 ) -> Option<OffsetDateTime> {
     if !enabled {
         return None;
     }
 
-    let parse_hm = |s: &str| -> Option<(u32, u32)> {
+    let parse_hm = |s: &str| -> Option<(u8, u8)> {
         let (h, m) = s.split_once(':')?;
         Some((h.parse().ok()?, m.parse().ok()?))
     };
@@ -99,15 +104,17 @@ fn quiet_hours_end(
     let (fh, fm) = parse_hm(from)?;
     let (th, tm) = parse_hm(to)?;
 
-    let now_mins = now.hour() as u32 * 60 + now.minute() as u32;
-    let from_mins = fh * 60 + fm;
-    let to_mins = th * 60 + tm;
+    let tz = timezones::get_by_name(timezone).unwrap_or(timezones::db::UTC);
+    let now_local = now.to_timezone(tz);
 
-    let in_window = if from_mins <= to_mins {
-        // Same-day window (e.g., 09:00–17:00)
+    let now_mins = now_local.hour() as u32 * 60 + now_local.minute() as u32;
+    let from_mins = fh as u32 * 60 + fm as u32;
+    let to_mins = th as u32 * 60 + tm as u32;
+
+    let overnight = from_mins > to_mins;
+    let in_window = if !overnight {
         now_mins >= from_mins && now_mins < to_mins
     } else {
-        // Overnight window (e.g., 22:00–07:00)
         now_mins >= from_mins || now_mins < to_mins
     };
 
@@ -115,13 +122,17 @@ fn quiet_hours_end(
         return None;
     }
 
-    let minutes_until_end: u32 = if now_mins < to_mins {
-        to_mins - now_mins
+    // Build the local end time, advancing to next day for the evening side of overnight windows.
+    let local_date = now_local.date();
+    let end_date = if overnight && now_mins >= from_mins {
+        local_date.next_day()?
     } else {
-        (24 * 60 - now_mins) + to_mins
+        local_date
     };
 
-    Some(now + time::Duration::minutes(minutes_until_end as i64))
+    let end_time = time::Time::from_hms(th, tm, 0).ok()?;
+    let end_primitive = time::PrimitiveDateTime::new(end_date, end_time);
+    Some(end_primitive.assume_timezone_utc(tz))
 }
 
 /// Queue a failure notification email to the outbox, delayed until `send_after`.
@@ -661,21 +672,14 @@ async fn promote_to_confirmed_failing(
     if !resources.email_guard.try_claim(a.id, "failure").await {
         return;
     }
-    let emails = get_notification_emails(db, &a).await;
-    let wake_at = quiet_hours_end(
-        a.quiet_hours_enabled,
-        &a.quiet_hours_from,
-        &a.quiet_hours_to,
-        now,
-    );
+    let recipients = get_notification_emails(db, &a).await;
     let any_sent = dispatch_failure_emails(
         resources,
         &a,
-        &emails,
+        &recipients,
         updated.failure_count,
         failure_reason,
         now,
-        wake_at,
     )
     .await;
     if any_sent {
@@ -697,19 +701,26 @@ async fn promote_to_confirmed_failing(
 async fn dispatch_failure_emails(
     resources: &AppResources,
     a: &alert::Model,
-    emails: &[String],
+    recipients: &[NotificationRecipient],
     failure_count: i32,
     failure_reason: Option<String>,
     now: OffsetDateTime,
-    wake_at: Option<OffsetDateTime>,
 ) -> bool {
     let db = resources.db.as_ref();
-    if let Some(send_after) = wake_at {
-        for email in emails {
+    let mut any_sent = false;
+    for r in recipients {
+        let wake_at = quiet_hours_end(
+            a.quiet_hours_enabled,
+            &a.quiet_hours_from,
+            &a.quiet_hours_to,
+            now,
+            &r.timezone,
+        );
+        if let Some(send_after) = wake_at {
             queue_failure_email_delayed(
                 db,
                 &resources.config,
-                email,
+                &r.email,
                 &a.server_name,
                 a.id,
                 failure_count,
@@ -718,26 +729,20 @@ async fn dispatch_failure_emails(
                 send_after,
             )
             .await;
-        }
-        return !emails.is_empty();
-    }
-    let Some(mailer) = &resources.mailer else {
-        return false;
-    };
-    let mut any_sent = false;
-    for email in emails {
-        if send_failure_email(
-            mailer,
-            &resources.config,
-            &resources.db,
-            email,
-            &a.server_name,
-            a.id,
-            failure_count,
-            failure_reason.clone(),
-        )
-        .await
-        .is_ok()
+            any_sent = true;
+        } else if let Some(mailer) = &resources.mailer
+            && send_failure_email(
+                mailer,
+                &resources.config,
+                &resources.db,
+                &r.email,
+                &a.server_name,
+                a.id,
+                failure_count,
+                failure_reason.clone(),
+            )
+            .await
+            .is_ok()
         {
             any_sent = true;
         }
@@ -817,29 +822,31 @@ async fn handle_confirmed_failure(
         return;
     };
 
-    // During quiet hours, skip reminders entirely — the next reminder cycle
-    // (12 h later) will fall outside the window in the common case.
-    let in_quiet = quiet_hours_end(
-        a.quiet_hours_enabled,
-        &a.quiet_hours_from,
-        &a.quiet_hours_to,
-        now,
-    )
-    .is_some();
-
     if send_reminder
-        && !in_quiet
         && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "reminder").await
     {
-        let emails = get_notification_emails(db, &a).await;
+        let recipients = get_notification_emails(db, &a).await;
         let mut any_sent = false;
-        for email in &emails {
+        for r in &recipients {
+            // Skip reminders for recipients currently in their quiet window —
+            // the next 12-hour cycle will likely fall outside it.
+            let in_quiet = quiet_hours_end(
+                a.quiet_hours_enabled,
+                &a.quiet_hours_from,
+                &a.quiet_hours_to,
+                now,
+                &r.timezone,
+            )
+            .is_some();
+            if in_quiet {
+                continue;
+            }
             if send_failure_email(
                 mailer,
                 &resources.config,
                 &resources.db,
-                email,
+                &r.email,
                 &a.server_name,
                 a.id,
                 updated.failure_count,
@@ -895,14 +902,14 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
         && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "recovery").await
     {
-        let emails = get_notification_emails(db, &a).await;
+        let recipients = get_notification_emails(db, &a).await;
         let mut any_sent = false;
-        for email in &emails {
+        for r in &recipients {
             if send_recovery_email(
                 mailer,
                 &resources.config,
                 &resources.db,
-                email,
+                &r.email,
                 &a.server_name,
                 a.id,
             )
@@ -987,7 +994,14 @@ async fn update_email_sent_at(
     let _ = active.update(db).await;
 }
 
-/// Return the notification email addresses for an alert.
+/// A notification recipient with their timezone for quiet-hours interpretation.
+#[derive(Debug, PartialEq)]
+pub struct NotificationRecipient {
+    pub email: String,
+    pub timezone: String,
+}
+
+/// Return notification recipients (email + timezone) for an alert.
 ///
 /// For OAuth2 alerts (`user_id` set): queries `alert_notification_email`.
 /// Falls back to `alert.email` if the table is empty (e.g. pre-migration row).
@@ -995,10 +1009,8 @@ async fn update_email_sent_at(
 pub async fn get_notification_emails(
     db: &sea_orm::DatabaseConnection,
     alert: &alert::Model,
-) -> Vec<String> {
-    // Check the table for ALL alerts (both OAuth2 and legacy). A legacy alert
-    // that the user has updated via PUT /notify-emails will have rows here.
-    match alert_notification_email::Entity::find()
+) -> Vec<NotificationRecipient> {
+    let emails: Vec<String> = match alert_notification_email::Entity::find()
         .filter(alert_notification_email::Column::AlertId.eq(alert.id))
         .all(db)
         .await
@@ -1009,14 +1021,42 @@ pub async fn get_notification_emails(
             .filter(|e| !e.is_empty())
             .collect(),
         _ => {
-            // Fall back to alert.email for uninitialized or legacy alerts.
             if alert.email.is_empty() {
                 vec![]
             } else {
                 vec![alert.email.clone()]
             }
         }
+    };
+
+    let mut recipients = Vec::with_capacity(emails.len());
+    for email in emails {
+        let timezone = get_email_timezone(db, &email).await;
+        recipients.push(NotificationRecipient { email, timezone });
     }
+    recipients
+}
+
+/// Look up the IANA timezone stored for an email address.
+///
+/// Checks `user_email` first (additional addresses), then `oauth2_user`
+/// (primary login email). Falls back to "UTC" if the address is not found.
+async fn get_email_timezone(db: &sea_orm::DatabaseConnection, email: &str) -> String {
+    if let Ok(Some(row)) = user_email::Entity::find()
+        .filter(user_email::Column::Email.eq(email))
+        .one(db)
+        .await
+    {
+        return row.timezone;
+    }
+    if let Ok(Some(row)) = oauth2_user::Entity::find()
+        .filter(oauth2_user::Column::Email.eq(email))
+        .one(db)
+        .await
+    {
+        return row.timezone;
+    }
+    "UTC".to_string()
 }
 
 /// Extract a human-readable failure reason from a federation report.

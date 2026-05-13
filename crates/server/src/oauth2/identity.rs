@@ -78,6 +78,7 @@ impl IdentityService {
             email_verification_expires_at: Set(None),
             password_reset_token: NotSet,
             password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
         };
 
         user.insert(self.db.as_ref()).await

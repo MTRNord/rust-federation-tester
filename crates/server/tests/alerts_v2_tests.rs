@@ -52,6 +52,7 @@ async fn create_test_user(
         email_verification_expires_at: Set(None),
         password_reset_token: sea_orm::ActiveValue::NotSet,
         password_reset_expires_at: sea_orm::ActiveValue::NotSet,
+        timezone: Set("UTC".to_string()),
     };
     user.insert(db).await.expect("Failed to create test user")
 }
@@ -547,6 +548,7 @@ async fn create_additional_email(
         email: Set(email.to_string()),
         verified: Set(verified),
         receives_alerts: Set(true),
+        timezone: Set("UTC".to_string()),
         verification_token: Set(None),
         verification_expires_at: Set(None),
         created_at: Set(now),
@@ -658,9 +660,10 @@ async fn test_get_notification_emails_oauth2_alert() {
     create_notification_email(db.as_ref(), alert.id, "extra@example.com").await;
 
     let emails = get_notification_emails(db.as_ref(), &alert).await;
-    assert_eq!(emails.len(), 2);
-    assert!(emails.contains(&"user@example.com".to_string()));
-    assert!(emails.contains(&"extra@example.com".to_string()));
+    let email_addrs: Vec<&str> = emails.iter().map(|r| r.email.as_str()).collect();
+    assert_eq!(email_addrs.len(), 2);
+    assert!(email_addrs.contains(&"user@example.com"));
+    assert!(email_addrs.contains(&"extra@example.com"));
 }
 
 #[tokio::test]
@@ -679,7 +682,10 @@ async fn test_get_notification_emails_legacy_alert() {
     .await;
 
     let emails = get_notification_emails(db.as_ref(), &alert).await;
-    assert_eq!(emails, vec!["legacy@example.com".to_string()]);
+    assert_eq!(
+        emails.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+        vec!["legacy@example.com"]
+    );
 }
 
 #[tokio::test]
@@ -700,7 +706,10 @@ async fn test_get_notification_emails_empty_table_fallback() {
 
     let emails = get_notification_emails(db.as_ref(), &alert).await;
     // Falls back to alert.email when the table is empty
-    assert_eq!(emails, vec!["user@example.com".to_string()]);
+    assert_eq!(
+        emails.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+        vec!["user@example.com"]
+    );
 }
 
 #[tokio::test]

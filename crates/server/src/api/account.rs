@@ -48,6 +48,7 @@ pub struct EmailDto {
     pub email: String,
     pub verified: bool,
     pub receives_alerts: bool,
+    pub timezone: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -59,6 +60,7 @@ impl From<user_email::Model> for EmailDto {
             email: m.email,
             verified: m.verified,
             receives_alerts: m.receives_alerts,
+            timezone: m.timezone,
             created_at: m.created_at,
         }
     }
@@ -72,6 +74,8 @@ pub struct AccountInfoResponse {
     pub email_verified: bool,
     /// Whether the primary login email receives alert notifications.
     pub receives_alerts: bool,
+    /// IANA timezone for quiet-hours interpretation.
+    pub timezone: String,
     /// Whether the user has a password set (false for magic-link-only accounts).
     pub has_password: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -84,6 +88,7 @@ pub struct AccountInfoResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdatePrimaryRequest {
     pub receives_alerts: bool,
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -94,6 +99,7 @@ pub struct AddEmailRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateEmailRequest {
     pub receives_alerts: bool,
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -410,6 +416,7 @@ async fn get_account(
         name: user.name,
         email_verified: user.email_verified,
         receives_alerts: user.receives_alerts,
+        timezone: user.timezone,
         has_password,
         created_at: user.created_at,
         last_login_at: user.last_login_at,
@@ -448,6 +455,9 @@ async fn update_primary_settings(
 
     let mut active: oauth2_user::ActiveModel = user.into();
     active.receives_alerts = Set(payload.receives_alerts);
+    if let Some(tz) = payload.timezone {
+        active.timezone = Set(tz);
+    }
     let updated = active
         .update(resources.db.as_ref())
         .await
@@ -469,6 +479,7 @@ async fn update_primary_settings(
         name: updated.name,
         email_verified: updated.email_verified,
         receives_alerts: updated.receives_alerts,
+        timezone: updated.timezone,
         has_password,
         created_at: updated.created_at,
         last_login_at: updated.last_login_at,
@@ -870,6 +881,7 @@ async fn add_email(
         email: Set(email.clone()),
         verified: Set(false),
         receives_alerts: Set(false),
+        timezone: Set("UTC".to_string()),
         verification_token: Set(Some(token.clone())),
         verification_expires_at: Set(Some(expires)),
         created_at: Set(now),
@@ -990,6 +1002,9 @@ async fn update_email(
 
     let mut active: user_email::ActiveModel = row.into();
     active.receives_alerts = Set(payload.receives_alerts);
+    if let Some(tz) = payload.timezone {
+        active.timezone = Set(tz);
+    }
     let updated = active
         .update(resources.db.as_ref())
         .await
@@ -1184,6 +1199,7 @@ async fn make_primary_email(
             email: Set(old_primary),
             verified: Set(user.email_verified),
             receives_alerts: Set(user.receives_alerts),
+            timezone: Set(user.timezone.clone()),
             verification_token: Set(None),
             verification_expires_at: Set(None),
             created_at: Set(OffsetDateTime::now_utc()),
@@ -1193,10 +1209,11 @@ async fn make_primary_email(
         .map_err(|_| AuthError::server_error())?;
     }
 
-    // Promote new primary in oauth2_user
+    // Promote new primary in oauth2_user — carry the promoted email's timezone
     let mut user_active: oauth2_user::ActiveModel = user.into();
     user_active.email = Set(new_primary);
     user_active.email_verified = Set(true);
+    user_active.timezone = Set(row.timezone);
     user_active
         .update(db)
         .await
