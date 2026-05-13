@@ -113,6 +113,14 @@ pub struct AppConfig {
     /// Leave unset (the default) to send plain unlabelled emails.
     #[serde(default)]
     pub environment_name: Option<String>,
+    /// URL for the GitHub Sponsors page. When set, a sponsor link is shown in the
+    /// OAuth2 consent page footer. Leave unset to hide the sponsoring section.
+    #[serde(default)]
+    pub github_sponsors_url: Option<String>,
+    /// URL for the Liberapay page. When set, a sponsor link is shown in the
+    /// OAuth2 consent page footer. Leave unset to hide the sponsoring section.
+    #[serde(default)]
+    pub liberapay_url: Option<String>,
 }
 
 impl fmt::Debug for AppConfig {
@@ -129,6 +137,8 @@ impl fmt::Debug for AppConfig {
             .field("allow_private_targets", &self.allow_private_targets)
             .field("redis", &self.redis)
             .field("environment_name", &self.environment_name)
+            .field("github_sponsors_url", &self.github_sponsors_url)
+            .field("liberapay_url", &self.liberapay_url)
             .finish()
     }
 }

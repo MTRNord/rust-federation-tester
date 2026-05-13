@@ -4,7 +4,7 @@
 //! - Consent page (GET) - Shows what permissions the application is requesting
 //! - Consent submission (POST) - Handles approve/deny
 
-use crate::entity::{oauth2_authorization, oauth2_client, oauth2_user};
+use crate::entity::{oauth2_authorization, oauth2_client, oauth2_token, oauth2_user};
 use crate::oauth2::{generate_verification_token, state::OAuth2State};
 use askama::Template;
 use axum::{
@@ -14,7 +14,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use base64::Engine;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -25,35 +25,38 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub struct ScopeInfo {
     pub name: String,
     pub description: String,
+    pub scope_key: String,
 }
 
 /// Get human-readable scope information.
 fn get_scope_info(scope: &str) -> ScopeInfo {
-    match scope {
-        "openid" => ScopeInfo {
-            name: "OpenID".to_string(),
-            description: "Verify your identity".to_string(),
-        },
-        "email" => ScopeInfo {
-            name: "Email".to_string(),
-            description: "Access your email address".to_string(),
-        },
-        "profile" => ScopeInfo {
-            name: "Profile".to_string(),
-            description: "Access your profile information".to_string(),
-        },
-        "alerts:read" => ScopeInfo {
-            name: "Read Alerts".to_string(),
-            description: "View your alert subscriptions".to_string(),
-        },
-        "alerts:write" => ScopeInfo {
-            name: "Write Alerts".to_string(),
-            description: "Create and delete alert subscriptions".to_string(),
-        },
-        _ => ScopeInfo {
-            name: scope.to_string(),
-            description: format!("Access to {}", scope),
-        },
+    let (name, description) = match scope {
+        "openid" => (
+            "Verify your identity",
+            "Confirm who you are. Required for sign-in.",
+        ),
+        "email" => (
+            "Read your email address",
+            "See the email address associated with your account.",
+        ),
+        "profile" => (
+            "Read your profile",
+            "See your account email address and creation date. Cannot see your password.",
+        ),
+        "alerts:read" => (
+            "Read alert state",
+            "See which servers you watch and their current health status.",
+        ),
+        "alerts:write" => (
+            "Manage your alerts",
+            "Create, edit and delete alert subscriptions on your behalf.",
+        ),
+        _ => (scope, "Access to this resource."),
+    };
+    ScopeInfo {
+        name: name.to_string(),
+        description: description.to_string(),
+        scope_key: scope.to_string(),
     }
 }
 
@@ -63,9 +66,15 @@ fn get_scope_info(scope: &str) -> ScopeInfo {
 struct ConsentTemplate {
     user_email: String,
     client_name: String,
+    client_initials: String,
+    client_id: String,
     scopes: Vec<ScopeInfo>,
     consent_token: String,
     frontend_url: String,
+    is_new_client: bool,
+    has_write_scope: bool,
+    github_sponsors_url: Option<String>,
+    liberapay_url: Option<String>,
 }
 
 /// Data encoded in the consent token.
@@ -182,12 +191,36 @@ async fn consent_page(
         .map(get_scope_info)
         .collect();
 
+    let has_write_scope = scopes.iter().any(|s| s.scope_key.contains(":write"));
+
+    let is_new_client = oauth2_token::Entity::find()
+        .filter(oauth2_token::Column::UserId.eq(&consent_data.user_id))
+        .filter(oauth2_token::Column::ClientId.eq(&consent_data.client_id))
+        .one(state.db.as_ref())
+        .await
+        .unwrap_or(None)
+        .is_none();
+
+    let client_initials = client
+        .name
+        .chars()
+        .take(2)
+        .collect::<String>()
+        .to_lowercase();
+    let client_id = consent_data.client_id.clone();
+
     let template = ConsentTemplate {
         user_email: consent_data.user_email,
         client_name: client.name,
+        client_initials,
+        client_id,
         scopes,
         consent_token: params.token,
-        frontend_url: state.frontend_url.clone(),
+        frontend_url: format!("{}/", state.frontend_url.trim_end_matches('/')),
+        is_new_client,
+        has_write_scope,
+        github_sponsors_url: state.github_sponsors_url.clone(),
+        liberapay_url: state.liberapay_url.clone(),
     };
 
     match template.render() {

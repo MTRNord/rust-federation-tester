@@ -1,173 +1,382 @@
 <!doctype html>
-<html lang="en" class="govuk-template">
-    <head>
-        <meta charset="utf-8" />
-        <title>Authorize application - Federation Tester</title>
-        <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1, viewport-fit=cover"
-        />
-        <meta name="theme-color" content="#1d70b8" />
-        <link
-            rel="stylesheet"
-            href="/assets/govuk/govuk-frontend.min.css"
-        />
-    </head>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Authorise {{ client_name }} — Connectivity Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    button { font: inherit; color: inherit; cursor: pointer; }
 
-    <body class="govuk-template__body">
-        <script>
-            document.body.className +=
-                " js-enabled" +
-                ("noModule" in HTMLScriptElement.prototype
-                    ? " govuk-frontend-supported"
-                    : "");
-        </script>
+    :root {
+      --ink:        #1b1714;
+      --ink-2:      #2f2a25;
+      --ink-3:      #4d4844;
+      --ink-4:      #6c6660;
+      --surface:    #f7f2e8;
+      --surface-2:  #efe9db;
+      --surface-3:  #e5dfce;
+      --line:       #c9c2ae;
+      --line-2:     #a89f88;
+      --warn-tint:  #f4e6c7;
+      --warn-deep:  #5c3d07;
+      --r-2: 5px;
+      --r-3: 8px;
+      --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
+    }
 
-        <a
-            href="#main-content"
-            class="govuk-skip-link"
-            data-module="govuk-skip-link"
-            >Skip to main content</a
-        >
+    body {
+      font-family: var(--sans);
+      background: var(--surface);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+    h1, h2, h3 { font-family: var(--sans); color: var(--ink); margin: 0; }
+    p { margin: 0 0 16px; font-size: 16px; line-height: 1.7; color: var(--ink-2); }
+    a { color: var(--ink); text-underline-offset: 3px; }
+    a:visited { color: var(--ink); }
+    :focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; border-radius: 3px; }
 
-        <header class="govuk-header" data-module="govuk-header">
-            <div class="govuk-header__container govuk-width-container">
-                <div class="govuk-header__logo">
-                    <a
-                        href="/"
-                        class="govuk-header__homepage-link"
-                    >
-                        <span class="govuk-header__logotype">
-                            <span class="govuk-header__logotype-text">
-                                Federation Tester
-                            </span>
-                        </span>
-                    </a>
-                </div>
+    /* Skip link */
+    .skip-link {
+      position: absolute;
+      top: -100px;
+      left: 16px;
+      z-index: 9999;
+      padding: 12px 20px;
+      background: var(--ink);
+      color: var(--surface);
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 0 0 var(--r-2) var(--r-2);
+    }
+    .skip-link:focus { top: 0; }
+
+    /* Navbar */
+    .chrome { background: var(--surface); border-bottom: 1px solid var(--line); }
+    .chrome__inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .chrome__nav { display: flex; gap: 28px; margin-left: auto; }
+    .chrome__nav a {
+      color: var(--ink-2);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 15px;
+      padding: 6px 0;
+      border-bottom: 2px solid transparent;
+    }
+    .chrome__nav a:hover { color: var(--ink); border-bottom-color: var(--ink-4); }
+
+    /* Wordmark */
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4em;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      color: var(--ink);
+      line-height: 1;
+      text-decoration: none;
+      font-size: 20px;
+    }
+    .wordmark__mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.18em;
+    }
+    .wordmark__mark span {
+      width: 0.18em;
+      background: var(--ink);
+      border-radius: 1px;
+      transform: skewX(-12deg);
+    }
+    .wordmark__mark span:nth-child(1) { height: 0.45em; opacity: 0.4; }
+    .wordmark__mark span:nth-child(2) { height: 0.65em; opacity: 0.7; }
+    .wordmark__mark span:nth-child(3) { height: 0.85em; }
+    .wordmark__name em { font-style: normal; font-weight: 700; }
+
+    /* Layout */
+    .page {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 48px 32px 64px;
+    }
+    @media (max-width: 600px) {
+      .chrome__inner { padding: 14px 16px; }
+      .page { padding: 32px 16px 48px; }
+    }
+
+    /* Typography utilities */
+    .eyebrow {
+      font: 600 12px/1 var(--sans);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ink-3);
+    }
+    .lead {
+      font-size: 19px;
+      line-height: 1.65;
+      color: var(--ink-2);
+      margin: 0 0 20px;
+    }
+    .mono { font-family: var(--mono); }
+
+    /* Card */
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--r-3);
+      overflow: clip;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+      font: 500 16px/1 var(--sans);
+      padding: 16px 24px;
+      border: 1.5px solid var(--ink);
+      border-radius: var(--r-2);
+      background: var(--ink);
+      color: var(--surface);
+      text-decoration: none;
+    }
+    .btn:hover { background: #000; border-color: #000; }
+    .btn:visited { color: var(--surface); }
+    .btn.ghost {
+      background: transparent;
+      color: var(--ink);
+      border-color: var(--line-2);
+    }
+    .btn.ghost:hover { background: var(--surface-2); border-color: var(--ink); }
+    .btn.ghost:visited { color: var(--ink); }
+
+    /* Pill */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: 500 13px/1 var(--sans);
+      padding: 6px 12px 5px;
+      border-radius: 999px;
+      white-space: nowrap;
+      background: var(--warn-tint);
+      color: var(--warn-deep);
+    }
+    .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+    /* Scope check circle */
+    .scope-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 1px;
+      flex-shrink: 0;
+    }
+
+    /* Footer */
+    .footer { background: var(--ink); color: var(--surface); }
+    .footer__inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 48px 32px;
+    }
+    .footer__cols {
+      display: flex;
+      gap: 32px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+    .footer__brand { flex: 0 0 280px; }
+    .footer__meta {
+      font-size: 13px;
+      color: var(--ink-4);
+      margin-top: 16px;
+      line-height: 1.6;
+      opacity: 0.85;
+    }
+    .footer__links {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .footer__group-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 12px;
+      color: var(--surface);
+    }
+    .footer__group a {
+      display: block;
+      color: var(--surface);
+      font-size: 14px;
+      opacity: 0.85;
+      margin-bottom: 8px;
+      text-decoration: none;
+    }
+    .footer__group a:hover { opacity: 1; text-decoration: underline; }
+    @media (max-width: 600px) {
+      .footer__links { grid-template-columns: 1fr 1fr; }
+      .footer__inner { padding: 36px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="chrome">
+    <div class="chrome__inner">
+      <a href="{{ frontend_url }}" class="wordmark" aria-label="Connectivity Tester — home">
+        <span class="wordmark__mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="wordmark__name">Connectivity <em>Tester</em></span>
+      </a>
+      <nav class="chrome__nav" aria-label="Primary navigation">
+        <a href="{{ frontend_url }}">Home</a>
+        <a href="{{ frontend_url }}alerts">Alerts</a>
+        <a href="{{ frontend_url }}docs">Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="page">
+    <div class="eyebrow" style="margin-bottom: 16px;">Authorise application</div>
+    <h1 style="font: 800 40px/1.05 var(--sans); letter-spacing: -0.03em; margin-bottom: 12px; text-wrap: balance;">
+      Grant access to <span class="mono" style="font-weight: 600; font-size: 0.82em;">{{ client_name }}</span>?
+    </h1>
+    <p class="lead">
+      Signed in as <span class="mono" style="font-size: 0.92em; color: var(--ink); font-weight: 600;">{{ user_email }}</span>.
+      Only approve if you trust this application. You can revoke access any time from your account.
+    </p>
+
+    <div class="card" style="margin-top: 24px;">
+
+      <!-- App identity header -->
+      <div style="padding: 20px 24px; border-bottom: 1px solid var(--line);">
+        <div style="display: flex; gap: 14px; align-items: center;">
+          <div aria-hidden="true" style="
+            width: 48px; height: 48px; border-radius: 8px;
+            background: var(--ink); color: var(--surface);
+            display: flex; align-items: center; justify-content: center;
+            font-family: var(--mono); font-weight: 700; font-size: 18px;
+            flex-shrink: 0; text-transform: lowercase;
+          ">{{ client_initials }}</div>
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-weight: 700; color: var(--ink); font-size: 17px;">{{ client_name }}</div>
+            <div class="mono" style="font-size: 13px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              {{ client_id }}{% if is_new_client %} · first authorised here{% endif %}
             </div>
-        </header>
-
-        <div
-            class="govuk-service-navigation"
-            data-module="govuk-service-navigation"
-        >
-            <div class="govuk-width-container">
-                <div class="govuk-service-navigation__container">
-                    <nav
-                        aria-label="Menu"
-                        class="govuk-service-navigation__wrapper"
-                    >
-                        <button
-                            type="button"
-                            class="govuk-service-navigation__toggle govuk-js-service-navigation-toggle"
-                            aria-controls="navigation"
-                            hidden
-                        >
-                            Menu
-                        </button>
-                        <ul
-                            class="govuk-service-navigation__list"
-                            id="navigation"
-                        >
-                            <li class="govuk-service-navigation__item">
-                                <a
-                                    class="govuk-service-navigation__link"
-                                    href="{{ frontend_url }}"
-                                    >← Back to Connectivity Tester</a
-                                >
-                            </li>
-                            <li class="govuk-service-navigation__item">
-                                <a
-                                    class="govuk-service-navigation__link"
-                                    href="/oauth2/account"
-                                    >Your account</a
-                                >
-                            </li>
-                        </ul>
-                    </nav>
-                </div>
-            </div>
+          </div>
+          {% if is_new_client %}
+          <span class="pill" style="flex-shrink: 0;">
+            <span class="pill__dot" aria-hidden="true"></span>New
+          </span>
+          {% endif %}
         </div>
+      </div>
 
-        <div class="govuk-width-container">
-            <main class="govuk-main-wrapper" id="main-content" role="main">
-                <div class="govuk-grid-row">
-                    <div class="govuk-grid-column-two-thirds">
-                        <h1 class="govuk-heading-l">
-                            <span class="govuk-caption-l">Authorise application</span>
-                            {{ client_name }}
-                        </h1>
-
-                        <p class="govuk-body">
-                            Signed in as <strong>{{ user_email }}</strong>
-                        </p>
-
-                        <p class="govuk-body">
-                            <strong>{{ client_name }}</strong> is requesting permission to access your account.
-                            It will be able to:
-                        </p>
-
-                        <dl class="govuk-summary-list">
-                            {% for scope in scopes %}
-                            <div class="govuk-summary-list__row">
-                                <dt class="govuk-summary-list__key">{{ scope.name }}</dt>
-                                <dd class="govuk-summary-list__value">{{ scope.description }}</dd>
-                            </div>
-                            {% endfor %}
-                        </dl>
-
-                        <div class="govuk-warning-text">
-                            <span class="govuk-warning-text__icon" aria-hidden="true">!</span>
-                            <strong class="govuk-warning-text__text">
-                                <span class="govuk-visually-hidden">Warning</span>
-                                Only approve if you trust this application. You can revoke access at any time from your account page.
-                            </strong>
-                        </div>
-
-                        <div class="govuk-button-group">
-                            <form method="POST" action="/oauth2/consent">
-                                <input type="hidden" name="consent_token" value="{{ consent_token }}" />
-                                <input type="hidden" name="action" value="approve" />
-                                <button type="submit" class="govuk-button" data-module="govuk-button">
-                                    Approve
-                                </button>
-                            </form>
-
-                            <form method="POST" action="/oauth2/consent">
-                                <input type="hidden" name="consent_token" value="{{ consent_token }}" />
-                                <input type="hidden" name="action" value="deny" />
-                                <button type="submit" class="govuk-button govuk-button--secondary" data-module="govuk-button">
-                                    Deny
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </main>
-        </div>
-
-        <footer class="govuk-footer">
-            <div class="govuk-width-container">
-                <div class="govuk-footer__meta">
-                    <div
-                        class="govuk-footer__meta-item govuk-footer__meta-item--grow"
-                    >
-                        <span class="govuk-footer__licence-description">
-                            Federation Tester is a community project for testing
-                            Matrix homeserver federation.
-                        </span>
-                    </div>
-                </div>
+      <!-- Requested permissions -->
+      <div style="padding: 20px 24px;">
+        <div class="eyebrow" style="margin-bottom: 14px;">This app wants permission to</div>
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 16px;">
+          {% for scope in scopes %}
+          <li style="display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;">
+            <div class="scope-check" aria-hidden="true">✓</div>
+            <div>
+              <div style="font-weight: 600; color: var(--ink); font-size: 15px;">{{ scope.name }}</div>
+              <div style="font-size: 14px; color: var(--ink-2); line-height: 1.6; margin-top: 2px;">{{ scope.description }}</div>
+              <div class="mono" style="font-size: 12px; color: var(--ink-3); margin-top: 4px;">{{ scope.scope_key }}</div>
             </div>
-        </footer>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
 
-        <script
-            type="module"
-            src="/assets/govuk/govuk-frontend.min.js"
-        ></script>
-        <script type="module">
-            import { initAll } from "/assets/govuk/govuk-frontend.min.js";
-            initAll();
-        </script>
-    </body>
+      {% if has_write_scope %}
+      <!-- Write-access warning -->
+      <div style="
+        padding: 14px 24px;
+        background: var(--warn-tint);
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+        color: var(--warn-deep);
+        line-height: 1.55;
+      ">
+        <strong>Heads up — </strong>this app is requesting write access and will be able to create or delete data on your behalf. Only approve if you fully trust it.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Approve / Deny -->
+    <form method="POST" action="/oauth2/consent" style="margin-top: 24px;">
+      <input type="hidden" name="consent_token" value="{{ consent_token }}" />
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+        <button type="submit" name="action" value="approve" class="btn">Approve</button>
+        <button type="submit" name="action" value="deny" class="btn ghost">Deny</button>
+        <span style="flex: 1;"></span>
+        <span style="font-size: 13px; color: var(--ink-3);">
+          You'll be sent back to <span class="mono">{{ client_name }}</span> either way.
+        </span>
+      </div>
+    </form>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="footer__cols">
+        <div class="footer__brand">
+          <a href="{{ frontend_url }}" class="wordmark" aria-label="Connectivity Tester — home" style="color: var(--surface);">
+            <span class="wordmark__mark" aria-hidden="true">
+              <span style="background: var(--surface);"></span>
+              <span style="background: var(--surface);"></span>
+              <span style="background: var(--surface);"></span>
+            </span>
+            <span class="wordmark__name">Connectivity <em>Tester</em></span>
+          </a>
+          <p class="footer__meta">A free, open-source diagnostic tool for Matrix homeserver operators. Self-hostable under AGPL-3.0.</p>
+        </div>
+        <div class="footer__links">
+          <div class="footer__group">
+            <div class="footer__group-title">Project</div>
+            <a href="https://github.com/MTRNord/matrix-connection-tester-ui">UI source code</a>
+            <a href="https://github.com/MTRNord/rust-federation-tester/">API source code</a>
+            <a href="{{ frontend_url }}docs">Documentation</a>
+          </div>
+          <div class="footer__group">
+            <div class="footer__group-title">Matrix</div>
+            <a href="https://matrix.org">Matrix.org</a>
+            <a href="https://spec.matrix.org">Specification</a>
+          </div>
+          {% if github_sponsors_url.is_some() || liberapay_url.is_some() %}
+          <div class="footer__group">
+            <div class="footer__group-title">Sponsoring</div>
+            {% if let Some(url) = github_sponsors_url %}<a href="{{ url }}">GitHub Sponsors</a>{% endif %}
+            {% if let Some(url) = liberapay_url %}<a href="{{ url }}">Liberapay</a>{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
 </html>

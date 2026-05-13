@@ -83,6 +83,8 @@ fn create_test_config() -> AppConfig {
         allow_private_targets: false,
         redis: Default::default(),
         environment_name: None,
+        github_sponsors_url: None,
+        liberapay_url: None,
     }
 }
 

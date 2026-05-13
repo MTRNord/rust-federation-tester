@@ -25,6 +25,10 @@ pub struct OAuth2State {
     pub access_token_lifetime: i64,
     /// Refresh token lifetime in seconds
     pub refresh_token_lifetime: i64,
+    /// Optional GitHub Sponsors URL shown in auth page footers
+    pub github_sponsors_url: Option<String>,
+    /// Optional Liberapay URL shown in auth page footers
+    pub liberapay_url: Option<String>,
 }
 
 impl OAuth2State {
@@ -36,6 +40,8 @@ impl OAuth2State {
             frontend_url,
             access_token_lifetime: 3600,       // 1 hour
             refresh_token_lifetime: 86400 * 7, // 7 days
+            github_sponsors_url: None,
+            liberapay_url: None,
         }
     }
 
@@ -43,15 +49,17 @@ impl OAuth2State {
     pub fn from_config(
         db: Arc<DatabaseConnection>,
         config: &crate::config::OAuth2Config,
-        frontend_url: &str,
+        app_config: &crate::config::AppConfig,
     ) -> Self {
         Self {
             registrar: DbRegistrar::new(db.clone()),
             db,
             issuer_url: config.issuer_url.clone(),
-            frontend_url: frontend_url.to_string(),
+            frontend_url: app_config.frontend_url.clone(),
             access_token_lifetime: config.access_token_lifetime,
             refresh_token_lifetime: config.refresh_token_lifetime,
+            github_sponsors_url: app_config.github_sponsors_url.clone(),
+            liberapay_url: app_config.liberapay_url.clone(),
         }
     }
 
