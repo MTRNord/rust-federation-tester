@@ -78,8 +78,11 @@ pub struct AlertDto {
 pub struct AlertEventDto {
     /// When the event occurred
     pub when: OffsetDateTime,
-    /// Human-readable description of the event
+    /// Short human-readable label for the event (suitable for a table cell)
     pub description: String,
+    /// Full detail text, e.g. the raw failure reason (may be long)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     /// Visual severity: "bad", "ok", or "info"
     pub kind: String,
 }
@@ -839,10 +842,11 @@ async fn get_alert_events(
     let events = rows
         .into_iter()
         .map(|row| {
-            let (description, kind) = event_to_display(&row);
+            let (description, detail, kind) = event_to_display(&row);
             AlertEventDto {
                 when: row.created_at,
                 description,
+                detail,
                 kind,
             }
         })
@@ -851,22 +855,35 @@ async fn get_alert_events(
     Ok(Json(AlertEventsResponse { events }))
 }
 
-fn event_to_display(row: &alert_status_history::Model) -> (String, String) {
+fn event_to_display(row: &alert_status_history::Model) -> (String, Option<String>, String) {
     match row.event_type.as_str() {
         "check_fail" => {
             let reason = row.failure_reason.as_deref().unwrap_or("unknown reason");
             (
-                format!("Federation check failed: {}", reason),
+                "Check failed".to_string(),
+                Some(reason.to_string()),
                 "bad".to_string(),
             )
         }
-        "check_ok" => ("Federation check passed".to_string(), "ok".to_string()),
-        "email_failure" => ("Failure notification sent".to_string(), "bad".to_string()),
-        "email_recovery" => ("Recovery notification sent".to_string(), "ok".to_string()),
-        "email_reminder" => ("Downtime reminder sent".to_string(), "info".to_string()),
+        "check_ok" => ("Check passed".to_string(), None, "ok".to_string()),
+        "email_failure" => (
+            "Failure notification sent".to_string(),
+            None,
+            "bad".to_string(),
+        ),
+        "email_recovery" => (
+            "Recovery notification sent".to_string(),
+            None,
+            "ok".to_string(),
+        ),
+        "email_reminder" => (
+            "Downtime reminder sent".to_string(),
+            None,
+            "info".to_string(),
+        ),
         other => {
             let desc = row.details.as_deref().unwrap_or(other);
-            (desc.to_string(), "info".to_string())
+            (desc.to_string(), None, "info".to_string())
         }
     }
 }

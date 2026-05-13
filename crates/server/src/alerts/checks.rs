@@ -627,87 +627,122 @@ async fn handle_confirmation_failure(
     .await;
 
     if new_count >= CONFIRMATION_THRESHOLD {
-        // Promote to confirmed failing and send first alert email.
         registry.remove(a.id).await;
-        active.is_currently_failing = ActiveValue::Set(true);
-        active.failure_count = ActiveValue::Set(1);
-
-        tracing::info!(
-            name = "alerts.state.transition_to_failing",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            server_name = %a.server_name,
-            alert_id = a.id,
-            message = "Server confirmed failing after rapid checks"
-        );
-
-        let Ok(updated) = active.update(db).await else {
-            return;
-        };
-        if resources.email_guard.try_claim(a.id, "failure").await {
-            let emails = get_notification_emails(db, &a).await;
-            let wake_at = quiet_hours_end(
-                a.quiet_hours_enabled,
-                &a.quiet_hours_from,
-                &a.quiet_hours_to,
-                now,
-            );
-            let mut any_sent = false;
-            if let Some(send_after) = wake_at {
-                // Inside quiet window — enqueue for later delivery, no mailer needed.
-                for email in &emails {
-                    queue_failure_email_delayed(
-                        db,
-                        &resources.config,
-                        email,
-                        &a.server_name,
-                        a.id,
-                        updated.failure_count,
-                        failure_reason.clone(),
-                        now,
-                        send_after,
-                    )
-                    .await;
-                }
-                any_sent = !emails.is_empty();
-            } else if let Some(mailer) = &resources.mailer {
-                for email in &emails {
-                    if send_failure_email(
-                        mailer,
-                        &resources.config,
-                        &resources.db,
-                        email,
-                        &a.server_name,
-                        a.id,
-                        updated.failure_count,
-                        failure_reason.clone(),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        any_sent = true;
-                    }
-                }
-            }
-            if any_sent {
-                log_status_event(
-                    db,
-                    a.id,
-                    &a.server_name,
-                    EVENT_EMAIL_FAILURE,
-                    false,
-                    1,
-                    None,
-                    None,
-                )
-                .await;
-                update_email_sent_at(updated, now, db).await;
-            }
-        }
+        promote_to_confirmed_failing(a, active, resources, failure_reason, now).await;
     } else {
         // Accumulating confirmation failures — update registry and DB.
         registry.set(a.id, new_count).await;
         let _ = active.update(db).await;
     }
+}
+
+async fn promote_to_confirmed_failing(
+    a: alert::Model,
+    mut active: alert::ActiveModel,
+    resources: &AppResources,
+    failure_reason: Option<String>,
+    now: OffsetDateTime,
+) {
+    let db = resources.db.as_ref();
+    active.is_currently_failing = ActiveValue::Set(true);
+    active.failure_count = ActiveValue::Set(1);
+
+    tracing::info!(
+        name = "alerts.state.transition_to_failing",
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        server_name = %a.server_name,
+        alert_id = a.id,
+        message = "Server confirmed failing after rapid checks"
+    );
+
+    let Ok(updated) = active.update(db).await else {
+        return;
+    };
+    if !resources.email_guard.try_claim(a.id, "failure").await {
+        return;
+    }
+    let emails = get_notification_emails(db, &a).await;
+    let wake_at = quiet_hours_end(
+        a.quiet_hours_enabled,
+        &a.quiet_hours_from,
+        &a.quiet_hours_to,
+        now,
+    );
+    let any_sent = dispatch_failure_emails(
+        resources,
+        &a,
+        &emails,
+        updated.failure_count,
+        failure_reason,
+        now,
+        wake_at,
+    )
+    .await;
+    if any_sent {
+        log_status_event(
+            db,
+            a.id,
+            &a.server_name,
+            EVENT_EMAIL_FAILURE,
+            false,
+            1,
+            None,
+            None,
+        )
+        .await;
+        update_email_sent_at(updated, now, db).await;
+    }
+}
+
+async fn dispatch_failure_emails(
+    resources: &AppResources,
+    a: &alert::Model,
+    emails: &[String],
+    failure_count: i32,
+    failure_reason: Option<String>,
+    now: OffsetDateTime,
+    wake_at: Option<OffsetDateTime>,
+) -> bool {
+    let db = resources.db.as_ref();
+    if let Some(send_after) = wake_at {
+        for email in emails {
+            queue_failure_email_delayed(
+                db,
+                &resources.config,
+                email,
+                &a.server_name,
+                a.id,
+                failure_count,
+                failure_reason.clone(),
+                now,
+                send_after,
+            )
+            .await;
+        }
+        return !emails.is_empty();
+    }
+    let Some(mailer) = &resources.mailer else {
+        return false;
+    };
+    let mut any_sent = false;
+    for email in emails {
+        if send_failure_email(
+            mailer,
+            &resources.config,
+            &resources.db,
+            email,
+            &a.server_name,
+            a.id,
+            failure_count,
+            failure_reason.clone(),
+        )
+        .await
+        .is_ok()
+        {
+            any_sent = true;
+        }
+    }
+    any_sent
 }
 
 /// An alert in confirmation phase checked as healthy.
