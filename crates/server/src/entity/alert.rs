@@ -31,6 +31,12 @@ pub struct Model {
     pub notify_tls_cert_change: bool,
     /// Send email when a TLS certificate is expiring within 14 days.
     pub notify_tls_expiry: bool,
+    /// Whether quiet hours are enabled for this alert.
+    pub quiet_hours_enabled: bool,
+    /// Start of the quiet window in HH:MM format (e.g. "22:00").
+    pub quiet_hours_from: String,
+    /// End of the quiet window in HH:MM format (e.g. "07:00").
+    pub quiet_hours_to: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

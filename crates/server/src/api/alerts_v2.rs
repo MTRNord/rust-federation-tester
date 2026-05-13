@@ -3,17 +3,23 @@
 //! Provides OAuth2-authenticated endpoints for managing federation alerts:
 //! - `GET /` - List all alerts for the authenticated user
 //! - `POST /` - Create a new alert subscription
+//! - `GET /{id}` - Get a single alert
 //! - `DELETE /{id}` - Delete an alert
+//! - `GET /{id}/events` - Get recent events for an alert
 //! - `PUT /{id}/notify-emails` - Replace the notification email list for an alert
+//! - `PUT /{id}/settings` - Update alert settings including quiet hours
 
 use crate::AppResources;
 use crate::api::auth::{AuthError, OAuth2Auth, SCOPE_ALERTS_READ, SCOPE_ALERTS_WRITE};
-use crate::entity::{alert, alert_notification_email, oauth2_user, user_email};
+use crate::entity::{
+    alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
+};
 use crate::oauth2::IdentityService;
 use axum::{Extension, Json, extract::Path};
 use hyper::StatusCode;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -59,6 +65,29 @@ pub struct AlertDto {
     pub notify_tls_cert_change: bool,
     /// Notify when a TLS certificate is expiring within 14 days
     pub notify_tls_expiry: bool,
+    /// Whether quiet hours are enabled
+    pub quiet_hours_enabled: bool,
+    /// Quiet window start in HH:MM format
+    pub quiet_hours_from: String,
+    /// Quiet window end in HH:MM format
+    pub quiet_hours_to: String,
+}
+
+/// A single recent event for an alert.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AlertEventDto {
+    /// ISO 8601 timestamp of the event
+    pub when: String,
+    /// Human-readable description of the event
+    pub description: String,
+    /// Visual severity: "bad", "ok", or "info"
+    pub kind: String,
+}
+
+/// Response containing recent events for an alert.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AlertEventsResponse {
+    pub events: Vec<AlertEventDto>,
 }
 
 /// Request to create a new alert.
@@ -96,6 +125,9 @@ pub struct UpdateAlertSettingsRequest {
     pub notify_version_change: Option<bool>,
     pub notify_tls_cert_change: Option<bool>,
     pub notify_tls_expiry: Option<bool>,
+    pub quiet_hours_enabled: Option<bool>,
+    pub quiet_hours_from: Option<String>,
+    pub quiet_hours_to: Option<String>,
 }
 
 /// Creates the v2 alerts API router.
@@ -103,7 +135,8 @@ pub struct UpdateAlertSettingsRequest {
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(list_alerts_v2, create_alert_v2))
-        .routes(routes!(delete_alert_v2))
+        .routes(routes!(get_alert_v2, delete_alert_v2))
+        .routes(routes!(get_alert_events))
         .routes(routes!(update_notify_emails))
         .routes(routes!(update_alert_settings))
 }
@@ -140,6 +173,9 @@ fn build_alert_dtos(
                 notify_version_change: a.notify_version_change,
                 notify_tls_cert_change: a.notify_tls_cert_change,
                 notify_tls_expiry: a.notify_tls_expiry,
+                quiet_hours_enabled: a.quiet_hours_enabled,
+                quiet_hours_from: a.quiet_hours_from,
+                quiet_hours_to: a.quiet_hours_to,
             }
         })
         .collect()
@@ -550,6 +586,9 @@ async fn update_notify_emails(
         notify_version_change: alert_entity.notify_version_change,
         notify_tls_cert_change: alert_entity.notify_tls_cert_change,
         notify_tls_expiry: alert_entity.notify_tls_expiry,
+        quiet_hours_enabled: alert_entity.quiet_hours_enabled,
+        quiet_hours_from: alert_entity.quiet_hours_from,
+        quiet_hours_to: alert_entity.quiet_hours_to,
     };
 
     Ok(Json(dto))
@@ -618,6 +657,15 @@ async fn update_alert_settings(
     if let Some(v) = payload.notify_tls_expiry {
         active.notify_tls_expiry = Set(v);
     }
+    if let Some(v) = payload.quiet_hours_enabled {
+        active.quiet_hours_enabled = Set(v);
+    }
+    if let Some(v) = payload.quiet_hours_from {
+        active.quiet_hours_from = Set(v);
+    }
+    if let Some(v) = payload.quiet_hours_to {
+        active.quiet_hours_to = Set(v);
+    }
 
     let updated = active.update(resources.db.as_ref()).await.map_err(|e| {
         tracing::error!("Failed to update alert settings for {}: {}", id, e);
@@ -650,5 +698,175 @@ async fn update_alert_settings(
         notify_version_change: updated.notify_version_change,
         notify_tls_cert_change: updated.notify_tls_cert_change,
         notify_tls_expiry: updated.notify_tls_expiry,
+        quiet_hours_enabled: updated.quiet_hours_enabled,
+        quiet_hours_from: updated.quiet_hours_from,
+        quiet_hours_to: updated.quiet_hours_to,
     }))
+}
+
+/// Get a single alert by ID.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    get,
+    path = "/{id}",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Get Alert",
+    summary = "Get a single alert by ID",
+    security(("OAuth2" = ["alerts:read"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    responses(
+        (status = 200, description = "Alert", body = AlertDto),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Missing required scope or not owner", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn get_alert_v2(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+) -> Result<Json<AlertDto>, AuthError> {
+    if !auth.has_scope(SCOPE_ALERTS_READ) {
+        return Err(AuthError::insufficient_scope(SCOPE_ALERTS_READ));
+    }
+
+    let alert_entity = alert::Entity::find_by_id(id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error finding alert {}: {}", id, e);
+            AuthError::server_error()
+        })?
+        .ok_or_else(|| AuthError::not_found("Alert not found"))?;
+
+    let is_owner = alert_entity
+        .user_id
+        .as_ref()
+        .map(|uid| uid == &auth.user_id)
+        .unwrap_or(false)
+        || alert_entity.email == auth.email;
+    if !is_owner {
+        return Err(AuthError::forbidden("You do not own this alert"));
+    }
+
+    let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &[id]).await?;
+    let notify_emails = match emails_by_alert.get(&id) {
+        Some(emails) if !emails.is_empty() => emails.clone(),
+        _ => {
+            if alert_entity.email.is_empty() {
+                vec![]
+            } else {
+                vec![alert_entity.email.clone()]
+            }
+        }
+    };
+
+    Ok(Json(AlertDto {
+        id: alert_entity.id,
+        server_name: alert_entity.server_name,
+        verified: alert_entity.verified,
+        created_at: alert_entity.created_at,
+        last_check_at: alert_entity.last_check_at,
+        is_currently_failing: alert_entity.is_currently_failing,
+        notify_emails,
+        notify_server_name_change: alert_entity.notify_server_name_change,
+        notify_version_change: alert_entity.notify_version_change,
+        notify_tls_cert_change: alert_entity.notify_tls_cert_change,
+        notify_tls_expiry: alert_entity.notify_tls_expiry,
+        quiet_hours_enabled: alert_entity.quiet_hours_enabled,
+        quiet_hours_from: alert_entity.quiet_hours_from,
+        quiet_hours_to: alert_entity.quiet_hours_to,
+    }))
+}
+
+/// Get recent events for an alert.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    get,
+    path = "/{id}/events",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Get Alert Events",
+    summary = "Get recent events for an alert (last 50)",
+    security(("OAuth2" = ["alerts:read"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    responses(
+        (status = 200, description = "Recent events", body = AlertEventsResponse),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Missing required scope or not owner", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn get_alert_events(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+) -> Result<Json<AlertEventsResponse>, AuthError> {
+    if !auth.has_scope(SCOPE_ALERTS_READ) {
+        return Err(AuthError::insufficient_scope(SCOPE_ALERTS_READ));
+    }
+
+    // Verify ownership first.
+    let alert_entity = alert::Entity::find_by_id(id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error finding alert {}: {}", id, e);
+            AuthError::server_error()
+        })?
+        .ok_or_else(|| AuthError::not_found("Alert not found"))?;
+
+    let is_owner = alert_entity
+        .user_id
+        .as_ref()
+        .map(|uid| uid == &auth.user_id)
+        .unwrap_or(false)
+        || alert_entity.email == auth.email;
+    if !is_owner {
+        return Err(AuthError::forbidden("You do not own this alert"));
+    }
+
+    let rows = alert_status_history::Entity::find()
+        .filter(alert_status_history::Column::AlertId.eq(id))
+        .order_by_desc(alert_status_history::Column::CreatedAt)
+        .limit(50)
+        .all(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading events for alert {}: {}", id, e);
+            AuthError::server_error()
+        })?;
+
+    let events = rows
+        .into_iter()
+        .map(|row| {
+            let (description, kind) = event_to_display(&row);
+            AlertEventDto {
+                when: row.created_at.to_string(),
+                description,
+                kind,
+            }
+        })
+        .collect();
+
+    Ok(Json(AlertEventsResponse { events }))
+}
+
+fn event_to_display(row: &alert_status_history::Model) -> (String, String) {
+    match row.event_type.as_str() {
+        "check_fail" => {
+            let reason = row.failure_reason.as_deref().unwrap_or("unknown reason");
+            (
+                format!("Federation check failed: {}", reason),
+                "bad".to_string(),
+            )
+        }
+        "check_ok" => ("Federation check passed".to_string(), "ok".to_string()),
+        "email_failure" => ("Failure notification sent".to_string(), "bad".to_string()),
+        "email_recovery" => ("Recovery notification sent".to_string(), "ok".to_string()),
+        "email_reminder" => ("Downtime reminder sent".to_string(), "info".to_string()),
+        other => {
+            let desc = row.details.as_deref().unwrap_or(other);
+            (desc.to_string(), "info".to_string())
+        }
+    }
 }
