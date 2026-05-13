@@ -123,6 +123,7 @@ pub async fn preview_failure_email(
             "Error fetching server version from 1.2.3.4:8448: connection refused".to_string(),
         ),
         environment_name: resources.config.environment_name.clone(),
+        quiet_hours_note: None,
     };
 
     match template.render_html() {

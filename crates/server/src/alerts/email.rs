@@ -92,6 +92,7 @@ pub async fn send_failure_email(
         unsubscribe_url: unsubscribe_url.clone(),
         failure_reason,
         environment_name: config.environment_name.clone(),
+        quiet_hours_note: None,
     };
 
     let subject = env_subject(

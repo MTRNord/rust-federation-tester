@@ -76,8 +76,8 @@ pub struct AlertDto {
 /// A single recent event for an alert.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AlertEventDto {
-    /// ISO 8601 timestamp of the event
-    pub when: String,
+    /// When the event occurred
+    pub when: OffsetDateTime,
     /// Human-readable description of the event
     pub description: String,
     /// Visual severity: "bad", "ok", or "info"
@@ -841,7 +841,7 @@ async fn get_alert_events(
         .map(|row| {
             let (description, kind) = event_to_display(&row);
             AlertEventDto {
-                when: row.created_at.to_string(),
+                when: row.created_at,
                 description,
                 kind,
             }

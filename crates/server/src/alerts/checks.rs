@@ -31,6 +31,8 @@ use crate::AppResources;
 use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
 use crate::connection_pool::ConnectionPool;
 use crate::distributed::{Lock, Registry};
+use crate::email_outbox;
+use crate::email_templates::{FailureEmailTemplate, env_subject};
 use crate::entity::{alert, alert_notification_email, alert_status_history};
 use crate::response::{Root, generate_json_report};
 use hickory_resolver::Resolver;
@@ -39,6 +41,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilt
 use std::collections::HashSet;
 use std::sync::Arc;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 
@@ -68,6 +71,133 @@ const EVENT_CHECK_OK: &str = "check_ok";
 const EVENT_EMAIL_FAILURE: &str = "email_failure";
 const EVENT_EMAIL_REMINDER: &str = "email_reminder";
 const EVENT_EMAIL_RECOVERY: &str = "email_recovery";
+
+// ---------------------------------------------------------------------------
+// Quiet hours helper
+// ---------------------------------------------------------------------------
+
+/// Check whether `now` (UTC) falls within the quiet window defined by `from`/`to` (both "HH:MM").
+/// Handles overnight windows (e.g., "22:00" → "07:00").
+///
+/// Returns `Some(wake_at)` — the UTC time when the quiet window ends — if we are currently
+/// inside the window, or `None` if we are outside it or quiet hours are disabled.
+fn quiet_hours_end(
+    enabled: bool,
+    from: &str,
+    to: &str,
+    now: OffsetDateTime,
+) -> Option<OffsetDateTime> {
+    if !enabled {
+        return None;
+    }
+
+    let parse_hm = |s: &str| -> Option<(u32, u32)> {
+        let (h, m) = s.split_once(':')?;
+        Some((h.parse().ok()?, m.parse().ok()?))
+    };
+
+    let (fh, fm) = parse_hm(from)?;
+    let (th, tm) = parse_hm(to)?;
+
+    let now_mins = now.hour() as u32 * 60 + now.minute() as u32;
+    let from_mins = fh * 60 + fm;
+    let to_mins = th * 60 + tm;
+
+    let in_window = if from_mins <= to_mins {
+        // Same-day window (e.g., 09:00–17:00)
+        now_mins >= from_mins && now_mins < to_mins
+    } else {
+        // Overnight window (e.g., 22:00–07:00)
+        now_mins >= from_mins || now_mins < to_mins
+    };
+
+    if !in_window {
+        return None;
+    }
+
+    let minutes_until_end: u32 = if now_mins < to_mins {
+        to_mins - now_mins
+    } else {
+        (24 * 60 - now_mins) + to_mins
+    };
+
+    Some(now + time::Duration::minutes(minutes_until_end as i64))
+}
+
+/// Queue a failure notification email to the outbox, delayed until `send_after`.
+/// Includes a note in the email body so the recipient knows when the failure
+/// was actually detected (it may have already resolved by send time).
+#[allow(clippy::too_many_arguments)]
+async fn queue_failure_email_delayed(
+    db: &sea_orm::DatabaseConnection,
+    config: &Arc<crate::config::AppConfig>,
+    email: &str,
+    server_name: &str,
+    alert_id: i32,
+    failure_count: i32,
+    failure_reason: Option<String>,
+    detected_at: OffsetDateTime,
+    send_after: OffsetDateTime,
+) {
+    let detected_str = detected_at
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| detected_at.to_string());
+
+    let check_url = format!(
+        "{}/results?serverName={}",
+        config.frontend_url.trim_end_matches('/'),
+        server_name
+    );
+    let unsubscribe_url = format!(
+        "{}/alerts/unsubscribe?alert_id={}&email={}",
+        config.frontend_url.trim_end_matches('/'),
+        alert_id,
+        urlencoding::encode(email)
+    );
+
+    let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
+    let reminder_interval_text = format!("{} hours", reminder_hours);
+
+    let template = FailureEmailTemplate {
+        server_name: server_name.to_string(),
+        check_url,
+        failure_count,
+        reminder_interval: reminder_interval_text,
+        unsubscribe_url,
+        failure_reason,
+        environment_name: config.environment_name.clone(),
+        quiet_hours_note: Some(format!(
+            "This failure was detected at {} UTC. It may have already resolved by the time you read this.",
+            detected_str
+        )),
+    };
+
+    let html_body = template.render_html().ok();
+    let text_body = template.render_text();
+    let subject = env_subject(
+        &format!("Federation Alert: {server_name} is not healthy"),
+        config.environment_name.as_deref(),
+    );
+
+    if let Err(e) = email_outbox::enqueue_at(
+        db,
+        email,
+        &subject,
+        html_body,
+        text_body,
+        None,
+        Some(send_after),
+    )
+    .await
+    {
+        tracing::error!(
+            alert_id,
+            server_name,
+            error = %e,
+            "Failed to enqueue quiet-hours failure email"
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AlertState — explicit state machine
@@ -513,26 +643,49 @@ async fn handle_confirmation_failure(
         let Ok(updated) = active.update(db).await else {
             return;
         };
-        if let Some(mailer) = &resources.mailer
-            && resources.email_guard.try_claim(a.id, "failure").await
-        {
+        if resources.email_guard.try_claim(a.id, "failure").await {
             let emails = get_notification_emails(db, &a).await;
+            let wake_at = quiet_hours_end(
+                a.quiet_hours_enabled,
+                &a.quiet_hours_from,
+                &a.quiet_hours_to,
+                now,
+            );
             let mut any_sent = false;
-            for email in &emails {
-                if send_failure_email(
-                    mailer,
-                    &resources.config,
-                    &resources.db,
-                    email,
-                    &a.server_name,
-                    a.id,
-                    updated.failure_count,
-                    failure_reason.clone(),
-                )
-                .await
-                .is_ok()
-                {
-                    any_sent = true;
+            if let Some(send_after) = wake_at {
+                // Inside quiet window — enqueue for later delivery, no mailer needed.
+                for email in &emails {
+                    queue_failure_email_delayed(
+                        db,
+                        &resources.config,
+                        email,
+                        &a.server_name,
+                        a.id,
+                        updated.failure_count,
+                        failure_reason.clone(),
+                        now,
+                        send_after,
+                    )
+                    .await;
+                }
+                any_sent = !emails.is_empty();
+            } else if let Some(mailer) = &resources.mailer {
+                for email in &emails {
+                    if send_failure_email(
+                        mailer,
+                        &resources.config,
+                        &resources.db,
+                        email,
+                        &a.server_name,
+                        a.id,
+                        updated.failure_count,
+                        failure_reason.clone(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        any_sent = true;
+                    }
                 }
             }
             if any_sent {
@@ -629,7 +782,18 @@ async fn handle_confirmed_failure(
         return;
     };
 
+    // During quiet hours, skip reminders entirely — the next reminder cycle
+    // (12 h later) will fall outside the window in the common case.
+    let in_quiet = quiet_hours_end(
+        a.quiet_hours_enabled,
+        &a.quiet_hours_from,
+        &a.quiet_hours_to,
+        now,
+    )
+    .is_some();
+
     if send_reminder
+        && !in_quiet
         && let Some(mailer) = &resources.mailer
         && resources.email_guard.try_claim(a.id, "reminder").await
     {

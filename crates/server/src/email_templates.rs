@@ -80,6 +80,10 @@ pub struct FailureEmailTemplate {
     pub unsubscribe_url: String,
     pub failure_reason: Option<String>,
     pub environment_name: Option<String>,
+    /// Set when the email was delayed due to quiet hours.
+    /// Contains the human-readable detection time so the recipient knows
+    /// this may already have resolved by the time they read it.
+    pub quiet_hours_note: Option<String>,
 }
 
 impl FailureEmailTemplate {
@@ -108,10 +112,16 @@ impl FailureEmailTemplate {
             String::new()
         };
 
+        let quiet_note = if let Some(ref note) = self.quiet_hours_note {
+            format!("\nNote: {}\n", note)
+        } else {
+            String::new()
+        };
+
         format!(
             r#"{}Hello,
 
-Your server '{}' failed the federation health check.{}{}
+Your server '{}' failed the federation health check.{}{}{}
 
 Please review the latest report at {} and take action if needed.
 
@@ -126,6 +136,7 @@ Unsubscribe: {}"#,
             self.server_name,
             reminder_text,
             reason_text,
+            quiet_note,
             self.check_url,
             self.reminder_interval,
             self.unsubscribe_url
@@ -561,6 +572,7 @@ mod tests {
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
             failure_reason: None,
             environment_name: None,
+            quiet_hours_note: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");

@@ -79,6 +79,20 @@ pub async fn enqueue(
     text_body: String,
     expires_at: Option<OffsetDateTime>,
 ) -> Result<(), sea_orm::DbErr> {
+    enqueue_at(db, to, subject, html_body, text_body, expires_at, None).await
+}
+
+/// Enqueue an email for delivery no earlier than `send_after`.
+/// Pass `None` for `send_after` to deliver as soon as possible (equivalent to [`enqueue`]).
+pub async fn enqueue_at(
+    db: &DatabaseConnection,
+    to: &str,
+    subject: &str,
+    html_body: Option<String>,
+    text_body: String,
+    expires_at: Option<OffsetDateTime>,
+    send_after: Option<OffsetDateTime>,
+) -> Result<(), sea_orm::DbErr> {
     let now = OffsetDateTime::now_utc();
     let row = email_outbox::ActiveModel {
         id: Set(uuid::Uuid::new_v4().to_string()),
@@ -89,7 +103,7 @@ pub async fn enqueue(
         status: Set(STATUS_PENDING.to_string()),
         attempts: Set(0),
         max_attempts: Set(5),
-        next_attempt_at: Set(now),
+        next_attempt_at: Set(send_after.unwrap_or(now)),
         expires_at: Set(expires_at),
         last_error: Set(None),
         created_at: Set(now),

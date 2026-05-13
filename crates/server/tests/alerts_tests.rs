@@ -32,6 +32,9 @@ fn make_alert(
         notify_version_change: false,
         notify_tls_cert_change: false,
         notify_tls_expiry: false,
+        quiet_hours_enabled: false,
+        quiet_hours_from: "22:00".to_string(),
+        quiet_hours_to: "07:00".to_string(),
     }
 }
 
@@ -210,6 +213,7 @@ fn test_failure_email_template_with_reminder() {
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
         environment_name: None,
+        quiet_hours_note: None,
     };
 
     let html = template.render_html().expect("render HTML");
@@ -236,6 +240,7 @@ fn test_failure_email_template_without_reminder() {
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         failure_reason: None,
         environment_name: None,
+        quiet_hours_note: None,
     };
 
     let text = template.render_text();
