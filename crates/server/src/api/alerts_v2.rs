@@ -49,9 +49,13 @@ pub struct AlertDto {
     /// Whether the alert is verified and active
     pub verified: bool,
     /// When the alert was created
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     /// Last time the server was checked
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
     pub last_check_at: Option<OffsetDateTime>,
     /// Whether the server is currently failing federation checks
     pub is_currently_failing: bool,
@@ -77,6 +81,7 @@ pub struct AlertDto {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AlertEventDto {
     /// When the event occurred
+    #[serde(with = "time::serde::rfc3339")]
     pub when: OffsetDateTime,
     /// Short human-readable label for the event (suitable for a table cell)
     pub description: String,
