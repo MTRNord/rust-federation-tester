@@ -19,6 +19,7 @@ pub mod federation;
 pub mod health;
 pub mod metrics;
 pub mod openapi;
+pub mod statistics;
 
 // Re-export oauth2 module from crate root
 pub use crate::oauth2;
@@ -65,7 +66,8 @@ pub async fn start_webserver<P: ConnectionProvider>(
             federation::router::<P>(app_state, debug_mode),
         )
         .nest("/debug", debug::router())
-        .routes(routes!(metrics::metrics));
+        .routes(routes!(metrics::metrics))
+        .routes(routes!(statistics::daily_stats));
 
     // Conditionally add legacy magic link alerts API (requires SMTP)
     if app_resources.config.smtp.enabled && app_resources.config.oauth2.magic_links_enabled {

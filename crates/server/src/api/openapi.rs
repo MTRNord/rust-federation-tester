@@ -1,6 +1,8 @@
 //! OpenAPI/Utoipa configuration.
 
-use crate::api::{alerts::ALERTS_TAG, federation::FEDERATION_TAG, health::MISC_TAG};
+use crate::api::{
+    alerts::ALERTS_TAG, federation::FEDERATION_TAG, health::MISC_TAG, statistics::STATISTICS_TAG,
+};
 use crate::oauth2::OAUTH2_TAG;
 use utoipa::{
     Modify, OpenApi,
@@ -56,7 +58,8 @@ impl Modify for SecurityAddon {
         (name = MISC_TAG, description = "Miscellaneous endpoints"),
         (name = FEDERATION_TAG, description = "Federation Tester API endpoints"),
         (name = ALERTS_TAG, description = "Alerts API endpoints"),
-        (name = OAUTH2_TAG, description = "OAuth2 authentication endpoints")
+        (name = OAUTH2_TAG, description = "OAuth2 authentication endpoints"),
+        (name = STATISTICS_TAG, description = "Statistics API endpoints")
     )
 )]
 pub struct ApiDoc;
