@@ -394,6 +394,9 @@ async fn main() -> color_eyre::eyre::Result<()> {
     // Start retention pruning task for federation stats (if enabled)
     rust_federation_tester::stats::spawn_retention_task(resources.clone());
 
+    // Start retention pruning task for the email notification log
+    rust_federation_tester::alerts::spawn_email_log_retention_task(resources.clone());
+
     // Start background cleanup task for connection pool
     {
         let pool = connection_pool.clone();

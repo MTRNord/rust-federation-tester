@@ -85,6 +85,7 @@ fn create_test_config() -> AppConfig {
         environment_name: None,
         github_sponsors_url: None,
         liberapay_url: None,
+        email_log_retention_days: 7,
     }
 }
 

@@ -13,6 +13,7 @@
 pub mod change_checks;
 pub mod checks;
 pub mod email;
+pub mod retention;
 
 // Re-export commonly used items
 pub use checks::{
@@ -23,3 +24,4 @@ pub use email::{
     EmailError, REMINDER_EMAIL_INTERVAL, UnsubscribeHeader, generate_list_unsubscribe_url,
     send_failure_email, send_recovery_email,
 };
+pub use retention::spawn_email_log_retention_task;

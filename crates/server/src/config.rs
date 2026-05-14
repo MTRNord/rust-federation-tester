@@ -121,6 +121,13 @@ pub struct AppConfig {
     /// OAuth2 consent page footer. Leave unset to hide the sponsoring section.
     #[serde(default)]
     pub liberapay_url: Option<String>,
+    /// How many days to retain the email notification log (`email_log` table).
+    ///
+    /// The log records the type, server, and timestamp of each notification sent.
+    /// It is also cleared when a user deletes their account. Set to `0` to disable
+    /// automatic pruning (not recommended). Default: 7 days.
+    #[serde(default = "default_email_log_retention_days")]
+    pub email_log_retention_days: u32,
 }
 
 impl fmt::Debug for AppConfig {
@@ -139,6 +146,7 @@ impl fmt::Debug for AppConfig {
             .field("environment_name", &self.environment_name)
             .field("github_sponsors_url", &self.github_sponsors_url)
             .field("liberapay_url", &self.liberapay_url)
+            .field("email_log_retention_days", &self.email_log_retention_days)
             .finish()
     }
 }
@@ -368,6 +376,10 @@ fn default_prometheus_enabled() -> bool {
 }
 fn default_raw_retention_days() -> u32 {
     30
+}
+
+fn default_email_log_retention_days() -> u32 {
+    7
 }
 
 #[derive(Clone, Debug, Deserialize)]
