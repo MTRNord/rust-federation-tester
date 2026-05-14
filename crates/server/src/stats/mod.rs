@@ -65,6 +65,7 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
     }
     let db = &*resources.db;
     let server_key = ev.server_name.to_lowercase();
+    let salt = &resources.config.statistics.anonymization_salt;
     let (family_val, version_val) = classify_version(ev.version_name, ev.version_string);
     let success_inc: i64 = if ev.federation_ok { 1 } else { 0 };
     let failure_inc: i64 = if ev.federation_ok { 0 } else { 1 };
@@ -88,24 +89,32 @@ pub async fn record_event(resources: &AppResources, ev: StatEvent<'_>) {
         .map(|f| f.len() as i32)
         .unwrap_or(0);
 
-    // Insert raw event (append-only) first
-    let raw_model = raw::ActiveModel {
-        id: ActiveValue::NotSet,
-        ts: ActiveValue::Set(now),
-        server_name: ActiveValue::Set(server_key.clone()),
-        federation_ok: ActiveValue::Set(ev.federation_ok),
-        version_name: ActiveValue::Set(ev.version_name.map(|s| s.to_string())),
-        version_string: ActiveValue::Set(ev.version_string.map(|s| s.to_string())),
-        unstable_features_enabled: ActiveValue::Set(unstable_enabled_json),
-        unstable_features_announced: ActiveValue::Set(unstable_announced_json),
-    };
-    if let Err(e) = raw_model.insert(db).await {
+    // Raw rows never store the plaintext domain — always use the BLAKE3 hash.
+    // If the salt is not configured, skip the raw insert rather than leaking the name.
+    if let Some(raw_key) = stable_anon_id(salt, &server_key) {
+        let raw_model = raw::ActiveModel {
+            id: ActiveValue::NotSet,
+            ts: ActiveValue::Set(now),
+            server_name: ActiveValue::Set(raw_key),
+            federation_ok: ActiveValue::Set(ev.federation_ok),
+            version_name: ActiveValue::Set(ev.version_name.map(|s| s.to_string())),
+            version_string: ActiveValue::Set(ev.version_string.map(|s| s.to_string())),
+            unstable_features_enabled: ActiveValue::Set(unstable_enabled_json),
+            unstable_features_announced: ActiveValue::Set(unstable_announced_json),
+        };
+        if let Err(e) = raw_model.insert(db).await {
+            tracing::warn!(
+                name = "stats.insert_raw_federation_event",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                message = "failed inserting raw federation event",
+                error = %e,
+            );
+        }
+    } else {
         tracing::warn!(
-            name = "stats.insert_raw_federation_event",
+            name = "stats.skip_raw_no_salt",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            message = "failed inserting raw federation event",
-            error = %e,
-            server = %server_key
+            message = "skipping raw stat insert: anonymization_salt not configured",
         );
     }
 

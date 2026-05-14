@@ -14,8 +14,8 @@
 use crate::AppResources;
 use crate::api::auth::{AuthError, OAuth2Auth};
 use crate::entity::{
-    alert, alert_status_history, oauth2_authorization, oauth2_identity, oauth2_token, oauth2_user,
-    user_email,
+    alert, alert_status_history, email_log, oauth2_authorization, oauth2_identity, oauth2_token,
+    oauth2_user, user_email,
 };
 use crate::oauth2::{
     generate_verification_token, hash_password, validate_password_complexity, verify_password,
@@ -680,7 +680,13 @@ async fn delete_account(
 
     if !alert_ids.is_empty() {
         alert_status_history::Entity::delete_many()
-            .filter(alert_status_history::Column::AlertId.is_in(alert_ids))
+            .filter(alert_status_history::Column::AlertId.is_in(alert_ids.clone()))
+            .exec(db)
+            .await
+            .map_err(|_| AuthError::server_error())?;
+
+        email_log::Entity::delete_many()
+            .filter(email_log::Column::AlertId.is_in(alert_ids))
             .exec(db)
             .await
             .map_err(|_| AuthError::server_error())?;
