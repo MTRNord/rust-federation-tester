@@ -86,6 +86,7 @@ fn create_test_config() -> AppConfig {
         github_sponsors_url: None,
         liberapay_url: None,
         email_log_retention_days: 7,
+        release_sources: Default::default(),
     }
 }
 
@@ -102,6 +103,7 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
 
     let oauth2_state = OAuth2State::new(
@@ -1338,6 +1340,7 @@ async fn test_password_reset_confirm_get_valid_token() {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1373,6 +1376,7 @@ async fn test_password_reset_confirm_post_password_mismatch() {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1413,6 +1417,7 @@ async fn test_password_reset_confirm_post_weak_password() {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1479,6 +1484,7 @@ async fn test_password_reset_confirm_post_success() {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     let oauth2_state = OAuth2State::new(
         db.clone(),
@@ -1536,6 +1542,7 @@ async fn test_password_reset_confirm_post_expired_token() {
         mailer,
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,

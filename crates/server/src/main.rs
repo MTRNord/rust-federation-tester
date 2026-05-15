@@ -375,6 +375,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
         mailer,
         config,
         email_guard,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     });
 
     // Compute derived values for logging (explicit so fields are clear and type-safe)

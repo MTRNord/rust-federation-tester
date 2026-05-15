@@ -8,6 +8,7 @@ use crate::email_templates::{
     TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VersionChangeEmailTemplate, env_subject,
 };
 use crate::entity::email_log;
+use crate::release_notes::{ReleaseCache, get_release_info};
 use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
 use lettre::AsyncTransport;
 use lettre::message::header::{Header, HeaderName, HeaderValue};
@@ -500,11 +501,12 @@ pub async fn send_server_name_change_email(
 
 /// Send a version change notification email.
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(mailer, config, db, email))]
+#[tracing::instrument(skip(mailer, config, db, email, release_cache))]
 pub async fn send_version_change_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
+    release_cache: &ReleaseCache,
     email: &str,
     server_name: &str,
     alert_id: i32,
@@ -541,6 +543,14 @@ pub async fn send_version_change_email(
         .clone()
         .or_else(|| config.liberapay_url.clone());
 
+    let (release_url, release_notes_excerpt) = get_release_info(
+        config,
+        release_cache,
+        &new_version_name,
+        &new_version_string,
+    )
+    .await;
+
     let template = VersionChangeEmailTemplate {
         server_name: server_name.to_string(),
         old_version_name,
@@ -553,6 +563,8 @@ pub async fn send_version_change_email(
         detected_at: Some(detected_at_str),
         manage_url,
         sponsor_url,
+        release_url,
+        release_notes_excerpt,
     };
 
     let subject = env_subject(

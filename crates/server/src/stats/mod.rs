@@ -592,6 +592,7 @@ mod tests {
             github_sponsors_url: None,
             liberapay_url: None,
             email_log_retention_days: 7,
+            release_sources: Default::default(),
         }
     }
 
@@ -652,6 +653,7 @@ mod tests {
             mailer,
             config,
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
         record_event(
             &resources,
@@ -683,6 +685,7 @@ mod tests {
             mailer,
             config,
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
         record_event(
             &resources,
@@ -717,6 +720,7 @@ mod tests {
             mailer,
             config,
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
         clear_metrics_cache();
         record_event(
@@ -782,6 +786,7 @@ mod tests {
             mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
         prune_old_entries(&resources).await; // default retention 30 days -> old.example should be removed
         let cnt_stmt = Statement::from_string(
@@ -805,6 +810,7 @@ mod tests {
             mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
         record_event(
             &resources,
@@ -837,6 +843,7 @@ mod tests {
             mailer: Some(Arc::new(dummy_mailer)),
             config: Arc::new(config),
             email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
         };
 
         let enabled_features = vec!["msc2716".to_string(), "msc3030".to_string()];

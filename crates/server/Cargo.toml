@@ -104,6 +104,7 @@ utoipa-redoc = { version = "6.0.0", features = ["axum"] }
 uuid = "1.17.0"
 webpki-roots = "1.0"
 x509-parser = "0.18"
+pulldown-cmark = "0.13.3"
 
 [dev-dependencies]
 axum-test = "18.1.0"

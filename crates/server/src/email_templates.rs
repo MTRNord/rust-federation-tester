@@ -407,6 +407,10 @@ pub struct VersionChangeEmailTemplate {
     pub detected_at: Option<String>,
     pub manage_url: String,
     pub sponsor_url: Option<String>,
+    /// URL to the upstream release page (Tier A or B).
+    pub release_url: Option<String>,
+    /// Plain-text excerpt from the release notes (Tier B only).
+    pub release_notes_excerpt: Option<String>,
 }
 
 impl VersionChangeEmailTemplate {
@@ -419,12 +423,27 @@ impl VersionChangeEmailTemplate {
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
         let env_banner = env_banner_text(self.environment_name.as_deref());
+
+        let release_line = match (&self.release_url, &self.release_notes_excerpt) {
+            (Some(url), Some(html_excerpt)) => {
+                // Strip HTML tags for plain-text variant
+                let plain = strip_html_tags(html_excerpt);
+                format!(
+                    "\nWhat's new:\n{}\n\nFull release notes: {}\n",
+                    plain.trim(),
+                    url
+                )
+            }
+            (Some(url), None) => format!("\nRelease notes: {}\n", url),
+            _ => String::new(),
+        };
+
         format!(
             r#"{}A software update was detected for {}.
 
   Was: {} {}
   Now: {} {}
-
+{}
 This is an informational notification — no action required unless the update was unexpected.
 
 Run a diagnostic: {}
@@ -437,6 +456,7 @@ Unsubscribe: {}
             self.old_version_string,
             self.new_version_name,
             self.new_version_string,
+            release_line,
             self.check_url,
             self.manage_url,
             self.unsubscribe_url
@@ -605,6 +625,30 @@ Manage account: {}
             env_banner, self.recipient_email, self.verify_url, self.manage_url
         )
     }
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => {
+                // Decode common HTML entities
+                out.push(c);
+            }
+            _ => {}
+        }
+    }
+    // Normalise whitespace runs
+    out.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" …", "…")
 }
 
 #[cfg(test)]

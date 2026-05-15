@@ -399,6 +399,7 @@ async fn check_version_change(
             mailer,
             &resources.config,
             &resources.db,
+            &resources.release_cache,
             email,
             &a.server_name,
             a.id,

@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -128,6 +129,56 @@ pub struct AppConfig {
     /// automatic pruning (not recommended). Default: 7 days.
     #[serde(default = "default_email_log_retention_days")]
     pub email_log_retention_days: u32,
+    /// Per-software release note sources. Keys are lowercase software names (e.g. `"synapse"`).
+    ///
+    /// See [`ReleaseSourceConfig`] for per-entry fields. When a key is absent, version change
+    /// emails include no release-notes link or excerpt (Tier C). When present but no API is
+    /// configured, a link to the release page is shown (Tier A). When the API is reachable,
+    /// an excerpt is fetched and cached for one hour (Tier B).
+    ///
+    /// # Example config.yaml
+    ///
+    /// ```yaml
+    /// release_sources:
+    ///   synapse:
+    ///     release_url_template: "https://github.com/element-hq/synapse/releases/tag/v{version}"
+    ///     api_type: "github"
+    ///     api_repo: "element-hq/synapse"
+    ///   continuwuity:
+    ///     release_url_template: "https://forgejo.ellis.link/continuwuation/continuwuity/releases/tag/v{version}"
+    ///     api_type: "forgejo"
+    ///     api_base_url: "https://forgejo.ellis.link"
+    ///     api_repo: "continuwuation/continuwuity"
+    /// ```
+    #[serde(default)]
+    pub release_sources: HashMap<String, ReleaseSourceConfig>,
+}
+
+/// Configuration for fetching release notes for a specific server software.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ReleaseSourceConfig {
+    /// URL template for the release page. Use `{version}` as a placeholder.
+    ///
+    /// Example: `"https://github.com/element-hq/synapse/releases/tag/v{version}"`
+    #[serde(default)]
+    pub release_url_template: Option<String>,
+    /// API type for fetching a release notes excerpt. Supported values: `"github"`, `"forgejo"`.
+    ///
+    /// Omit (or set to null) to use link-only mode — a button pointing to `release_url_template`
+    /// will be shown but no excerpt will be fetched.
+    #[serde(default)]
+    pub api_type: Option<String>,
+    /// Base URL for self-hosted Forgejo or Gitea instances.
+    ///
+    /// Not needed for `api_type = "github"` (uses `api.github.com` automatically).
+    /// Example: `"https://forgejo.ellis.link"`
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    /// Repository slug in `"owner/repo"` format.
+    ///
+    /// Example: `"element-hq/synapse"` or `"continuwuation/continuwuity"`
+    #[serde(default)]
+    pub api_repo: Option<String>,
 }
 
 impl fmt::Debug for AppConfig {
@@ -147,6 +198,7 @@ impl fmt::Debug for AppConfig {
             .field("github_sponsors_url", &self.github_sponsors_url)
             .field("liberapay_url", &self.liberapay_url)
             .field("email_log_retention_days", &self.email_log_retention_days)
+            .field("release_sources", &self.release_sources)
             .finish()
     }
 }

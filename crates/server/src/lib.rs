@@ -23,6 +23,7 @@ pub mod error;
 pub mod federation;
 pub mod oauth2;
 pub mod optimization;
+pub mod release_notes;
 pub mod response;
 pub mod security;
 pub mod stats;
@@ -37,4 +38,6 @@ pub struct AppResources {
     /// Email idempotency guard — prevents duplicate alert emails when running
     /// multiple instances. Uses Redis/Valkey when configured, no-op otherwise.
     pub email_guard: distributed::EmailGuard,
+    /// In-memory cache for release notes fetched from GitHub/Forgejo APIs.
+    pub release_cache: Arc<release_notes::ReleaseCache>,
 }

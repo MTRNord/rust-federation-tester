@@ -56,6 +56,7 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
         github_sponsors_url: None,
         liberapay_url: None,
         email_log_retention_days: 7,
+        release_sources: Default::default(),
     }
 }
 
@@ -72,6 +73,7 @@ async fn create_test_resources(stats_enabled: bool) -> AppResources {
         mailer,
         config,
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
+        release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
     }
 }
 

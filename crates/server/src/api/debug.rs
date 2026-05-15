@@ -9,12 +9,14 @@ use crate::email_templates::{
     TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VerificationEmailTemplate,
     VersionChangeEmailTemplate,
 };
+use crate::release_notes::{fetch_release_excerpt_direct, get_release_info};
 use axum::{
     Extension,
-    extract::ConnectInfo,
+    extract::{ConnectInfo, Query},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
 };
+use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -31,6 +33,7 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(preview_tls_expiry_email))
         .routes(routes!(preview_tls_cert_change_email))
         .routes(routes!(preview_version_change_email))
+        .routes(routes!(preview_version_change_email_live))
         .routes(routes!(preview_account_verification_email))
         .routes(routes!(preview_server_name_change_email))
 }
@@ -475,6 +478,131 @@ pub async fn preview_version_change_email(
             .github_sponsors_url
             .clone()
             .or_else(|| resources.config.liberapay_url.clone()),
+        release_url: Some(
+            "https://github.com/element-hq/synapse/releases/tag/v1.99.0".to_string(),
+        ),
+        release_notes_excerpt: Some(
+            "<p style=\"margin:0 0 8px;font-size:13px;color:#2F2A25;line-height:1.6;\"><strong>Security fixes</strong></p><ul style=\"margin:0 0 8px;padding-left:18px;\"><li style=\"margin-bottom:2px;font-size:13px;color:#2F2A25;line-height:1.5;\">Fixed a vulnerability in the push rules handling.</li></ul><p style=\"margin:0 0 8px;font-size:13px;color:#2F2A25;line-height:1.6;\"><strong>Bug fixes</strong></p><ul style=\"margin:0 0 8px;padding-left:18px;\"><li style=\"margin-bottom:2px;font-size:13px;color:#2F2A25;line-height:1.5;\">Fixed room state not being correctly persisted in some cases.</li></ul>".to_string(),
+        ),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Query parameters for the live version-change preview endpoint.
+#[derive(Debug, Deserialize, Default)]
+pub struct LiveVersionParams {
+    /// Software name as it appears in the Matrix version endpoint (e.g. `Synapse`).
+    pub software: Option<String>,
+    /// Version string (e.g. `1.99.0` — without the leading `v`).
+    pub version: Option<String>,
+    /// Override: API type (`github` or `forgejo`). Uses config when absent.
+    pub api_type: Option<String>,
+    /// Override: repository slug (`owner/repo`). Uses config when absent.
+    pub api_repo: Option<String>,
+    /// Override: base URL for Forgejo instances. Uses config when absent.
+    pub api_base_url: Option<String>,
+    /// Override: release page URL (replaces template expansion from config).
+    pub release_url: Option<String>,
+}
+
+/// Preview the version change email with a live release-notes API fetch.
+#[utoipa::path(
+    get,
+    path = "/email/version-change-live",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Version Change Email (Live)",
+    summary = "Preview version change email with live release-notes fetch",
+    description = "Renders the version change email after fetching real release notes from the \
+                   upstream API. When `api_type` and `api_repo` are supplied as query params they \
+                   override the config, so you can test any repo without adding it to \
+                   `release_sources` first.\n\n\
+                   **Minimal:** `?software=Synapse&version=1.99.0` (uses config)\n\
+                   **Full override:** `?software=Synapse&version=1.99.0&api_type=github&api_repo=element-hq/synapse&release_url=https://...`\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    params(
+        ("software" = String, Query, description = "Software name (e.g. Synapse)"),
+        ("version" = String, Query, description = "Version string without leading v (e.g. 1.99.0)"),
+        ("api_type" = Option<String>, Query, description = "Override: github or forgejo"),
+        ("api_repo" = Option<String>, Query, description = "Override: owner/repo slug"),
+        ("api_base_url" = Option<String>, Query, description = "Override: Forgejo base URL"),
+        ("release_url" = Option<String>, Query, description = "Override: release page URL"),
+    ),
+    responses(
+        (status = 200, description = "Rendered HTML email with live release notes", content_type = "text/html"),
+        (status = 400, description = "Missing query parameters"),
+        (status = 403, description = "Access denied"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_version_change_email_live(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(params): Query<LiveVersionParams>,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let (Some(software), Some(version)) = (params.software, params.version) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Usage: /debug/email/version-change-live?software=Synapse&version=1.99.0\n\
+             Optional overrides: &api_type=github&api_repo=element-hq/synapse&release_url=https://...",
+        )
+            .into_response();
+    };
+
+    // If the caller supplied explicit API params, use them directly (bypasses config).
+    // Otherwise fall through to the normal config-driven path.
+    let (release_url, release_notes_excerpt) =
+        if let (Some(api_type), Some(api_repo)) = (&params.api_type, &params.api_repo) {
+            let excerpt = fetch_release_excerpt_direct(
+                api_type,
+                api_repo,
+                params.api_base_url.as_deref(),
+                &version,
+            )
+            .await;
+            (params.release_url, excerpt)
+        } else {
+            get_release_info(
+                &resources.config,
+                &resources.release_cache,
+                &software,
+                &version,
+            )
+            .await
+        };
+
+    let sponsor_url = resources
+        .config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| resources.config.liberapay_url.clone());
+
+    let template = VersionChangeEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        old_version_name: software.clone(),
+        old_version_string: "previous".to_string(),
+        new_version_name: software,
+        new_version_string: version,
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        detected_at: Some("2024-01-15 14:32 UTC".to_string()),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url,
+        release_url,
+        release_notes_excerpt,
     };
 
     match template.render_html() {
