@@ -340,53 +340,112 @@ async fn consent_submit(
     Redirect::to(&redirect_url).into_response()
 }
 
-/// Render a simple error page.
+/// Render an error page using the consent design system (navbar + footer).
 fn render_error(message: &str) -> Response {
     let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en" class="govuk-template govuk-template--rebranded">
+        r#"<!doctype html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>Error - Federation Tester</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/assets/govuk/govuk-frontend.min.css">
+  <meta charset="utf-8" />
+  <title>Error — Connectivity Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    html, body {{ margin: 0; padding: 0; }}
+    :root {{
+      --ink: #1b1714; --ink-2: #2f2a25; --ink-3: #4d4844; --ink-4: #6c6660;
+      --surface: #f7f2e8; --surface-2: #efe9db; --line: #c9c2ae;
+      --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }}
+    body {{ font-family: var(--sans); background: var(--surface); color: var(--ink); line-height: 1.5; -webkit-font-smoothing: antialiased; }}
+    a {{ color: var(--ink); text-underline-offset: 3px; }}
+    .chrome {{ background: var(--surface); border-bottom: 1px solid var(--line); }}
+    .chrome__inner {{ max-width: 1180px; margin: 0 auto; padding: 14px 32px; display: flex; align-items: center; gap: 16px; }}
+    .chrome__nav {{ display: flex; gap: 28px; margin-left: auto; }}
+    .chrome__nav a {{ color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 15px; padding: 6px 0; }}
+    .wordmark {{ display: inline-flex; align-items: center; gap: 0.4em; font-weight: 600; letter-spacing: -0.025em; color: var(--ink); text-decoration: none; font-size: 20px; }}
+    .wordmark__mark {{ display: inline-flex; align-items: center; gap: 0.18em; }}
+    .wordmark__mark span {{ width: 0.18em; background: var(--ink); border-radius: 1px; transform: skewX(-12deg); }}
+    .wordmark__mark span:nth-child(1) {{ height: 0.45em; opacity: 0.4; }}
+    .wordmark__mark span:nth-child(2) {{ height: 0.65em; opacity: 0.7; }}
+    .wordmark__mark span:nth-child(3) {{ height: 0.85em; }}
+    .wordmark__name em {{ font-style: normal; font-weight: 700; }}
+    .page {{ max-width: 640px; margin: 0 auto; padding: 48px 32px 64px; }}
+    .error-card {{ background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 32px; margin-top: 24px; }}
+    .footer {{ background: var(--ink); color: var(--surface); }}
+    .footer__inner {{ max-width: 1180px; margin: 0 auto; padding: 48px 32px; }}
+    .footer__cols {{ display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }}
+    .footer__brand {{ flex: 0 0 280px; }}
+    .footer__meta {{ font-size: 13px; color: var(--ink-4); margin-top: 16px; opacity: 0.85; line-height: 1.6; }}
+    .footer__links {{ flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }}
+    .footer__group-title {{ font-weight: 600; font-size: 14px; margin-bottom: 12px; color: var(--surface); }}
+    .footer__group a {{ display: block; color: var(--surface); font-size: 14px; opacity: 0.85; margin-bottom: 8px; text-decoration: none; }}
+    .footer__group a:hover {{ opacity: 1; text-decoration: underline; }}
+    @media (max-width: 600px) {{
+      .chrome__inner {{ padding: 14px 16px; }}
+      .page {{ padding: 32px 16px 48px; }}
+      .footer__links {{ grid-template-columns: 1fr 1fr; }}
+      .footer__inner {{ padding: 36px 16px; }}
+    }}
+  </style>
 </head>
-<body class="govuk-template__body">
-    <header class="govuk-header" data-module="govuk-header">
-        <div class="govuk-header__container govuk-width-container">
-            <div class="govuk-header__logo">
-                <a href="/" class="govuk-header__link govuk-header__link--homepage">
-                    <span class="govuk-header__logotype">
-                        <span class="govuk-header__logotype-text">Federation Tester</span>
-                    </span>
-                </a>
-            </div>
-        </div>
-    </header>
-    <div class="govuk-width-container">
-        <main class="govuk-main-wrapper" id="main-content">
-            <div class="govuk-grid-row">
-                <div class="govuk-grid-column-two-thirds">
-                    <h1 class="govuk-heading-l">Something went wrong</h1>
-                    <p class="govuk-body">{}</p>
-                    <p class="govuk-body">
-                        <a class="govuk-link" href="/">Return to homepage</a>
-                    </p>
-                </div>
-            </div>
-        </main>
+<body>
+  <header class="chrome">
+    <div class="chrome__inner">
+      <a href="/" class="wordmark" aria-label="Connectivity Tester — home">
+        <span class="wordmark__mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span class="wordmark__name">Connectivity <em>Tester</em></span>
+      </a>
+      <nav class="chrome__nav" aria-label="Primary navigation">
+        <a href="/">Home</a>
+        <a href="/alerts">Alerts</a>
+        <a href="/docs">Docs</a>
+      </nav>
     </div>
-    <footer class="govuk-footer">
-        <div class="govuk-width-container">
-            <div class="govuk-footer__meta">
-                <div class="govuk-footer__meta-item govuk-footer__meta-item--grow">
-                    <span class="govuk-footer__licence-description">
-                        Federation Tester is a community project for testing Matrix homeserver federation.
-                    </span>
-                </div>
-            </div>
+  </header>
+
+  <main id="main" class="page">
+    <h1 style="font: 800 36px/1.1 var(--sans); letter-spacing: -0.03em; margin-bottom: 12px;">Something went wrong</h1>
+    <p style="font-size: 16px; color: var(--ink-2); margin-bottom: 24px; line-height: 1.7;">{}</p>
+    <div class="error-card">
+      <p style="margin: 0 0 16px; font-size: 15px; color: var(--ink-2);">
+        If you were trying to sign in, please return to the application and try again.
+        The authorisation request may have expired or been tampered with.
+      </p>
+      <a href="/" style="font-weight: 600; font-size: 15px;">Return to homepage →</a>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="footer__cols">
+        <div class="footer__brand">
+          <a href="/" class="wordmark" aria-label="Connectivity Tester — home" style="color: var(--surface);">
+            <span class="wordmark__mark" aria-hidden="true">
+              <span style="background: var(--surface);"></span>
+              <span style="background: var(--surface);"></span>
+              <span style="background: var(--surface);"></span>
+            </span>
+            <span class="wordmark__name">Connectivity <em>Tester</em></span>
+          </a>
+          <p class="footer__meta">A free, open-source diagnostic tool for Matrix homeserver operators. Self-hostable under AGPL-3.0.</p>
         </div>
-    </footer>
+        <div class="footer__links">
+          <div class="footer__group">
+            <div class="footer__group-title">Project</div>
+            <a href="https://github.com/MTRNord/matrix-connection-tester-ui">UI source code</a>
+            <a href="https://github.com/MTRNord/rust-federation-tester/">API source code</a>
+            <a href="/docs">Documentation</a>
+          </div>
+          <div class="footer__group">
+            <div class="footer__group-title">Matrix</div>
+            <a href="https://matrix.org">Matrix.org</a>
+            <a href="https://spec.matrix.org">Specification</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
 </body>
 </html>"#,
         message

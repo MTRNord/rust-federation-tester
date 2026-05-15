@@ -1,142 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title>Federation Alert: {{ server_name }} Recovered - Federation Tester</title>
-    <!--[if mso]>
-    <noscript>
-        <xml>
-            <o:OfficeDocumentSettings>
-                <o:PixelsPerInch>96</o:PixelsPerInch>
-            </o:OfficeDocumentSettings>
-        </xml>
-    </noscript>
-    <![endif]-->
-    <style type="text/css">
-        /* Reset styles */
-        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-        img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
-        table { border-collapse: collapse !important; }
-        body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; }
-        a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
-        @media only screen and (max-width: 620px) {
-            .email-container { width: 100% !important; }
-            .mobile-padding { padding: 15px !important; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<title>{{ server_name }} is back online</title>
+<!--[if mso]>
+<style type="text/css">
+table { border-collapse:collapse; border-spacing:0; }
+td { mso-line-height-rule:exactly; }
+</style>
+<![endif]-->
+<style type="text/css">
+  body,table,td,a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+  table,td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+  img { -ms-interpolation-mode:bicubic; border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
+  table { border-collapse:separate; border-spacing:0; }
+  body { height:100% !important; margin:0 !important; padding:0 !important; width:100% !important; }
+  a[x-apple-data-detectors] { color:inherit !important; text-decoration:none !important; font-size:inherit !important; font-family:inherit !important; font-weight:inherit !important; line-height:inherit !important; }
+  a { color:#1B1714; }
+  .preheader { display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; mso-hide:all; }
+  @media only screen and (max-width:620px) {
+    .email-container { width:100% !important; max-width:100% !important; }
+    .mobile-pad { padding-left:20px !important; padding-right:20px !important; }
+    .mobile-pad-y { padding-top:24px !important; padding-bottom:24px !important; }
+    .h1 { font-size:24px !important; line-height:1.15 !important; }
+    .stack { display:block !important; width:100% !important; padding:0 !important; margin-bottom:8px !important; }
+    .stack-last { margin-bottom:0 !important; }
+    .stack-spacer { display:none !important; }
+  }
+</style>
 </head>
-
-<body style="margin: 0; padding: 0; background-color: #f3f2f1; font-family: Arial, sans-serif;">
-    <!-- Wrapper table for full-width background -->
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f3f2f1;">
+<body style="margin:0;padding:0;background-color:#E1DCC9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1B1714;">
+<div class="preheader">{{ server_name }} federation has recovered{% if let Some(m) = minutes_down %} after {{ m }} minutes of downtime{% endif %}.</div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#E1DCC9;">
+  <tr>
+    <td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" class="email-container" style="background-color:#F7F2E8;border-radius:8px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:600px;width:600px;">
+        <!-- Ink header -->
         <tr>
-            <td align="center" style="padding: 0;">
-                <!-- Main container -->
-                <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" class="email-container" style="background-color: #ffffff;">
-                    <!-- Header - Blue rebrand -->
-                    <tr>
-                        <td style="padding: 20px; background-color: #1d70b8;">
-                            <span style="color: #ffffff; font-size: 24px; font-weight: 700; text-decoration: none;">Federation Tester</span>
-                        </td>
-                    </tr>
-                    <!-- Phase Banner -->
-                    <tr>
-                        <td style="padding: 10px 20px; background-color: #ffffff; border-bottom: 1px solid #b1b4b6;">
-                            <span style="display: inline-block; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #ffffff; background-color: #1d70b8; padding: 4px 8px 3px; margin-right: 10px;">Beta</span>
-                            <span style="color: #0b0c0c; font-size: 14px;">This is a community service for testing Matrix federation.</span>
-                        </td>
-                    </tr>
-                    {% if let Some(env) = environment_name %}
-                    {% if !env.is_empty() && env.to_lowercase() != "production" %}
-                    <!-- Environment Banner -->
-                    <tr>
-                        <td style="padding: 10px 20px; background-color: #f47738; border-bottom: 1px solid #b1b4b6;">
-                            <span style="color: #ffffff; font-size: 14px; font-weight: 700;">&#9888; Sent from the {{ env|upper }} environment — not production</span>
-                        </td>
-                    </tr>
-                    {% endif %}
-                    {% endif %}
-                    <!-- Main Content -->
-                    <tr>
-                        <td style="padding: 40px 20px; background-color: #ffffff;" class="mobile-padding">
-                            <!-- Success Banner -->
-                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 30px;">
-                                <tr>
-                                    <td style="padding: 15px; background-color: #00703c; border: 5px solid #00703c;">
-                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                                            <tr>
-                                                <td style="padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.3);">
-                                                    <span style="color: #ffffff; font-size: 16px; font-weight: 700;">Success</span>
-                                                </td>
-                                            </tr>
-                                            <tr>
-                                                <td style="padding-top: 15px;">
-                                                    <h2 style="color: #ffffff; font-size: 24px; font-weight: 700; line-height: 1.25; margin: 0 0 10px 0;">
-                                                        Server {{ server_name }} has recovered
-                                                    </h2>
-                                                    <p style="color: #ffffff; font-size: 19px; line-height: 1.3; margin: 0;">
-                                                        Your Matrix homeserver is now passing federation health checks.
-                                                    </p>
-                                                </td>
-                                            </tr>
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
-
-                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0 0 30px 0;">
-                                All tests are successful. Your server is federating correctly.
-                            </p>
-
-                            <!-- Button -->
-                            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                                <tr>
-                                    <td style="background-color: #00703c;">
-                                        <a href="{{ check_url }}" target="_blank" style="display: inline-block; padding: 12px 20px 10px 20px; font-size: 19px; font-weight: 700; color: #ffffff; text-decoration: none; box-shadow: 0 2px 0 #002d18;">
-                                            View current status
-                                        </a>
-                                    </td>
-                                </tr>
-                            </table>
-
-                            <!-- Inset Box -->
-                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 30px 0;">
-                                <tr>
-                                    <td style="padding: 15px 15px 15px 25px; border-left: 10px solid #1d70b8; background-color: #ffffff;">
-                                        <h2 style="color: #0b0c0c; font-size: 24px; font-weight: 700; line-height: 1.25; margin: 0 0 15px 0;">
-                                            What happens next
-                                        </h2>
-                                        <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0;">
-                                            We will continue monitoring your server and notify you immediately if any issues arise again.
-                                        </p>
-                                    </td>
-                                </tr>
-                            </table>
-
-                            <p style="color: #0b0c0c; font-size: 19px; line-height: 1.3; margin: 0;">
-                                Thank you for using Federation Tester to keep your homeserver healthy.
-                            </p>
-                        </td>
-                    </tr>
-                    <!-- Footer - Light blue rebrand with blue top border -->
-                    <tr>
-                        <td style="padding: 30px 20px; background-color: #f0f4f5; border-top: 10px solid #1d70b8;">
-                            <p style="color: #0b0c0c; font-size: 16px; line-height: 1.25; margin: 0 0 15px 0;">
-                                Federation Tester is a community project for testing Matrix homeserver federation.
-                            </p>
-                            <p style="margin: 0;">
-                                <a href="{{ unsubscribe_url }}" style="color: #1d70b8; font-size: 16px; text-decoration: underline;">Unsubscribe from these alerts</a>
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
+          <td style="padding:24px 32px;background-color:#1B1714;" class="mobile-pad">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+              <tr>
+                <td style="vertical-align:middle;padding-right:10px;line-height:0;">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="22" height="22" role="img" aria-label="Connectivity Tester logo" style="display:block;">
+  <g fill="#F7F2E8">
+    <path fill-opacity="0.4" d="M42.363 55.5H29.2732C25.7548 55.5 22.7094 57.9458 21.95 61.3812L9.51574 117.631C8.48084 122.313 12.0443 126.75 16.839 126.75H29.6327C33.137 126.75 36.1742 124.323 36.9477 120.906L49.678 64.6555C50.7397 59.9641 47.1731 55.5 42.363 55.5Z"/>
+    <path fill-opacity="0.7" d="M102.423 41.625H89.3147C85.7774 41.625 82.721 44.0965 81.9807 47.5554L63.3883 134.427C62.4065 139.014 65.8299 143.367 70.5196 143.494L83.0529 143.833C86.6495 143.93 89.8084 141.459 90.5807 137.945L109.748 50.735C110.776 46.0557 107.214 41.625 102.423 41.625Z"/>
+    <path d="M163.235 27.375H150.071C146.531 27.375 143.473 29.8507 142.736 33.3134L117.429 152.188C116.436 156.855 119.994 161.25 124.765 161.25H137.929C141.469 161.25 144.527 158.774 145.264 155.312L170.571 36.4367C171.564 31.7705 168.006 27.375 163.235 27.375Z"/>
+  </g>
+</svg>
+                </td>
+                <td style="vertical-align:middle;color:#F7F2E8;font-size:18px;font-weight:600;letter-spacing:-0.02em;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+                  Connectivity <span style="font-weight:700;">Tester</span>
+                </td>
+              </tr>
+            </table>
+          </td>
         </tr>
-    </table>
+        <!-- Non-prod env warning -->
+        {% if let Some(env) = environment_name %}{% if !env.is_empty() && env.to_lowercase() != "production" %}
+        <tr>
+          <td style="padding:12px 32px;background-color:#F4E6C7;border-bottom:1px solid #C9C2AE;font-size:13px;color:#5C3D07;line-height:1.45;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" class="mobile-pad">
+            <strong>⚠ {{ env|upper }} environment</strong> — this is not the production instance.
+          </td>
+        </tr>
+        {% endif %}{% endif %}
+        <!-- Banner -->
+        <tr>
+          <td style="padding:24px 32px;background-color:#D6E8DA;border-left:5px solid #094E32;" class="mobile-pad">
+            <p style="margin:0 0 8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#094E32;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">● Recovered</p>
+            <h1 class="h1" style="margin:0;font-size:28px;font-weight:800;letter-spacing:-0.025em;color:#1B1714;line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{{ server_name }} is reachable again.</h1>
+            <p style="margin:10px 0 0;font-size:14px;color:#2F2A25;line-height:1.5;">
+              {% if let Some(ra) = recovered_at %}First healthy check at <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ ra }}</span>{% if let Some(m) = minutes_down %} · {{ m }} minutes of downtime{% endif %}{% endif %}
+            </p>
+          </td>
+        </tr>
+        <!-- Main content -->
+        <tr>
+          <td style="padding:32px;background-color:#F7F2E8;" class="mobile-pad mobile-pad-y">
+            <p style="margin:0 0 20px;font-size:16px;line-height:1.65;color:#2F2A25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Federation health checks for <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ server_name }}</strong> are responding normally again. Messages from peer homeservers should be flowing through within a minute or two.</p>
+            <!-- Stats row -->
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 24px;">
+              <tr>
+                <td class="stack" style="background-color:#F7F2E8;border:1px solid #C9C2AE;border-radius:5px;padding:16px;vertical-align:top;">
+                  <p style="margin:0;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#4D4844;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Total downtime</p>
+                  <p style="margin:8px 0 0;font-size:20px;font-weight:800;color:#1B1714;letter-spacing:-0.02em;line-height:1.2;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{% if let Some(dh) = downtime_human %}{{ dh }}{% else %}—{% endif %}</p>
+                </td>
+                <td class="stack-spacer" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>
+                <td class="stack" style="background-color:#F7F2E8;border:1px solid #C9C2AE;border-radius:5px;padding:16px;vertical-align:top;">
+                  <p style="margin:0;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#4D4844;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">First failure</p>
+                  <p style="margin:8px 0 0;font-size:13px;font-weight:500;color:#1B1714;line-height:1.3;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{% if let Some(fd) = first_detected %}{{ fd }}{% else %}—{% endif %}</p>
+                </td>
+                <td class="stack-spacer" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>
+                <td class="stack stack-last" style="background-color:#F7F2E8;border:1px solid #C9C2AE;border-radius:5px;padding:16px;vertical-align:top;">
+                  <p style="margin:0;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#4D4844;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Recovered</p>
+                  <p style="margin:8px 0 0;font-size:13px;font-weight:500;color:#1B1714;line-height:1.3;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{% if let Some(ra) = recovered_at %}{{ ra }}{% else %}—{% endif %}</p>
+                </td>
+              </tr>
+            </table>
+            <!-- What changed box (conditional) -->
+            {% if recovery_signal.is_some() || recovery_hint.is_some() %}
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#EFE9DB;border:1px solid #C9C2AE;border-radius:5px;margin:0 0 20px;">
+              <tr>
+                <td style="padding:18px 20px;">
+                  <p style="margin:0 0 10px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#4D4844;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">What changed</p>
+                  {% if let Some(signal) = recovery_signal %}
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:13px;color:#1B1714;line-height:1.6;word-break:break-all;">{{ signal }}</div>
+                  {% endif %}
+                  {% if let Some(hint) = recovery_hint %}
+                  <p style="margin:10px 0 0;font-size:13px;color:#2F2A25;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{{ hint }}</p>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+            {% endif %}
+            <!-- CTA button -->
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;">
+              <tr>
+                <td align="center" style="border-radius:5px;background-color:#1B1714;">
+                  <a href="{{ check_url }}" style="display:inline-block;padding:13px 26px;font-size:16px;font-weight:500;color:#F7F2E8;text-decoration:none;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Run a fresh diagnostic →</a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:0;font-size:13px;line-height:1.65;color:#4D4844;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">We'll keep watching every five minutes and let you know if it goes down again.</p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="padding:20px 32px;background-color:#EFE9DB;border-top:1px solid #C9C2AE;font-size:12px;color:#4D4844;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" class="mobile-pad">
+            Sent because you subscribed to alerts at the Connectivity Tester. Free, open-source, self-hostable.
+            <div style="margin-top:6px;">
+              <a href="{{ unsubscribe_url }}" style="color:#4D4844;text-decoration:underline;">Unsubscribe</a>
+              &nbsp;·&nbsp;
+              <a href="{{ manage_url }}" style="color:#4D4844;text-decoration:underline;">Manage alerts</a>
+              {% if let Some(url) = sponsor_url %}
+              &nbsp;·&nbsp;
+              <a href="{{ url }}" style="color:#4D4844;text-decoration:underline;">Sponsor the project</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
 </body>
-
 </html>

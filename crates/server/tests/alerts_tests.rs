@@ -214,13 +214,21 @@ fn test_failure_email_template_with_reminder() {
         failure_reason: None,
         environment_name: None,
         quiet_hours_note: None,
+        first_detected: None,
+        minutes_down: None,
+        last_healthy: None,
+        error_hint: None,
+        reminder_total: None,
+        alert_url: "https://test.example.com/alerts/edit/1".to_string(),
+        manage_url: "https://test.example.com/alerts".to_string(),
+        sponsor_url: None,
     };
 
     let html = template.render_html().expect("render HTML");
     let text = template.render_text();
 
     // HTML should contain reminder-specific content (failure_count > 1)
-    assert!(html.contains("reminder"));
+    assert!(html.contains("Reminder"));
     assert!(html.contains("example.org"));
 
     // Text should contain reminder info
@@ -241,6 +249,14 @@ fn test_failure_email_template_without_reminder() {
         failure_reason: None,
         environment_name: None,
         quiet_hours_note: None,
+        first_detected: None,
+        minutes_down: None,
+        last_healthy: None,
+        error_hint: None,
+        reminder_total: None,
+        alert_url: "https://test.example.com/alerts/edit/1".to_string(),
+        manage_url: "https://test.example.com/alerts".to_string(),
+        sponsor_url: None,
     };
 
     let text = template.render_text();
@@ -258,6 +274,14 @@ fn test_recovery_email_template() {
         check_url: "https://test.example.com/?serverName=example.org".to_string(),
         unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
         environment_name: None,
+        recovered_at: Some("2024-01-15T16:47:00Z".to_string()),
+        first_detected: Some("2024-01-15T14:32:00Z".to_string()),
+        minutes_down: Some(135),
+        downtime_human: Some("2h 15m".to_string()),
+        recovery_signal: None,
+        recovery_hint: None,
+        manage_url: "https://test.example.com/alerts".to_string(),
+        sponsor_url: None,
     };
 
     let html = template.render_html().expect("render HTML");
@@ -277,13 +301,16 @@ fn test_verification_email_template() {
         server_name: "example.org".to_string(),
         verify_url: "https://test.example.com/verify?token=abc123".to_string(),
         environment_name: None,
+        recipient_email: "user@example.com".to_string(),
+        manage_url: None,
+        sponsor_url: None,
     };
 
     let html = template.render_html().expect("render HTML");
     let text = template.render_text();
 
-    assert!(html.contains("example.org"));
+    assert!(html.contains("user@example.com"));
     assert!(html.contains("abc123"));
-    assert!(text.contains("verify"));
+    assert!(text.contains("user@example.com"));
     assert!(text.contains("abc123"));
 }

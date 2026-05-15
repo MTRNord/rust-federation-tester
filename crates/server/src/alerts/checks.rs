@@ -154,17 +154,24 @@ async fn queue_failure_email_delayed(
         .format(&Rfc3339)
         .unwrap_or_else(|_| detected_at.to_string());
 
-    let check_url = format!(
-        "{}/results?serverName={}",
-        config.frontend_url.trim_end_matches('/'),
-        server_name
-    );
+    let base = format!("{}/", config.frontend_url.trim_end_matches('/'));
+    let check_url = format!("{}results?serverName={}", base, server_name);
+    let alert_url = format!("{}alerts/edit/{}", base, alert_id);
+    let manage_url = format!("{}alerts", base);
     let unsubscribe_url = format!(
-        "{}/alerts/unsubscribe?alert_id={}&email={}",
-        config.frontend_url.trim_end_matches('/'),
+        "{}alerts/unsubscribe?alert_id={}&email={}",
+        base,
         alert_id,
         urlencoding::encode(email)
     );
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
+    let now = OffsetDateTime::now_utc();
+    let minutes_down = Some((now - detected_at).whole_minutes().max(0) as u64);
+    let first_detected_str = Some(detected_str.clone());
 
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
     let reminder_interval_text = format!("{} hours", reminder_hours);
@@ -181,6 +188,14 @@ async fn queue_failure_email_delayed(
             "This failure was detected at {} UTC. It may have already resolved by the time you read this.",
             detected_str
         )),
+        first_detected: first_detected_str,
+        minutes_down,
+        last_healthy: None,
+        error_hint: None,
+        reminder_total: None,
+        alert_url,
+        manage_url,
+        sponsor_url,
     };
 
     let html_body = template.render_html().ok();
@@ -740,6 +755,8 @@ async fn dispatch_failure_emails(
                 a.id,
                 failure_count,
                 failure_reason.clone(),
+                Some(now),
+                a.last_success_at,
             )
             .await
             .is_ok()
@@ -851,6 +868,8 @@ async fn handle_confirmed_failure(
                 a.id,
                 updated.failure_count,
                 failure_reason.clone(),
+                a.last_failure_at,
+                a.last_success_at,
             )
             .await
             .is_ok()
@@ -912,6 +931,8 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
                 &r.email,
                 &a.server_name,
                 a.id,
+                now,
+                a.last_success_at,
             )
             .await
             .is_ok()

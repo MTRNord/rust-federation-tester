@@ -1,22 +1,20 @@
 //! OAuth2 Registration endpoints.
 //!
-//! Implements user registration for the OAuth2 authorization flow:
-//! - Registration page (GET)
 //! - Registration submission (POST)
 //! - Email verification (GET)
+//!
+//! The GET registration page lives in the React frontend at /alerts/register.
 
 use crate::AppResources;
 use crate::email_templates::AccountVerificationEmailTemplate;
-use crate::entity::{oauth2_client, oauth2_user};
+use crate::entity::oauth2_user;
 use crate::oauth2::{
     generate_verification_token, hash_password, state::OAuth2State, validate_password_complexity,
 };
-use askama::Template;
 use axum::{
     Extension, Form,
     extract::{Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use sea_orm::{
     ActiveModelTrait,
@@ -27,43 +25,6 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
-
-/// Registration page template.
-#[derive(Template)]
-#[template(path = "register.html")]
-struct RegisterTemplate {
-    // OAuth2 flow parameters
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    scope: String,
-    state: String,
-    nonce: Option<String>,
-    code_challenge: Option<String>,
-    code_challenge_method: Option<String>,
-    // Display information
-    email: String,
-    error: Option<String>,
-    message: Option<String>,
-    client_name: Option<String>,
-    frontend_url: String,
-}
-
-/// Query parameters for the registration page.
-#[derive(Debug, Deserialize)]
-pub struct RegisterQuery {
-    pub client_id: String,
-    pub redirect_uri: String,
-    pub scope: Option<String>,
-    pub state: Option<String>,
-    pub nonce: Option<String>,
-    pub code_challenge: Option<String>,
-    pub code_challenge_method: Option<String>,
-    pub email: Option<String>,
-    pub error: Option<String>,
-    pub message: Option<String>,
-    pub response_type: Option<String>,
-}
 
 /// Form data for registration submission.
 #[derive(Clone, Debug, Deserialize, ToSchema)]
@@ -100,75 +61,8 @@ pub struct VerifyEmailQuery {
 /// Creates the registration router.
 pub fn router() -> OpenApiRouter<OAuth2State> {
     OpenApiRouter::new()
-        .routes(routes!(register_page))
         .routes(routes!(register_submit))
         .routes(routes!(verify_email))
-}
-
-/// Display the registration page.
-#[tracing::instrument(skip(state))]
-#[utoipa::path(
-    get,
-    path = "/register",
-    tag = super::OAUTH2_TAG,
-    operation_id = "OAuth2 Register Page",
-    summary = "Display the OAuth2 registration page",
-    description = "Renders the registration form for creating a new account during the OAuth2 authorization flow.\n\n\
-                   Users register with email and password, then verify their email before they can sign in.",
-    params(
-        ("client_id" = String, Query, description = "The client identifier."),
-        ("redirect_uri" = String, Query, description = "URI to redirect after authorization."),
-        ("scope" = Option<String>, Query, description = "Space-separated list of requested scopes."),
-        ("state" = Option<String>, Query, description = "Opaque value for CSRF protection."),
-        ("nonce" = Option<String>, Query, description = "String value for replay protection."),
-        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge."),
-        ("code_challenge_method" = Option<String>, Query, description = "PKCE challenge method."),
-        ("email" = Option<String>, Query, description = "Email to pre-fill."),
-        ("error" = Option<String>, Query, description = "Error message to display."),
-        ("message" = Option<String>, Query, description = "Info message to display."),
-        ("response_type" = Option<String>, Query, description = "OAuth2 response type."),
-    ),
-    responses(
-        (status = 200, description = "Registration page HTML"),
-        (status = 500, description = "Internal server error"),
-    )
-)]
-async fn register_page(
-    State(state): State<OAuth2State>,
-    Query(params): Query<RegisterQuery>,
-) -> Response {
-    // Look up client for display name
-    let client_name = match oauth2_client::Entity::find_by_id(&params.client_id)
-        .one(state.db.as_ref())
-        .await
-    {
-        Ok(Some(c)) => Some(c.name),
-        _ => None,
-    };
-
-    let template = RegisterTemplate {
-        response_type: params.response_type.unwrap_or_else(|| "code".to_string()),
-        client_id: params.client_id,
-        redirect_uri: params.redirect_uri,
-        scope: params.scope.unwrap_or_else(|| "openid".to_string()),
-        state: params.state.unwrap_or_default(),
-        nonce: params.nonce,
-        code_challenge: params.code_challenge,
-        code_challenge_method: params.code_challenge_method,
-        email: params.email.unwrap_or_default(),
-        error: params.error,
-        message: params.message,
-        client_name,
-        frontend_url: state.frontend_url.clone(),
-    };
-
-    match template.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to render registration template: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
-        }
-    }
 }
 
 /// Handle registration form submission.
@@ -196,20 +90,25 @@ async fn register_submit(
     Extension(resources): Extension<AppResources>,
     Form(form): Form<RegisterForm>,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
     let email = form.email.trim().to_lowercase();
 
     // Validate email format
     if email.is_empty() || !email.contains('@') {
-        return redirect_to_register_with_error(&form, "Please enter a valid email address");
+        return redirect_to_register_with_error(
+            &form,
+            "Please enter a valid email address",
+            frontend_url,
+        );
     }
 
     // Validate password complexity
     if let Err(msg) = validate_password_complexity(&form.password) {
-        return redirect_to_register_with_error(&form, msg);
+        return redirect_to_register_with_error(&form, msg, frontend_url);
     }
 
     if form.password != form.password_confirm {
-        return redirect_to_register_with_error(&form, "Passwords do not match");
+        return redirect_to_register_with_error(&form, "Passwords do not match", frontend_url);
     }
 
     // Check if user already exists
@@ -223,45 +122,46 @@ async fn register_submit(
                 // Magic-link account — user wants to add password login
                 return upgrade_to_password_login(&state, &form, existing_user).await;
             } else if existing_user.email_verified {
-                // Fully registered account with a password
                 return redirect_to_register_with_error(
                     &form,
                     "An account with this email already exists. Please sign in instead.",
+                    frontend_url,
                 );
             } else if existing_user.has_pending_verification() {
-                // User exists but hasn't verified yet - resend verification email
                 return resend_verification_or_error(&state, &resources, &form, existing_user)
                     .await;
             } else {
-                // Verification expired - update user with new password and resend
                 return update_and_resend_verification(&state, &resources, &form, existing_user)
                     .await;
             }
         }
-        Ok(None) => {
-            // Create new user
-        }
+        Ok(None) => {}
         Err(e) => {
             tracing::error!("Database error checking existing user: {}", e);
-            return redirect_to_register_with_error(&form, "An error occurred. Please try again.");
+            return redirect_to_register_with_error(
+                &form,
+                "An error occurred. Please try again.",
+                frontend_url,
+            );
         }
     }
 
-    // Hash the password
     let password_hash = match hash_password(&form.password) {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to hash password: {}", e);
-            return redirect_to_register_with_error(&form, "An error occurred. Please try again.");
+            return redirect_to_register_with_error(
+                &form,
+                "An error occurred. Please try again.",
+                frontend_url,
+            );
         }
     };
 
-    // Generate verification token
     let verification_token = generate_verification_token();
     let now = OffsetDateTime::now_utc();
     let verification_expires = now + time::Duration::hours(24);
 
-    // Create the user
     let user = oauth2_user::ActiveModel {
         id: Set(uuid::Uuid::new_v4().to_string()),
         email: Set(email.clone()),
@@ -280,7 +180,11 @@ async fn register_submit(
 
     if let Err(e) = user.insert(state.db.as_ref()).await {
         tracing::error!("Failed to create user: {}", e);
-        return redirect_to_register_with_error(&form, "An error occurred. Please try again.");
+        return redirect_to_register_with_error(
+            &form,
+            "An error occurred. Please try again.",
+            frontend_url,
+        );
     }
 
     if let Err(e) = send_verification_email(&resources, &email, &verification_token, &form).await {
@@ -288,15 +192,16 @@ async fn register_submit(
         return redirect_to_register_with_message(
             &form,
             "Account created but we couldn't queue the verification email. Please try again later.",
+            frontend_url,
         );
     }
 
     tracing::info!(email = %email, "User registered, verification email queued");
 
-    // Redirect back to registration page with success message
     redirect_to_register_with_message(
         &form,
         "Account created! Please check your email for the verification link.",
+        frontend_url,
     )
 }
 
@@ -309,11 +214,16 @@ async fn upgrade_to_password_login(
     form: &RegisterForm,
     user: oauth2_user::Model,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
     let password_hash = match hash_password(&form.password) {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to hash password during upgrade: {}", e);
-            return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+            return redirect_to_register_with_error(
+                form,
+                "An error occurred. Please try again.",
+                frontend_url,
+            );
         }
     };
 
@@ -322,14 +232,18 @@ async fn upgrade_to_password_login(
 
     if let Err(e) = active.update(state.db.as_ref()).await {
         tracing::error!("Failed to set password during magic-link upgrade: {}", e);
-        return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+        return redirect_to_register_with_error(
+            form,
+            "An error occurred. Please try again.",
+            frontend_url,
+        );
     }
 
     tracing::info!(email = %form.email, "Magic-link account upgraded to password login");
 
-    // Build a login redirect with a success message so the user can sign in immediately.
     let login_url = format!(
-        "/oauth2/login?message={}&client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&login_hint={}",
+        "{}/alerts/login?message={}&client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&login_hint={}",
+        frontend_url,
         urlencoding::encode("Password set successfully. You can now sign in."),
         urlencoding::encode(&form.client_id),
         urlencoding::encode(&form.redirect_uri),
@@ -343,11 +257,12 @@ async fn upgrade_to_password_login(
 
 /// Resend verification email for existing unverified user.
 async fn resend_verification_or_error(
-    _state: &OAuth2State,
+    state: &OAuth2State,
     resources: &AppResources,
     form: &RegisterForm,
     user: oauth2_user::Model,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
     // Resend the existing verification email
     if let Some(token) = &user.email_verification_token {
         if let Err(e) = send_verification_email(resources, &user.email, token, form).await {
@@ -355,16 +270,19 @@ async fn resend_verification_or_error(
             return redirect_to_register_with_error(
                 form,
                 "Couldn't queue verification email. Please try again.",
+                frontend_url,
             );
         }
         redirect_to_register_with_message(
             form,
             "A verification email has already been sent. We've sent it again - please check your inbox.",
+            frontend_url,
         )
     } else {
         redirect_to_register_with_error(
             form,
             "An account with this email already exists. Please sign in instead.",
+            frontend_url,
         )
     }
 }
@@ -379,12 +297,18 @@ async fn update_and_resend_verification(
     form: &RegisterForm,
     user: oauth2_user::Model,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
+
     // Hash the new password
     let password_hash = match hash_password(&form.password) {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to hash password: {}", e);
-            return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+            return redirect_to_register_with_error(
+                form,
+                "An error occurred. Please try again.",
+                frontend_url,
+            );
         }
     };
 
@@ -401,7 +325,11 @@ async fn update_and_resend_verification(
 
     if let Err(e) = active.update(state.db.as_ref()).await {
         tracing::error!("Failed to update user: {}", e);
-        return redirect_to_register_with_error(form, "An error occurred. Please try again.");
+        return redirect_to_register_with_error(
+            form,
+            "An error occurred. Please try again.",
+            frontend_url,
+        );
     }
 
     if let Err(e) = send_verification_email(resources, &form.email, &verification_token, form).await
@@ -410,12 +338,14 @@ async fn update_and_resend_verification(
         return redirect_to_register_with_error(
             form,
             "Couldn't queue verification email. Please try again.",
+            frontend_url,
         );
     }
 
     redirect_to_register_with_message(
         form,
         "Your account has been updated. Please check your email for the verification link.",
+        frontend_url,
     )
 }
 
@@ -459,9 +389,21 @@ async fn send_verification_email(
         ));
     }
 
+    let manage_url = Some(format!(
+        "{}/account",
+        resources.config.frontend_url.trim_end_matches('/')
+    ));
+    let sponsor_url = resources
+        .config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| resources.config.liberapay_url.clone());
     let template = AccountVerificationEmailTemplate {
         verify_url,
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: email.to_string(),
+        manage_url,
+        sponsor_url,
     };
 
     let html_body = template.render_html().unwrap_or_default();
@@ -514,6 +456,17 @@ async fn verify_email(
     State(state): State<OAuth2State>,
     Query(params): Query<VerifyEmailQuery>,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
+
+    let redirect_error = |msg: &str| {
+        Redirect::to(&format!(
+            "{}/alerts/login?error={}",
+            frontend_url,
+            urlencoding::encode(msg)
+        ))
+        .into_response()
+    };
+
     // Find user by verification token
     let user = match oauth2_user::Entity::find()
         .filter(oauth2_user::Column::EmailVerificationToken.eq(&params.token))
@@ -522,19 +475,17 @@ async fn verify_email(
     {
         Ok(Some(u)) => u,
         Ok(None) => {
-            return render_verification_error(
-                "Invalid or expired verification link. Please register again.",
-            );
+            return redirect_error("Invalid or expired verification link. Please register again.");
         }
         Err(e) => {
             tracing::error!("Database error during verification: {}", e);
-            return render_verification_error("An error occurred. Please try again.");
+            return redirect_error("An error occurred. Please try again.");
         }
     };
 
     // Check if token has expired
     if user.is_verification_expired() {
-        return render_verification_error(
+        return redirect_error(
             "This verification link has expired. Please register again to get a new link.",
         );
     }
@@ -547,15 +498,17 @@ async fn verify_email(
 
     if let Err(e) = active.update(state.db.as_ref()).await {
         tracing::error!("Failed to verify user email: {}", e);
-        return render_verification_error("An error occurred. Please try again.");
+        return redirect_error("An error occurred. Please try again.");
     }
 
     tracing::info!(email = %user.email, "User email verified successfully");
 
-    // Redirect to login page with success message and OAuth2 parameters
-    let mut login_url =
-        "/oauth2/login?message=Email%20verified%20successfully.%20You%20can%20now%20sign%20in."
-            .to_string();
+    // Redirect to frontend login page with success message and OAuth2 parameters
+    let mut login_url = format!(
+        "{}/alerts/login?message={}",
+        frontend_url,
+        urlencoding::encode("Email verified successfully. You can now sign in.")
+    );
 
     if let Some(client_id) = params.client_id {
         login_url.push_str(&format!("&client_id={}", urlencoding::encode(&client_id)));
@@ -569,8 +522,8 @@ async fn verify_email(
     if let Some(scope) = params.scope {
         login_url.push_str(&format!("&scope={}", urlencoding::encode(&scope)));
     }
-    if let Some(state) = params.state {
-        login_url.push_str(&format!("&state={}", urlencoding::encode(&state)));
+    if let Some(oauth2_state) = params.state {
+        login_url.push_str(&format!("&state={}", urlencoding::encode(&oauth2_state)));
     }
     if let Some(nonce) = params.nonce {
         login_url.push_str(&format!("&nonce={}", urlencoding::encode(&nonce)));
@@ -592,43 +545,15 @@ async fn verify_email(
     Redirect::to(&login_url).into_response()
 }
 
-/// Render an error page for verification failures.
-fn render_verification_error(message: &str) -> Response {
-    // Simple error page - in a real app you'd use a template
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <title>Verification Failed - Federation Tester</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/assets/govuk/govuk-frontend.min.css">
-</head>
-<body class="govuk-template__body">
-    <div class="govuk-width-container">
-        <main class="govuk-main-wrapper" id="main-content">
-            <div class="govuk-grid-row">
-                <div class="govuk-grid-column-two-thirds">
-                    <h1 class="govuk-heading-l">Verification failed</h1>
-                    <p class="govuk-body">{}</p>
-                    <p class="govuk-body">
-                        <a class="govuk-link" href="/">Return to homepage</a>
-                    </p>
-                </div>
-            </div>
-        </main>
-    </div>
-</body>
-</html>"#,
-        message
-    );
-    Html(html).into_response()
-}
-
-/// Redirect back to registration page with an error message.
-fn redirect_to_register_with_error(form: &RegisterForm, error: &str) -> Response {
+/// Redirect to the frontend registration page with an error message.
+fn redirect_to_register_with_error(
+    form: &RegisterForm,
+    error: &str,
+    frontend_url: &str,
+) -> Response {
     let mut url = format!(
-        "/oauth2/register?client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&error={}",
+        "{}/alerts/register?client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&error={}",
+        frontend_url,
         urlencoding::encode(&form.client_id),
         urlencoding::encode(&form.redirect_uri),
         urlencoding::encode(&form.scope),
@@ -662,10 +587,15 @@ fn redirect_to_register_with_error(form: &RegisterForm, error: &str) -> Response
     Redirect::to(&url).into_response()
 }
 
-/// Redirect back to registration page with a success message.
-fn redirect_to_register_with_message(form: &RegisterForm, message: &str) -> Response {
+/// Redirect to the frontend registration page with a success message.
+fn redirect_to_register_with_message(
+    form: &RegisterForm,
+    message: &str,
+    frontend_url: &str,
+) -> Response {
     let mut url = format!(
-        "/oauth2/register?client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&message={}",
+        "{}/alerts/register?client_id={}&redirect_uri={}&scope={}&state={}&response_type={}&message={}",
+        frontend_url,
         urlencoding::encode(&form.client_id),
         urlencoding::encode(&form.redirect_uri),
         urlencoding::encode(&form.scope),

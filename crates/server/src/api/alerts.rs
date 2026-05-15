@@ -195,6 +195,16 @@ async fn register_alert(
         server_name: payload.server_name.clone(),
         verify_url: verify_url.clone(),
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: payload.email.clone(),
+        manage_url: Some(format!(
+            "{}/alerts",
+            resources.config.frontend_url.trim_end_matches('/')
+        )),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
     let subject = crate::email_templates::env_subject(
         "Please verify your email for Federation Alerts",

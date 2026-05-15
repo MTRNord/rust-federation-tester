@@ -19,7 +19,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::Duration;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -34,9 +34,14 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 struct RequestPageTemplate {
     error: Option<String>,
     sent: bool,
+    /// Email address that was submitted (shown in the "sent" confirmation).
+    email: Option<String>,
+    frontend_url: String,
+    github_sponsors_url: Option<String>,
+    liberapay_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub enum PasswordResetState {
     Form,
     Success,
@@ -49,6 +54,11 @@ struct ConfirmPageTemplate {
     state: PasswordResetState,
     token: String,
     error: Option<String>,
+    /// Email address associated with the reset token (shown in the form heading).
+    email: Option<String>,
+    frontend_url: String,
+    github_sponsors_url: Option<String>,
+    liberapay_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +80,9 @@ pub struct ConfirmForm {
     pub token: String,
     pub new_password: String,
     pub confirm_password: String,
+    /// Email passed back as a hidden field so error re-renders can show it.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,8 +107,8 @@ pub fn router() -> OpenApiRouter {
     summary = "Render the password reset request form",
     responses((status = 200, description = "HTML form"))
 )]
-async fn get_reset_request() -> Response {
-    render_request_page(None, false)
+async fn get_reset_request(Extension(resources): Extension<AppResources>) -> Response {
+    render_request_page(&resources, None, false, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +131,12 @@ async fn post_reset_request(
 ) -> Response {
     let email = form.email.trim().to_lowercase();
     if email.is_empty() || !email.contains('@') {
-        return render_request_page(Some("Please enter a valid email address."), false);
+        return render_request_page(
+            &resources,
+            Some("Please enter a valid email address."),
+            false,
+            None,
+        );
     }
 
     // Add a small random delay (50–200 ms) so timing attacks cannot distinguish
@@ -132,7 +150,7 @@ async fn post_reset_request(
 
     // Always show "check your email" regardless of whether the address exists (anti-enumeration).
     issue_reset_token(&resources, &email).await;
-    render_request_page(None, true)
+    render_request_page(&resources, None, true, Some(&email))
 }
 
 // tracing! macros expand to `if` blocks that inflate the cognitive complexity
@@ -171,9 +189,18 @@ async fn issue_reset_token(resources: &AppResources, email: &str) {
         urlencoding::encode(&token)
     );
 
+    let frontend_url = resources.config.frontend_url.trim_end_matches('/');
     let template = PasswordResetEmailTemplate {
         reset_url,
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: email.to_string(),
+        manage_url: format!("{}/account", frontend_url),
+        support_url: None,
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
     let html_body = template.render_html().unwrap_or_default();
     let text_body = template.render_text();
@@ -221,10 +248,14 @@ async fn get_reset_confirm(
         .await;
 
     match user {
-        Ok(Some(u)) if u.is_password_reset_valid() => {
-            render_confirm_page(PasswordResetState::Form, &query.token, None)
-        }
-        _ => render_confirm_page(PasswordResetState::InvalidToken, "", None),
+        Ok(Some(u)) if u.is_password_reset_valid() => render_confirm_page(
+            &resources,
+            PasswordResetState::Form,
+            &query.token,
+            None,
+            Some(&u.email),
+        ),
+        _ => render_confirm_page(&resources, PasswordResetState::InvalidToken, "", None, None),
     }
 }
 
@@ -246,25 +277,38 @@ async fn post_reset_confirm(
     Extension(resources): Extension<AppResources>,
     Form(form): Form<ConfirmForm>,
 ) -> Response {
+    let email = form.email.as_deref();
     if form.new_password != form.confirm_password {
         return render_confirm_page(
+            &resources,
             PasswordResetState::Form,
             &form.token,
             Some("Passwords do not match"),
+            email,
         );
     }
     if let Err(msg) = validate_password_complexity(&form.new_password) {
-        return render_confirm_page(PasswordResetState::Form, &form.token, Some(msg));
+        return render_confirm_page(
+            &resources,
+            PasswordResetState::Form,
+            &form.token,
+            Some(msg),
+            email,
+        );
     }
 
     match apply_password_reset(&resources, &form.token, &form.new_password).await {
-        Ok(()) => render_confirm_page(PasswordResetState::Success, "", None),
+        Ok(()) => render_confirm_page(&resources, PasswordResetState::Success, "", None, None),
         Err(ResetError::InvalidToken) => {
-            render_confirm_page(PasswordResetState::InvalidToken, "", None)
+            render_confirm_page(&resources, PasswordResetState::InvalidToken, "", None, None)
         }
-        Err(ResetError::InternalError(msg)) => {
-            render_confirm_page(PasswordResetState::Form, &form.token, Some(msg))
-        }
+        Err(ResetError::InternalError(msg)) => render_confirm_page(
+            &resources,
+            PasswordResetState::Form,
+            &form.token,
+            Some(msg),
+            email,
+        ),
     }
 }
 
@@ -313,10 +357,20 @@ async fn apply_password_reset(
 // Render helpers
 // ---------------------------------------------------------------------------
 
-fn render_request_page(error: Option<&str>, sent: bool) -> Response {
+fn render_request_page(
+    resources: &AppResources,
+    error: Option<&str>,
+    sent: bool,
+    email: Option<&str>,
+) -> Response {
+    let cfg = &resources.config;
     let template = RequestPageTemplate {
         error: error.map(str::to_string),
         sent,
+        email: email.map(str::to_string),
+        frontend_url: cfg.frontend_url.clone(),
+        github_sponsors_url: cfg.github_sponsors_url.clone(),
+        liberapay_url: cfg.liberapay_url.clone(),
     };
     match template.render() {
         Ok(html) => Html(html).into_response(),
@@ -324,11 +378,22 @@ fn render_request_page(error: Option<&str>, sent: bool) -> Response {
     }
 }
 
-fn render_confirm_page(state: PasswordResetState, token: &str, error: Option<&str>) -> Response {
+fn render_confirm_page(
+    resources: &AppResources,
+    state: PasswordResetState,
+    token: &str,
+    error: Option<&str>,
+    email: Option<&str>,
+) -> Response {
+    let cfg = &resources.config;
     let template = ConfirmPageTemplate {
         state,
         token: token.to_string(),
         error: error.map(str::to_string),
+        email: email.map(str::to_string),
+        frontend_url: cfg.frontend_url.clone(),
+        github_sponsors_url: cfg.github_sponsors_url.clone(),
+        liberapay_url: cfg.liberapay_url.clone(),
     };
     match template.render() {
         Ok(html) => Html(html).into_response(),

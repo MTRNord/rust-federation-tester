@@ -19,9 +19,9 @@ use crate::alerts::email::{
     send_version_change_email,
 };
 use crate::entity::{alert, alert_observed_state};
-use crate::response::Root;
+use crate::response::{Certificate, Root};
 use sea_orm::{ActiveModelTrait, ActiveValue, EntityTrait};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use time::OffsetDateTime;
 
 const TLS_EXPIRY_WARNING_DAYS: i64 = 14;
@@ -84,7 +84,7 @@ pub async fn check_change_alerts(
 
     // Run each check helper. check_tls_expiry returns Some(now) if it sent an
     // email so we can persist last_tls_expiry_email_at.
-    let expiry_email_at = check_tls_expiry(a, &prev, current.earliest_expiry, resources, now).await;
+    let expiry_email_at = check_tls_expiry(a, &prev, &current, resources, now).await;
     check_server_name_change(a, &prev, &current, resources, now).await;
     check_version_change(a, &prev, &current, resources, now).await;
     check_tls_cert_change(a, &prev, &current, resources, now).await;
@@ -127,6 +127,8 @@ struct CurrentState {
     /// Sorted, deduplicated well-known targets for comparison.
     well_known: Vec<String>,
     earliest_expiry: Option<OffsetDateTime>,
+    /// Cert details keyed by SHA-256 fingerprint for the current probe.
+    cert_details: HashMap<String, Certificate>,
 }
 
 fn extract_current_state(report: &Root) -> CurrentState {
@@ -151,12 +153,15 @@ fn extract_current_state(report: &Root) -> CurrentState {
         serde_json::to_string(&well_known).ok()
     };
 
-    let mut fingerprints: Vec<String> = report
+    let cert_details: HashMap<String, Certificate> = report
         .connection_reports
         .values()
-        .flat_map(|r| r.certificates.iter().map(|c| c.sha256fingerprint.clone()))
-        .filter(|f| !f.is_empty())
+        .flat_map(|r| r.certificates.iter())
+        .filter(|c| !c.sha256fingerprint.is_empty())
+        .map(|c| (c.sha256fingerprint.clone(), c.clone()))
         .collect();
+
+    let mut fingerprints: Vec<String> = cert_details.keys().cloned().collect();
     fingerprints.sort();
     fingerprints.dedup();
 
@@ -181,6 +186,7 @@ fn extract_current_state(report: &Root) -> CurrentState {
         fingerprints,
         well_known,
         earliest_expiry,
+        cert_details,
     }
 }
 
@@ -269,6 +275,28 @@ async fn check_server_name_change(
         return;
     }
 
+    let old_delegation = prev_well_known
+        .first()
+        .cloned()
+        .or_else(|| prev.server_name_seen.clone())
+        .unwrap_or_else(|| a.server_name.clone());
+    let old_method = if !prev_well_known.is_empty() {
+        "well-known".to_string()
+    } else {
+        "direct / SRV".to_string()
+    };
+    let new_delegation = current
+        .well_known
+        .first()
+        .cloned()
+        .or_else(|| current.server_name.clone())
+        .unwrap_or_else(|| a.server_name.clone());
+    let new_method = if !current.well_known.is_empty() {
+        "well-known".to_string()
+    } else {
+        "direct / SRV".to_string()
+    };
+
     let recipients = get_notification_emails(db, a).await;
     for email in recipients.iter().map(|r| r.email.as_str()) {
         if let Err(e) = send_server_name_change_email(
@@ -278,10 +306,14 @@ async fn check_server_name_change(
             email,
             &a.server_name,
             a.id,
-            prev.server_name_seen.clone(),
-            current.server_name.clone(),
-            prev_well_known.clone(),
-            current.well_known.clone(),
+            old_delegation.clone(),
+            old_method.clone(),
+            new_delegation.clone(),
+            new_method.clone(),
+            current.version_name.clone(),
+            current.version_string.clone(),
+            "healthy".to_string(),
+            now,
         )
         .await
         {
@@ -374,6 +406,7 @@ async fn check_version_change(
             old_ver.clone(),
             current.version_name.clone(),
             current.version_string.clone(),
+            now,
         )
         .await
         {
@@ -461,6 +494,12 @@ async fn check_tls_cert_change(
         return;
     }
 
+    // Look up full cert details for the first added fingerprint.
+    let new_cert = added
+        .first()
+        .and_then(|fp| current.cert_details.get(fp))
+        .cloned();
+
     let recipients = get_notification_emails(db, a).await;
     for email in recipients.iter().map(|r| r.email.as_str()) {
         if let Err(e) = send_tls_cert_change_email(
@@ -472,6 +511,8 @@ async fn check_tls_cert_change(
             a.id,
             added.clone(),
             removed.clone(),
+            now,
+            new_cert.clone(),
         )
         .await
         {
@@ -494,23 +535,28 @@ async fn check_tls_cert_change(
         removed = removed.len(),
         message = "TLS cert change detected and notified"
     );
-
-    let _ = now;
 }
 
 /// Returns `Some(now)` if a TLS expiry warning email was sent this cycle.
 async fn check_tls_expiry(
     a: &alert::Model,
     prev: &alert_observed_state::Model,
-    earliest_expiry: Option<OffsetDateTime>,
+    current: &CurrentState,
     resources: &AppResources,
     now: OffsetDateTime,
 ) -> Option<OffsetDateTime> {
     if !a.notify_tls_expiry {
         return None;
     }
-    let expiry = earliest_expiry?;
+    let expiry = current.earliest_expiry?;
     let days_remaining = (expiry - now).whole_days();
+
+    // Find the cert that expires soonest (to populate cert details in the email).
+    let expiring_cert = current
+        .cert_details
+        .values()
+        .filter(|c| c.not_after.is_some())
+        .min_by_key(|c| c.not_after.unwrap());
 
     if days_remaining > TLS_EXPIRY_WARNING_DAYS {
         return None;
@@ -557,6 +603,7 @@ async fn check_tls_expiry(
             a.id,
             expiry,
             days_remaining,
+            expiring_cert,
         )
         .await
         .is_ok()

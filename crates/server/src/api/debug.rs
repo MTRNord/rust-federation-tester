@@ -4,8 +4,10 @@
 
 use crate::AppResources;
 use crate::email_templates::{
-    FailureEmailTemplate, MagicLinkEmailTemplate, PasswordResetEmailTemplate,
-    RecoveryEmailTemplate, VerificationEmailTemplate,
+    AccountVerificationEmailTemplate, FailureEmailTemplate, MagicLinkEmailTemplate,
+    PasswordResetEmailTemplate, RecoveryEmailTemplate, ServerNameChangeEmailTemplate,
+    TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VerificationEmailTemplate,
+    VersionChangeEmailTemplate,
 };
 use axum::{
     Extension,
@@ -26,6 +28,11 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(preview_recovery_email))
         .routes(routes!(preview_magic_link_email))
         .routes(routes!(preview_password_reset_email))
+        .routes(routes!(preview_tls_expiry_email))
+        .routes(routes!(preview_tls_cert_change_email))
+        .routes(routes!(preview_version_change_email))
+        .routes(routes!(preview_account_verification_email))
+        .routes(routes!(preview_server_name_change_email))
 }
 
 /// Check if the client IP is allowed to access debug endpoints.
@@ -75,6 +82,13 @@ pub async fn preview_verification_email(
         server_name: "example.matrix.org".to_string(),
         verify_url: "https://example.com/verify?token=sample-token-12345".to_string(),
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: "user@example.com".to_string(),
+        manage_url: Some("https://example.com/alerts".to_string()),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     match template.render_html() {
@@ -115,8 +129,8 @@ pub async fn preview_failure_email(
 
     let template = FailureEmailTemplate {
         server_name: "example.matrix.org".to_string(),
-        check_url: "https://example.com/report/example.matrix.org".to_string(),
-        unsubscribe_url: "https://example.com/unsubscribe?token=sample-token".to_string(),
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
         failure_count: 3,
         reminder_interval: "24 hours".to_string(),
         failure_reason: Some(
@@ -124,6 +138,18 @@ pub async fn preview_failure_email(
         ),
         environment_name: resources.config.environment_name.clone(),
         quiet_hours_note: None,
+        first_detected: Some("2024-01-15T14:32:00Z".to_string()),
+        minutes_down: Some(42),
+        last_healthy: Some("2024-01-15T13:45:00Z".to_string()),
+        error_hint: None,
+        reminder_total: None,
+        alert_url: "https://example.com/alerts/edit/1".to_string(),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     match template.render_html() {
@@ -163,9 +189,21 @@ pub async fn preview_recovery_email(
 
     let template = RecoveryEmailTemplate {
         server_name: "example.matrix.org".to_string(),
-        check_url: "https://example.com/report/example.matrix.org".to_string(),
-        unsubscribe_url: "https://example.com/unsubscribe?token=sample-token".to_string(),
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
         environment_name: resources.config.environment_name.clone(),
+        recovered_at: Some("2024-01-15T16:47:00Z".to_string()),
+        first_detected: Some("2024-01-15T14:32:00Z".to_string()),
+        minutes_down: Some(135),
+        downtime_human: Some("2h 15m".to_string()),
+        recovery_signal: None,
+        recovery_hint: None,
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     match template.render_html() {
@@ -206,6 +244,13 @@ pub async fn preview_magic_link_email(
         verify_url: "https://example.com/oauth2/magic-link/verify?token=sample-token-12345"
             .to_string(),
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: "user@example.com".to_string(),
+        manage_url: "https://example.com/account".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     match template.render_html() {
@@ -246,6 +291,294 @@ pub async fn preview_password_reset_email(
         reset_url: "https://example.com/oauth2/password-reset/confirm?token=sample-token-12345"
             .to_string(),
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: "user@example.com".to_string(),
+        manage_url: "https://example.com/account".to_string(),
+        support_url: None,
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the TLS certificate expiry warning email template.
+#[utoipa::path(
+    get,
+    path = "/email/tls-expiry",
+    tag = DEBUG_TAG,
+    operation_id = "Preview TLS Expiry Email",
+    summary = "Preview TLS certificate expiry email template",
+    description = "Renders the TLS certificate expiry warning email template with sample data.\n\n\
+                   The sample uses `days_remaining = 5` which triggers the urgent red banner (≤7 days).\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_tls_expiry_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = TlsExpiryEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        expires_at: "2024-01-22 14:32 UTC".to_string(),
+        expires_human: "Jan 22, 2024".to_string(),
+        days_remaining: 5,
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        issued_human: Some("Dec 23, 2023".to_string()),
+        cert_cn: Some("example.matrix.org".to_string()),
+        cert_san: Some("DNS:example.matrix.org".to_string()),
+        cert_issuer: Some("Let's Encrypt Authority X3".to_string()),
+        cert_fingerprint: Some(
+            "AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78".to_string(),
+        ),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+        renewal_guide_url: None,
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the TLS certificate change notification email template.
+#[utoipa::path(
+    get,
+    path = "/email/tls-cert-change",
+    tag = DEBUG_TAG,
+    operation_id = "Preview TLS Cert Change Email",
+    summary = "Preview TLS certificate change notification email template",
+    description = "Renders the TLS certificate rotation notification email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_tls_cert_change_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = TlsCertChangeEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        added_fingerprints: vec![
+            "AABBCCDD112233445566778899AABBCCDD112233445566778899AABBCCDD1122".to_string(),
+        ],
+        removed_fingerprints: vec![
+            "112233445566778899AABBCCDD112233445566778899AABBCCDD112233445566".to_string(),
+        ],
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        detected_at: Some("2024-01-15 14:32 UTC".to_string()),
+        old_fingerprint: Some(
+            "112233445566778899AABBCCDD112233445566778899AABBCCDD112233445566".to_string(),
+        ),
+        old_issuer: None,
+        old_expires: None,
+        new_fingerprint: Some(
+            "AABBCCDD112233445566778899AABBCCDD112233445566778899AABBCCDD1122".to_string(),
+        ),
+        new_issuer: Some("Let's Encrypt Authority X3".to_string()),
+        new_expires: Some("Apr 15, 2024".to_string()),
+        alert_url: "https://example.com/alerts/edit/1".to_string(),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the server version change notification email template.
+#[utoipa::path(
+    get,
+    path = "/email/version-change",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Version Change Email",
+    summary = "Preview server version change email template",
+    description = "Renders the server version change notification email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_version_change_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = VersionChangeEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        old_version_name: "Synapse".to_string(),
+        old_version_string: "1.98.0".to_string(),
+        new_version_name: "Synapse".to_string(),
+        new_version_string: "1.99.0".to_string(),
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        detected_at: Some("2024-01-15 14:32 UTC".to_string()),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the account verification email template.
+#[utoipa::path(
+    get,
+    path = "/email/account-verification",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Account Verification Email",
+    summary = "Preview account verification email template",
+    description = "Renders the account verification email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_account_verification_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = AccountVerificationEmailTemplate {
+        verify_url: "https://example.com/oauth2/verify-email?token=sample-token-12345".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        recipient_email: "user@example.com".to_string(),
+        manage_url: Some(format!(
+            "{}/account",
+            resources.config.frontend_url.trim_end_matches('/')
+        )),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the server name / federation delegation change email template.
+#[utoipa::path(
+    get,
+    path = "/email/server-name-change",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Server Name Change Email",
+    summary = "Preview federation delegation change email template",
+    description = "Renders the server federation delegation change notification email template with sample data.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_server_name_change_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = ServerNameChangeEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        environment_name: resources.config.environment_name.clone(),
+        detected_at: "2024-01-15 14:32 UTC".to_string(),
+        old_delegation_target: "matrix.example.org:8448".to_string(),
+        old_resolution_method: "well-known".to_string(),
+        new_delegation_target: "matrix2.example.org:8448".to_string(),
+        new_resolution_method: "well-known".to_string(),
+        server_software: "Synapse".to_string(),
+        server_version: "1.99.0".to_string(),
+        federation_status: "healthy".to_string(),
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
+        manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     match template.render_html() {

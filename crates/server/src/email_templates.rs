@@ -81,9 +81,23 @@ pub struct FailureEmailTemplate {
     pub failure_reason: Option<String>,
     pub environment_name: Option<String>,
     /// Set when the email was delayed due to quiet hours.
-    /// Contains the human-readable detection time so the recipient knows
-    /// this may already have resolved by the time they read it.
     pub quiet_hours_note: Option<String>,
+    /// When the failure was first detected (formatted, e.g. "2024-01-15 14:32 UTC").
+    pub first_detected: Option<String>,
+    /// How many minutes the server has been down.
+    pub minutes_down: Option<u64>,
+    /// When the server was last known-healthy (formatted).
+    pub last_healthy: Option<String>,
+    /// A human-readable hint explaining what the error likely means.
+    pub error_hint: Option<String>,
+    /// Ordinal total of reminder emails (e.g. "of 5"), omitted when unknown.
+    pub reminder_total: Option<i32>,
+    /// Direct link to view or edit this specific alert.
+    pub alert_url: String,
+    /// Link to the alerts dashboard.
+    pub manage_url: String,
+    /// Optional sponsor link shown in email footer.
+    pub sponsor_url: Option<String>,
 }
 
 impl FailureEmailTemplate {
@@ -151,6 +165,22 @@ pub struct RecoveryEmailTemplate {
     pub check_url: String,
     pub unsubscribe_url: String,
     pub environment_name: Option<String>,
+    /// When the server was confirmed healthy again (formatted).
+    pub recovered_at: Option<String>,
+    /// Approximate time when the failure started (formatted).
+    pub first_detected: Option<String>,
+    /// Total minutes the server was down.
+    pub minutes_down: Option<u64>,
+    /// Human-readable downtime string (e.g. "2h 15m").
+    pub downtime_human: Option<String>,
+    /// Machine-readable signal that confirmed recovery (e.g. a successful endpoint response).
+    pub recovery_signal: Option<String>,
+    /// Human-readable explanation of what changed.
+    pub recovery_hint: Option<String>,
+    /// Link to the alerts dashboard.
+    pub manage_url: String,
+    /// Optional sponsor link shown in email footer.
+    pub sponsor_url: Option<String>,
 }
 
 impl RecoveryEmailTemplate {
@@ -164,11 +194,16 @@ impl RecoveryEmailTemplate {
     pub fn render_text(&self) -> String {
         let env_banner = env_banner_text(self.environment_name.as_deref());
 
+        let downtime_line = match (&self.minutes_down, &self.downtime_human) {
+            (_, Some(h)) => format!("\nTotal downtime: {}\n", h),
+            (Some(m), None) => format!("\nTotal downtime: {} minutes\n", m),
+            _ => String::new(),
+        };
+
         format!(
             r#"{}Hello,
 
-Good news! Your server '{}' has recovered and is now passing federation health checks.
-
+Good news! Your server '{}' has recovered and is now passing federation health checks.{}
 You can verify the current status at {}
 
 We'll continue monitoring and will notify you if any issues arise again.
@@ -178,7 +213,7 @@ The Federation Tester Team
 
 ---
 Unsubscribe: {}"#,
-            env_banner, self.server_name, self.check_url, self.unsubscribe_url
+            env_banner, self.server_name, downtime_line, self.check_url, self.unsubscribe_url
         )
     }
 }
@@ -189,6 +224,9 @@ pub struct VerificationEmailTemplate {
     pub server_name: String,
     pub verify_url: String,
     pub environment_name: Option<String>,
+    pub recipient_email: String,
+    pub manage_url: Option<String>,
+    pub sponsor_url: Option<String>,
 }
 
 impl VerificationEmailTemplate {
@@ -203,18 +241,14 @@ impl VerificationEmailTemplate {
         let env_banner = env_banner_text(self.environment_name.as_deref());
 
         format!(
-            r#"{}Hello,
+            r#"{}Someone — hopefully you — added {} to a Connectivity Tester account to receive alerts for {}.
 
-You requested to receive alerts for your server: {}
-
-Please verify your email address by clicking the link below (valid for 1 hour):
+Verify this email address (valid for 1 hour):
 {}
 
-If you did not request this, you can ignore this email.
-
-Best regards,
-The Federation Tester Team"#,
-            env_banner, self.server_name, self.verify_url
+Didn't add this address? Safe to ignore — the link expires on its own.
+"#,
+            env_banner, self.recipient_email, self.server_name, self.verify_url
         )
     }
 }
@@ -225,6 +259,9 @@ The Federation Tester Team"#,
 pub struct AccountVerificationEmailTemplate {
     pub verify_url: String,
     pub environment_name: Option<String>,
+    pub recipient_email: String,
+    pub manage_url: Option<String>,
+    pub sponsor_url: Option<String>,
 }
 
 impl AccountVerificationEmailTemplate {
@@ -241,18 +278,14 @@ impl AccountVerificationEmailTemplate {
         format!(
             r#"{}Hello,
 
-Thanks for creating an account with Federation Tester.
+Thanks for signing up. Confirm that {} is yours and you'll be all set to start watching Matrix homeservers.
 
-Please verify your email address by clicking the link below (valid for 24 hours):
+Verify and activate your account (valid for 24 hours):
 {}
 
-Once verified, you'll be able to sign in and manage your federation alert subscriptions.
-
-If you did not create this account, you can safely ignore this email.
-
-Best regards,
-The Federation Tester Team"#,
-            env_banner, self.verify_url
+Didn't sign up? Safe to ignore — no account is created until the link is clicked.
+"#,
+            env_banner, self.recipient_email, self.verify_url
         )
     }
 }
@@ -263,6 +296,10 @@ The Federation Tester Team"#,
 pub struct PasswordResetEmailTemplate {
     pub reset_url: String,
     pub environment_name: Option<String>,
+    pub recipient_email: String,
+    pub manage_url: String,
+    pub support_url: Option<String>,
+    pub sponsor_url: Option<String>,
 }
 
 impl PasswordResetEmailTemplate {
@@ -279,16 +316,16 @@ impl PasswordResetEmailTemplate {
         format!(
             r#"{}Hello,
 
-You requested a password reset for your Federation Tester account.
+Someone requested a password reset for the Connectivity Tester account registered to {}.
 
-Click the link below to set a new password (valid for 1 hour):
+Click the link below to set a new password (valid for 60 minutes):
 {}
 
 If you did not request this, you can safely ignore this email. Your password will not be changed.
 
-Best regards,
-The Federation Tester Team"#,
-            env_banner, self.reset_url
+Manage your account: {}
+"#,
+            env_banner, self.recipient_email, self.reset_url, self.manage_url
         )
     }
 }
@@ -298,13 +335,19 @@ The Federation Tester Team"#,
 #[template(path = "server_name_change_email.html")]
 pub struct ServerNameChangeEmailTemplate {
     pub server_name: String,
-    pub old_server_name: Option<String>,
-    pub new_server_name: Option<String>,
-    pub old_well_known: Vec<String>,
-    pub new_well_known: Vec<String>,
+    pub environment_name: Option<String>,
+    pub detected_at: String,
+    pub old_delegation_target: String,
+    pub old_resolution_method: String,
+    pub new_delegation_target: String,
+    pub new_resolution_method: String,
+    pub server_software: String,
+    pub server_version: String,
+    pub federation_status: String,
     pub check_url: String,
     pub unsubscribe_url: String,
-    pub environment_name: Option<String>,
+    pub manage_url: String,
+    pub sponsor_url: Option<String>,
 }
 
 impl ServerNameChangeEmailTemplate {
@@ -317,42 +360,34 @@ impl ServerNameChangeEmailTemplate {
     #[tracing::instrument(skip(self))]
     pub fn render_text(&self) -> String {
         let env_banner = env_banner_text(self.environment_name.as_deref());
-        let mut changes = String::new();
-
-        if let (Some(old), Some(new)) = (&self.old_server_name, &self.new_server_name)
-            && old != new
-        {
-            changes.push_str(&format!(
-                "\nSelf-reported server name:\n  Was: {old}\n  Now: {new}\n"
-            ));
-        }
-        if self.old_well_known != self.new_well_known {
-            changes.push_str("\nWell-known delegation target(s):\n  Was:");
-            for e in &self.old_well_known {
-                changes.push_str(&format!("\n    {e}"));
-            }
-            changes.push_str("\n  Now:");
-            for e in &self.new_well_known {
-                changes.push_str(&format!("\n    {e}"));
-            }
-            changes.push('\n');
-        }
 
         format!(
-            r#"{}Hello,
+            r#"{}Federation delegation changed for {}.
 
-A change was detected for your server '{}'.
-{}
-This may indicate a server migration, reconfiguration, or misconfiguration. Review the full report for details.
+  Was:  {} (via {})
+  Now:  {} (via {})
 
-{}
+  Implementation: {} {}
+  Status: {}
 
-Best regards,
-The Federation Tester Team
+This usually comes from a well-known or SRV record change. Worth opening the diagnostic.
 
----
-Unsubscribe: {}"#,
-            env_banner, self.server_name, changes, self.check_url, self.unsubscribe_url
+Run a diagnostic: {}
+Manage alerts: {}
+Unsubscribe: {}
+"#,
+            env_banner,
+            self.server_name,
+            self.old_delegation_target,
+            self.old_resolution_method,
+            self.new_delegation_target,
+            self.new_resolution_method,
+            self.server_software,
+            self.server_version,
+            self.federation_status,
+            self.check_url,
+            self.manage_url,
+            self.unsubscribe_url,
         )
     }
 }
@@ -369,6 +404,9 @@ pub struct VersionChangeEmailTemplate {
     pub check_url: String,
     pub unsubscribe_url: String,
     pub environment_name: Option<String>,
+    pub detected_at: Option<String>,
+    pub manage_url: String,
+    pub sponsor_url: Option<String>,
 }
 
 impl VersionChangeEmailTemplate {
@@ -382,22 +420,17 @@ impl VersionChangeEmailTemplate {
     pub fn render_text(&self) -> String {
         let env_banner = env_banner_text(self.environment_name.as_deref());
         format!(
-            r#"{}Hello,
-
-A software update was detected for your server '{}'.
+            r#"{}A software update was detected for {}.
 
   Was: {} {}
   Now: {} {}
 
-This is an informational notification. No action is required unless this update was unexpected.
+This is an informational notification — no action required unless the update was unexpected.
 
-{}
-
-Best regards,
-The Federation Tester Team
-
----
-Unsubscribe: {}"#,
+Run a diagnostic: {}
+Manage alerts: {}
+Unsubscribe: {}
+"#,
             env_banner,
             self.server_name,
             self.old_version_name,
@@ -405,6 +438,7 @@ Unsubscribe: {}"#,
             self.new_version_name,
             self.new_version_string,
             self.check_url,
+            self.manage_url,
             self.unsubscribe_url
         )
     }
@@ -420,6 +454,16 @@ pub struct TlsCertChangeEmailTemplate {
     pub check_url: String,
     pub unsubscribe_url: String,
     pub environment_name: Option<String>,
+    pub detected_at: Option<String>,
+    pub old_fingerprint: Option<String>,
+    pub old_issuer: Option<String>,
+    pub old_expires: Option<String>,
+    pub new_fingerprint: Option<String>,
+    pub new_issuer: Option<String>,
+    pub new_expires: Option<String>,
+    pub alert_url: String,
+    pub manage_url: String,
+    pub sponsor_url: Option<String>,
 }
 
 impl TlsCertChangeEmailTemplate {
@@ -435,33 +479,33 @@ impl TlsCertChangeEmailTemplate {
         let mut body = String::new();
 
         if !self.added_fingerprints.is_empty() {
-            body.push_str("\nNew certificates (added):\n");
+            body.push_str("\nNew certificate:\n");
             for fp in &self.added_fingerprints {
                 body.push_str(&format!("  {fp}\n"));
             }
         }
         if !self.removed_fingerprints.is_empty() {
-            body.push_str("\nOld certificates (removed):\n");
+            body.push_str("\nOld certificate:\n");
             for fp in &self.removed_fingerprints {
                 body.push_str(&format!("  {fp}\n"));
             }
         }
 
         format!(
-            r#"{}Hello,
-
-The TLS certificate fingerprints changed for your server '{}'.
+            r#"{}The TLS certificate for {} changed{}. This is usually an automatic renewal — verify it was expected.
 {}
-Certificate rotation is normal for Let's Encrypt and similar CAs. Verify this change was expected.
-
-{}
-
-Best regards,
-The Federation Tester Team
-
----
-Unsubscribe: {}"#,
-            env_banner, self.server_name, body, self.check_url, self.unsubscribe_url
+Manage alerts: {}
+Unsubscribe: {}
+"#,
+            env_banner,
+            self.server_name,
+            self.detected_at
+                .as_deref()
+                .map(|d| format!(" at {d}"))
+                .unwrap_or_default(),
+            body,
+            self.manage_url,
+            self.unsubscribe_url
         )
     }
 }
@@ -473,10 +517,20 @@ pub struct TlsExpiryEmailTemplate {
     pub server_name: String,
     /// Pre-formatted expiry date string (UTC).
     pub expires_at: String,
+    /// Human-readable expiry date (e.g. "Jan 15, 2024").
+    pub expires_human: String,
     pub days_remaining: i64,
     pub check_url: String,
     pub unsubscribe_url: String,
     pub environment_name: Option<String>,
+    pub issued_human: Option<String>,
+    pub cert_cn: Option<String>,
+    pub cert_san: Option<String>,
+    pub cert_issuer: Option<String>,
+    pub cert_fingerprint: Option<String>,
+    pub manage_url: String,
+    pub sponsor_url: Option<String>,
+    pub renewal_guide_url: Option<String>,
 }
 
 impl TlsExpiryEmailTemplate {
@@ -495,21 +549,15 @@ impl TlsExpiryEmailTemplate {
             ""
         };
         format!(
-            r#"{}Hello,
-
-{}A TLS certificate for your server '{}' expires in {} day{}.
-
-Expiry date: {}
+            r#"{}{}The TLS certificate for {} expires in {} day{} ({}).
 
 An expired TLS certificate will cause federation checks to fail and prevent other Matrix homeservers from connecting to yours. Renew your certificate before it expires.
 
-{}
+Run a diagnostic: {}
 
-Best regards,
-The Federation Tester Team
-
----
-Unsubscribe: {}"#,
+Manage alerts: {}
+Unsubscribe: {}
+"#,
             env_banner,
             urgency,
             self.server_name,
@@ -517,6 +565,7 @@ Unsubscribe: {}"#,
             if self.days_remaining == 1 { "" } else { "s" },
             self.expires_at,
             self.check_url,
+            self.manage_url,
             self.unsubscribe_url
         )
     }
@@ -528,6 +577,9 @@ Unsubscribe: {}"#,
 pub struct MagicLinkEmailTemplate {
     pub verify_url: String,
     pub environment_name: Option<String>,
+    pub recipient_email: String,
+    pub manage_url: String,
+    pub sponsor_url: Option<String>,
 }
 
 impl MagicLinkEmailTemplate {
@@ -542,18 +594,15 @@ impl MagicLinkEmailTemplate {
         let env_banner = env_banner_text(self.environment_name.as_deref());
 
         format!(
-            r#"{}Hello,
+            r#"{}Use the link below to sign in to the Connectivity Tester as {}. Valid for 60 minutes, single use.
 
-You requested to sign in to Federation Tester.
-
-Click the link below to sign in (valid for 1 hour):
 {}
 
-If you did not request this, you can safely ignore this email.
+Didn't ask for this? Safe to ignore — the link only works for the person who has access to this inbox.
 
-Best regards,
-The Federation Tester Team"#,
-            env_banner, self.verify_url
+Manage account: {}
+"#,
+            env_banner, self.recipient_email, self.verify_url, self.manage_url
         )
     }
 }
@@ -573,6 +622,14 @@ mod tests {
             failure_reason: None,
             environment_name: None,
             quiet_hours_note: None,
+            first_detected: None,
+            minutes_down: None,
+            last_healthy: None,
+            error_hint: None,
+            reminder_total: None,
+            alert_url: "https://test.example.com/alerts/edit/1".to_string(),
+            manage_url: "https://test.example.com/alerts".to_string(),
+            sponsor_url: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
@@ -590,6 +647,14 @@ mod tests {
             check_url: "https://test.example.com/results?serverName=example.org".to_string(),
             unsubscribe_url: "https://test.example.com/unsubscribe?token=xyz".to_string(),
             environment_name: None,
+            recovered_at: Some("2024-01-15T16:47:00Z".to_string()),
+            first_detected: Some("2024-01-15T14:32:00Z".to_string()),
+            minutes_down: Some(135),
+            downtime_human: Some("2h 15m".to_string()),
+            recovery_signal: None,
+            recovery_hint: None,
+            manage_url: "https://test.example.com/alerts".to_string(),
+            sponsor_url: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
@@ -606,15 +671,18 @@ mod tests {
             server_name: "example.org".to_string(),
             verify_url: "https://test.example.com/verify?token=abc123".to_string(),
             environment_name: None,
+            recipient_email: "user@example.com".to_string(),
+            manage_url: None,
+            sponsor_url: None,
         };
 
         let html = template.render_html().expect("Failed to render HTML");
-        assert!(html.contains("example.org"));
+        assert!(html.contains("user@example.com"));
         assert!(html.contains("Verify"));
         assert!(html.contains("abc123"));
 
         let text = template.render_text();
-        assert!(text.contains("verify"));
+        assert!(text.contains("user@example.com"));
         assert!(text.contains("example.org"));
     }
 

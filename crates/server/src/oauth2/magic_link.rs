@@ -59,6 +59,8 @@ struct MagicLinkClaims {
 struct MagicLinkSentTemplate {
     email: String,
     frontend_url: String,
+    github_sponsors_url: Option<String>,
+    liberapay_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,11 +126,12 @@ async fn magic_link_request(
     Extension(resources): Extension<AppResources>,
     Form(form): Form<MagicLinkForm>,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
     let email = form.email.trim().to_lowercase();
 
     // Basic email format validation
     if email.is_empty() || !email.contains('@') {
-        return render_error("Please enter a valid email address.");
+        return render_error("Please enter a valid email address.", frontend_url);
     }
 
     // Sign a JWT containing the email and all OAuth2 flow parameters.
@@ -156,7 +159,7 @@ async fn magic_link_request(
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Failed to sign magic link JWT: {}", e);
-            return render_error("An error occurred. Please try again.");
+            return render_error("An error occurred. Please try again.", frontend_url);
         }
     };
 
@@ -189,6 +192,8 @@ async fn magic_link_request(
     let template = MagicLinkSentTemplate {
         email,
         frontend_url: state.frontend_url.clone(),
+        github_sponsors_url: state.github_sponsors_url.clone(),
+        liberapay_url: state.liberapay_url.clone(),
     };
     match template.render() {
         Ok(html) => Html(html).into_response(),
@@ -222,6 +227,8 @@ async fn magic_link_verify(
     Extension(resources): Extension<AppResources>,
     Query(params): Query<MagicLinkVerifyQuery>,
 ) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
+
     // Decode and validate the JWT
     let secret = resources.config.magic_token_secret.as_bytes();
     let mut validation = Validation::default();
@@ -237,6 +244,7 @@ async fn magic_link_verify(
             tracing::warn!("Magic link token invalid: {}", e);
             return render_error(
                 "This magic link is invalid or has expired. Please request a new one.",
+                frontend_url,
             );
         }
     };
@@ -270,13 +278,13 @@ async fn magic_link_verify(
                 Ok(u) => u,
                 Err(e) => {
                     tracing::error!("Failed to create user via magic link: {}", e);
-                    return render_error("An error occurred. Please try again.");
+                    return render_error("An error occurred. Please try again.", frontend_url);
                 }
             }
         }
         Err(e) => {
             tracing::error!("Database error during magic link verify: {}", e);
-            return render_error("An error occurred. Please try again.");
+            return render_error("An error occurred. Please try again.", frontend_url);
         }
     };
 
@@ -321,9 +329,17 @@ async fn send_magic_link_email(
     verify_url: &str,
     jwt_expires_at: OffsetDateTime,
 ) -> Result<(), sea_orm::DbErr> {
+    let frontend_url = resources.config.frontend_url.trim_end_matches('/');
     let template = MagicLinkEmailTemplate {
         verify_url: verify_url.to_string(),
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: email.to_string(),
+        manage_url: format!("{}/account", frontend_url),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
 
     let html_body = template.render_html().unwrap_or_default();
@@ -344,54 +360,12 @@ async fn send_magic_link_email(
     .await
 }
 
-/// Render a simple inline error page.
-fn render_error(message: &str) -> Response {
-    let html = format!(
-        r#"<!doctype html>
-<html lang="en" class="govuk-template govuk-template--rebranded">
-<head>
-    <meta charset="utf-8">
-    <title>Error - Federation Tester</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/assets/govuk/govuk-frontend.min.css">
-</head>
-<body class="govuk-template__body">
-    <header class="govuk-header" data-module="govuk-header">
-        <div class="govuk-header__container govuk-width-container">
-            <div class="govuk-header__logo">
-                <a href="/" class="govuk-header__link govuk-header__link--homepage">
-                    <span class="govuk-header__logotype">
-                        <span class="govuk-header__logotype-text">Federation Tester</span>
-                    </span>
-                </a>
-            </div>
-        </div>
-    </header>
-    <div class="govuk-width-container">
-        <main class="govuk-main-wrapper" id="main-content">
-            <div class="govuk-grid-row">
-                <div class="govuk-grid-column-two-thirds">
-                    <h1 class="govuk-heading-l">Something went wrong</h1>
-                    <p class="govuk-body">{message}</p>
-                    <p class="govuk-body"><a class="govuk-link" href="/">Return to homepage</a></p>
-                </div>
-            </div>
-        </main>
-    </div>
-    <footer class="govuk-footer">
-        <div class="govuk-width-container">
-            <div class="govuk-footer__meta">
-                <div class="govuk-footer__meta-item govuk-footer__meta-item--grow">
-                    <span class="govuk-footer__licence-description">
-                        Federation Tester is a community project for testing Matrix homeserver federation.
-                    </span>
-                </div>
-            </div>
-        </div>
-    </footer>
-</body>
-</html>"#,
-        message = message
-    );
-    Html(html).into_response()
+/// Redirect to the frontend login page with an error message.
+fn render_error(message: &str, frontend_url: &str) -> Response {
+    Redirect::to(&format!(
+        "{}/alerts/login?error={}",
+        frontend_url,
+        urlencoding::encode(message)
+    ))
+    .into_response()
 }

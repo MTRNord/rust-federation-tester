@@ -132,22 +132,10 @@ pub async fn start_webserver<P: ConnectionProvider>(
 
     let router = router.merge(Redoc::with_url("/api-docs", api));
 
-    // Serve vendored GOV.UK Frontend assets.
-    // The CSS references fonts at /assets/fonts/ (absolute paths).
     let static_dir = std::env::var("STATIC_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
-    let router = router
-        .nest_service("/assets/govuk", ServeDir::new(static_dir.join("govuk")))
-        .nest_service(
-            "/assets/fonts",
-            ServeDir::new(static_dir.join("govuk/fonts")),
-        )
-        .nest_service(
-            "/assets/images",
-            ServeDir::new(static_dir.join("govuk/images")),
-        )
-        .nest_service("/assets/js", ServeDir::new(static_dir.join("js")));
+    let router = router.nest_service("/assets/css", ServeDir::new(static_dir.join("css")));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     tracing::info!("Server running at 0.0.0.0:8080");

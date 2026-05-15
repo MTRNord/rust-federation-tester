@@ -1268,7 +1268,7 @@ async fn test_password_reset_request_get_renders_form() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Reset your password"));
+    assert!(body.contains("Forgot your password?"));
     assert!(body.contains("Send reset link"));
 }
 
@@ -1286,7 +1286,7 @@ async fn test_password_reset_request_post_unknown_email() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Check your email"));
+    assert!(body.contains("Check your inbox"));
 }
 
 #[tokio::test]
@@ -1303,7 +1303,7 @@ async fn test_password_reset_request_post_known_email() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Check your email"));
+    assert!(body.contains("Check your inbox"));
 }
 
 #[tokio::test]
@@ -1319,7 +1319,7 @@ async fn test_password_reset_confirm_get_invalid_token() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Link expired or invalid"));
+    assert!(body.contains("This link has expired"));
 }
 
 #[tokio::test]
@@ -1460,7 +1460,7 @@ async fn test_password_reset_confirm_post_invalid_token() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Link expired or invalid"));
+    assert!(body.contains("This link has expired"));
 }
 
 #[tokio::test]
@@ -1556,5 +1556,5 @@ async fn test_password_reset_confirm_post_expired_token() {
 
     response.assert_status_ok();
     let body = response.text();
-    assert!(body.contains("Link expired or invalid"));
+    assert!(body.contains("This link has expired"));
 }

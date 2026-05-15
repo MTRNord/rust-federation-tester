@@ -1,59 +1,21 @@
 //! OAuth2 Login endpoints.
 //!
-//! Implements user authentication for the OAuth2 authorization flow:
-//! - Login page (GET)
 //! - Login submission (POST)
 //! - Magic link initiation (POST)
+//!
+//! The GET login page lives in the React frontend at /alerts/login.
 
-use crate::entity::{oauth2_client, oauth2_user};
+use crate::entity::oauth2_user;
 use crate::oauth2::{state::OAuth2State, verify_password};
-use askama::Template;
 use axum::{
     Form,
-    extract::{Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    extract::State,
+    response::{IntoResponse, Redirect, Response},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
-
-/// Login page template.
-#[derive(Template)]
-#[template(path = "login.html")]
-struct LoginTemplate {
-    // OAuth2 flow parameters
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    scope: String,
-    state: String,
-    nonce: Option<String>,
-    code_challenge: Option<String>,
-    code_challenge_method: Option<String>,
-    // Display information
-    email: String,
-    error: Option<String>,
-    message: Option<String>,
-    client_name: Option<String>,
-    frontend_url: String,
-}
-
-/// Query parameters for the login page.
-#[derive(Debug, Deserialize)]
-pub struct LoginQuery {
-    pub client_id: String,
-    pub redirect_uri: String,
-    pub scope: Option<String>,
-    pub state: Option<String>,
-    pub nonce: Option<String>,
-    pub code_challenge: Option<String>,
-    pub code_challenge_method: Option<String>,
-    pub login_hint: Option<String>,
-    pub error: Option<String>,
-    pub message: Option<String>,
-}
 
 /// Form data for login submission.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -74,76 +36,7 @@ pub struct LoginForm {
 
 /// Creates the login router.
 pub fn router() -> OpenApiRouter<OAuth2State> {
-    OpenApiRouter::new()
-        .routes(routes!(login_page))
-        .routes(routes!(login_submit))
-}
-
-/// Display the login page.
-#[tracing::instrument(skip(state))]
-#[utoipa::path(
-    get,
-    path = "/login",
-    tag = super::OAUTH2_TAG,
-    operation_id = "OAuth2 Login Page",
-    summary = "Display the OAuth2 login page",
-    description = "Renders the login form for the OAuth2 authorization flow. The user authenticates with their email and password.\n\n\
-                   This endpoint is typically redirected to from the `/authorize` endpoint.",
-    params(
-        ("client_id" = String, Query, description = "The client identifier."),
-        ("redirect_uri" = String, Query, description = "URI to redirect after authorization."),
-        ("scope" = Option<String>, Query, description = "Space-separated list of requested scopes."),
-        ("state" = Option<String>, Query, description = "Opaque value for CSRF protection."),
-        ("nonce" = Option<String>, Query, description = "String value for replay protection."),
-        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge."),
-        ("code_challenge_method" = Option<String>, Query, description = "PKCE challenge method."),
-        ("login_hint" = Option<String>, Query, description = "Email address to pre-fill."),
-        ("error" = Option<String>, Query, description = "Error message to display."),
-        ("message" = Option<String>, Query, description = "Info message to display."),
-    ),
-    responses(
-        (status = 200, description = "Login page HTML"),
-        (status = 500, description = "Internal server error"),
-    )
-)]
-async fn login_page(
-    State(state): State<OAuth2State>,
-    Query(params): Query<LoginQuery>,
-) -> Response {
-    // Look up client for display name
-    let client_name = match oauth2_client::Entity::find_by_id(&params.client_id)
-        .one(state.db.as_ref())
-        .await
-    {
-        Ok(Some(c)) => Some(c.name),
-        _ => None,
-    };
-
-    let scope_str = params.scope.unwrap_or_else(|| "openid".to_string());
-
-    let template = LoginTemplate {
-        response_type: "code".to_string(),
-        client_id: params.client_id,
-        redirect_uri: params.redirect_uri,
-        scope: scope_str,
-        state: params.state.unwrap_or_default(),
-        nonce: params.nonce,
-        code_challenge: params.code_challenge,
-        code_challenge_method: params.code_challenge_method,
-        email: params.login_hint.unwrap_or_default(),
-        error: params.error,
-        message: params.message,
-        client_name,
-        frontend_url: state.frontend_url.clone(),
-    };
-
-    match template.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to render login template: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
-        }
-    }
+    OpenApiRouter::new().routes(routes!(login_submit))
 }
 
 /// Handle login form submission.
@@ -167,11 +60,16 @@ async fn login_page(
     )
 )]
 async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginForm>) -> Response {
+    let frontend_url = state.frontend_url.trim_end_matches('/');
     let email = form.email.trim().to_lowercase();
 
     // Validate email format
     if email.is_empty() || !email.contains('@') {
-        return redirect_to_login_with_error(&form, "Please enter a valid email address");
+        return redirect_to_login_with_error(
+            &form,
+            "Please enter a valid email address",
+            frontend_url,
+        );
     }
 
     // Look up user
@@ -182,12 +80,15 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
     {
         Ok(Some(u)) => u,
         Ok(None) => {
-            // User doesn't exist - show generic error (don't reveal whether email exists)
-            return redirect_to_login_with_error(&form, "Invalid email or password");
+            return redirect_to_login_with_error(&form, "Invalid email or password", frontend_url);
         }
         Err(e) => {
             tracing::error!("Database error looking up user: {}", e);
-            return redirect_to_login_with_error(&form, "An error occurred. Please try again.");
+            return redirect_to_login_with_error(
+                &form,
+                "An error occurred. Please try again.",
+                frontend_url,
+            );
         }
     };
 
@@ -195,24 +96,25 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
     let password = form.password.as_deref().unwrap_or("");
 
     if password.is_empty() {
-        // No password provided - could be magic link flow or user forgot password
-        return redirect_to_login_with_error(&form, "Please enter your password");
+        return redirect_to_login_with_error(&form, "Please enter your password", frontend_url);
     }
 
     // Verify password if user has one set
     match &user.password_hash {
         Some(hash) => {
             if !verify_password(password, hash) {
-                return redirect_to_login_with_error(&form, "Invalid email or password");
+                return redirect_to_login_with_error(
+                    &form,
+                    "Invalid email or password",
+                    frontend_url,
+                );
             }
         }
         None => {
-            // User doesn't have a password set — was created via legacy magic link system.
-            // They need to register a new account with the same email to set a password,
-            // which will auto-link their existing alerts.
             return redirect_to_login_with_error(
                 &form,
                 "This account has no password set. Please create a new account with the same email address to link your existing alerts.",
+                frontend_url,
             );
         }
     }
@@ -222,6 +124,7 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
         return redirect_to_login_with_error(
             &form,
             "Please verify your email address before signing in. Check your inbox for the verification link.",
+            frontend_url,
         );
     }
 
@@ -243,10 +146,11 @@ async fn login_submit(State(state): State<OAuth2State>, Form(form): Form<LoginFo
     Redirect::to(&consent_url).into_response()
 }
 
-/// Redirect back to login page with an error message.
-fn redirect_to_login_with_error(form: &LoginForm, error: &str) -> Response {
+/// Redirect back to the frontend login page with an error message.
+fn redirect_to_login_with_error(form: &LoginForm, error: &str, frontend_url: &str) -> Response {
     let mut url = format!(
-        "/oauth2/login?client_id={}&redirect_uri={}&scope={}&state={}&error={}",
+        "{}/alerts/login?client_id={}&redirect_uri={}&scope={}&state={}&error={}",
+        frontend_url,
         urlencoding::encode(&form.client_id),
         urlencoding::encode(&form.redirect_uri),
         urlencoding::encode(&form.scope),

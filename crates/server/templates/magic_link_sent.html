@@ -1,153 +1,94 @@
 <!doctype html>
-<html lang="en" class="govuk-template">
-    <head>
-        <meta charset="utf-8" />
-        <title>Check your email - Federation Tester</title>
-        <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1, viewport-fit=cover"
-        />
-        <meta name="theme-color" content="#1d70b8" />
-        <link
-            rel="stylesheet"
-            href="/assets/govuk/govuk-frontend.min.css"
-        />
-    </head>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign-in link sent — Connectivity Tester</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/assets/css/templates.css" />
+  </head>
 
-    <body class="govuk-template__body">
-        <script>
-            document.body.className +=
-                " js-enabled" +
-                ("noModule" in HTMLScriptElement.prototype
-                    ? " govuk-frontend-supported"
-                    : "");
-        </script>
+  <body>
+    <a href="#main" class="skip-link">Skip to main content</a>
 
-        <a
-            href="#main-content"
-            class="govuk-skip-link"
-            data-module="govuk-skip-link"
-            >Skip to main content</a
-        >
+    <nav class="chrome" aria-label="Site">
+      <div class="chrome__inner">
+        <a href="{{ frontend_url }}" class="wordmark" aria-label="Connectivity Tester home">
+          <span class="mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="name">Connectivity <em>Tester</em></span>
+        </a>
+      </div>
+    </nav>
 
-        <header class="govuk-header" data-module="govuk-header">
-            <div class="govuk-header__container govuk-width-container">
-                <div class="govuk-header__logo">
-                    <a
-                        href="/"
-                        class="govuk-header__homepage-link"
-                    >
-                        <span class="govuk-header__logotype">
-                            <span class="govuk-header__logotype-text">
-                                Federation Tester
-                            </span>
-                        </span>
-                    </a>
-                </div>
-            </div>
-        </header>
+    <main id="main" class="page page--narrow">
 
-        <div
-            class="govuk-service-navigation"
-            data-module="govuk-service-navigation"
-        >
-            <div class="govuk-width-container">
-                <div class="govuk-service-navigation__container">
-                    <nav
-                        aria-label="Menu"
-                        class="govuk-service-navigation__wrapper"
-                    >
-                        <button
-                            type="button"
-                            class="govuk-service-navigation__toggle govuk-js-service-navigation-toggle"
-                            aria-controls="navigation"
-                            hidden
-                        >
-                            Menu
-                        </button>
-                        <ul
-                            class="govuk-service-navigation__list"
-                            id="navigation"
-                        >
-                            <li class="govuk-service-navigation__item">
-                                <a
-                                    class="govuk-service-navigation__link"
-                                    href="{{ frontend_url }}"
-                                    >← Back to Connectivity Tester</a
-                                >
-                            </li>
-                            <li class="govuk-service-navigation__item">
-                                <a
-                                    class="govuk-service-navigation__link"
-                                    href="/oauth2/account"
-                                    >Your account</a
-                                >
-                            </li>
-                        </ul>
-                    </nav>
-                </div>
-            </div>
+      <div class="eyebrow">Sign-in link sent</div>
+      <h1>Check your inbox.</h1>
+      <p class="lead">
+        We've emailed a one-time sign-in link to
+        <span class="mono-inline">{{ email }}</span>.
+        Click it within the next hour and you're in.
+      </p>
+
+      <div class="card stone" style="margin-top: 24px;">
+        <div style="display: flex; gap: 16px; align-items: center;">
+          <div style="flex: 1;">
+            <h2 style="font-size: 19px; margin: 0 0 6px; font-weight: 700;">Wrong address?</h2>
+            <p style="margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.6;">
+              Go back and try a different email — the previous link will become invalid as soon as a new one is requested.
+            </p>
+          </div>
+          <a href="{{ frontend_url }}/alerts/login" class="btn ghost" style="flex-shrink: 0;">Try again</a>
         </div>
+      </div>
 
-        <div class="govuk-width-container">
-            <main class="govuk-main-wrapper" id="main-content" role="main">
-                <div class="govuk-grid-row">
-                    <div class="govuk-grid-column-two-thirds">
-                        <div
-                            class="govuk-panel govuk-panel--confirmation"
-                            style="margin-bottom: 30px"
-                        >
-                            <h1 class="govuk-panel__title">
-                                Check your email
-                            </h1>
-                            <div class="govuk-panel__body">
-                                We've sent a sign-in link to<br />
-                                <strong>{{ email }}</strong>
-                            </div>
-                        </div>
+      <p style="margin-top: 20px; font-size: 13px; color: var(--ink-3); line-height: 1.6;">
+        Magic links are only available to accounts without a password. If you set a password during signup,
+        <a href="{{ frontend_url }}/alerts/login">use it to sign in</a> instead.
+      </p>
 
-                        <p class="govuk-body">
-                            Click the link in the email to sign in. The link
-                            will expire after 1 hour.
-                        </p>
+    </main>
 
-                        <p class="govuk-body">
-                            If you do not receive an email within a few minutes,
-                            check your spam folder.
-                        </p>
-
-                        <p class="govuk-body">
-                            <a class="govuk-link" href="javascript:history.back()"
-                                >Try a different email address</a
-                            >
-                        </p>
-                    </div>
-                </div>
-            </main>
-        </div>
-
-        <footer class="govuk-footer">
-            <div class="govuk-width-container">
-                <div class="govuk-footer__meta">
-                    <div
-                        class="govuk-footer__meta-item govuk-footer__meta-item--grow"
-                    >
-                        <span class="govuk-footer__licence-description">
-                            Federation Tester is a community project for testing
-                            Matrix homeserver federation.
-                        </span>
-                    </div>
-                </div>
+    <footer class="footer">
+      <div class="footer__inner">
+        <div class="footer__cols">
+          <div class="footer__brand">
+            <a href="{{ frontend_url }}" class="wordmark" aria-label="Connectivity Tester — home" style="color: var(--surface);">
+              <span class="mark" aria-hidden="true">
+                <span style="background: var(--surface);"></span>
+                <span style="background: var(--surface);"></span>
+                <span style="background: var(--surface);"></span>
+              </span>
+              <span class="name">Connectivity <em>Tester</em></span>
+            </a>
+            <p class="footer__meta">A free, open-source diagnostic tool for Matrix homeserver operators. Self-hostable under AGPL-3.0.</p>
+          </div>
+          <div class="footer__links">
+            <div class="footer__group">
+              <div class="footer__group-title">Project</div>
+              <a href="https://github.com/MTRNord/matrix-connection-tester-ui">UI source code</a>
+              <a href="https://github.com/MTRNord/rust-federation-tester/">API source code</a>
+              <a href="{{ frontend_url }}docs">Documentation</a>
             </div>
-        </footer>
-
-        <script
-            type="module"
-            src="/assets/govuk/govuk-frontend.min.js"
-        ></script>
-        <script type="module">
-            import { initAll } from "/assets/govuk/govuk-frontend.min.js";
-            initAll();
-        </script>
-    </body>
+            <div class="footer__group">
+              <div class="footer__group-title">Matrix</div>
+              <a href="https://matrix.org">Matrix.org</a>
+              <a href="https://spec.matrix.org">Specification</a>
+            </div>
+            {% if github_sponsors_url.is_some() || liberapay_url.is_some() %}
+            <div class="footer__group">
+              <div class="footer__group-title">Sponsoring</div>
+              {% if let Some(url) = github_sponsors_url %}<a href="{{ url }}">GitHub Sponsors</a>{% endif %}
+              {% if let Some(url) = liberapay_url %}<a href="{{ url }}">Liberapay</a>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </footer>
+  </body>
 </html>

@@ -20,14 +20,12 @@ use crate::entity::{
 use crate::oauth2::{
     generate_verification_token, hash_password, validate_password_complexity, verify_password,
 };
-use askama::Template;
 use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::{HeaderValue, StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
-use jsonwebtoken::{DecodingKey, EncodingKey, Header as JwtHeader, Validation, decode, encode};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
 };
@@ -176,9 +174,6 @@ impl From<alert::Model> for GdprAlertInfo {
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
-        // GET "" serves the HTML page (unauthenticated shell); JS calls /me etc.
-        .routes(routes!(account_page))
-        // GET /me returns JSON; PATCH/DELETE "" update/delete the account
         .routes(routes!(get_account))
         .routes(routes!(update_primary_settings, delete_account))
         .routes(routes!(change_password))
@@ -190,187 +185,6 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(update_email, remove_email))
         .routes(routes!(make_primary_email))
         .routes(routes!(resend_verification_email))
-}
-
-// ---------------------------------------------------------------------------
-// GET /oauth2/account  — HTML shell (no auth required; JS handles auth)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Internal account client constants
-// ---------------------------------------------------------------------------
-
-const ACCOUNT_CLIENT_ID: &str = "account-internal";
-
-/// JWT claims used for the OAuth2 state parameter (CSRF protection).
-/// Signed with `magic_token_secret`; no session storage needed.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct AccountStateClaims {
-    /// Random nonce
-    pub nonce: String,
-    /// Expiry (Unix timestamp)
-    pub exp: usize,
-}
-
-/// Askama template for the account management page.
-#[derive(Template)]
-#[template(path = "account.html")]
-struct AccountPageTemplate {
-    /// Pre-built authorize URL for the "Sign in" button (no JS needed for sign-in)
-    sign_in_url: String,
-    /// Access token — `None` unless the OAuth2 callback just completed server-side
-    initial_token: Option<String>,
-    /// Error message to show (e.g. on bad state)
-    auth_error: Option<String>,
-    /// Frontend application URL for "back to site" link
-    frontend_url: String,
-}
-
-/// Query params received on the OAuth2 callback redirect back to the account page.
-#[derive(Debug, serde::Deserialize)]
-struct AccountPageQuery {
-    code: Option<String>,
-    state: Option<String>,
-    // forward-compatible: ignore extra params
-}
-
-#[utoipa::path(
-    get,
-    path = "",
-    tag = ACCOUNT_TAG,
-    operation_id = "Account Page",
-    summary = "Account management HTML page",
-    responses(
-        (status = 200, description = "Account management page HTML"),
-    )
-)]
-async fn account_page(
-    Extension(resources): Extension<AppResources>,
-    Query(query): Query<AccountPageQuery>,
-) -> Response {
-    let issuer = resources.config.oauth2.issuer_url.trim_end_matches('/');
-    let redirect_uri = format!("{issuer}/oauth2/account");
-    let client_secret = &resources.config.oauth2.account_client_secret;
-
-    // --- Handle OAuth2 callback (code + state) server-side ------------------
-    let (initial_token, auth_error) = if let (Some(code), Some(state)) = (&query.code, &query.state)
-    {
-        // Verify the signed state JWT to prevent CSRF.
-        let secret_bytes = client_secret.as_bytes();
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-        let state_ok = decode::<AccountStateClaims>(
-            state,
-            &DecodingKey::from_secret(secret_bytes),
-            &validation,
-        )
-        .is_ok();
-
-        if !state_ok {
-            (
-                None,
-                Some("Sign-in failed: invalid or expired state. Please try again.".to_string()),
-            )
-        } else {
-            match exchange_code_internal(
-                issuer,
-                ACCOUNT_CLIENT_ID,
-                client_secret,
-                code,
-                &redirect_uri,
-            )
-            .await
-            {
-                Ok(token) => (Some(token), None),
-                Err(e) => {
-                    tracing::error!("Account page code exchange failed: {e}");
-                    (None, Some("Sign-in failed: could not exchange authorisation code. Please try again.".to_string()))
-                }
-            }
-        }
-    } else {
-        (None, None)
-    };
-
-    // --- Build a fresh authorize URL with a signed state JWT -----------------
-    let sign_in_url = build_sign_in_url(issuer, &redirect_uri, client_secret);
-
-    let template = AccountPageTemplate {
-        sign_in_url,
-        initial_token,
-        auth_error,
-        frontend_url: resources.config.frontend_url.clone(),
-    };
-    match template.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to render account template: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
-        }
-    }
-}
-
-/// Build the authorize URL with a fresh signed state JWT.
-fn build_sign_in_url(issuer: &str, redirect_uri: &str, magic_secret: &str) -> String {
-    let nonce = crate::oauth2::generate_verification_token();
-    let exp =
-        (time::OffsetDateTime::now_utc() + time::Duration::minutes(10)).unix_timestamp() as usize;
-    let claims = AccountStateClaims { nonce, exp };
-    let state = encode(
-        &JwtHeader::default(),
-        &claims,
-        &EncodingKey::from_secret(magic_secret.as_bytes()),
-    )
-    .unwrap_or_default();
-
-    format!(
-        "{issuer}/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=openid+email&state={state}",
-        client_id = urlencoding::encode(ACCOUNT_CLIENT_ID),
-        redirect_uri = urlencoding::encode(redirect_uri),
-        state = urlencoding::encode(&state),
-    )
-}
-
-/// Exchange an authorization code for an access token by calling the token
-/// endpoint on the same server (HTTP loopback — same process).
-async fn exchange_code_internal(
-    issuer: &str,
-    client_id: &str,
-    client_secret: &str,
-    code: &str,
-    redirect_uri: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let body = [
-        ("grant_type", "authorization_code"),
-        ("code", code),
-        ("redirect_uri", redirect_uri),
-        ("client_id", client_id),
-        ("client_secret", client_secret),
-    ]
-    .iter()
-    .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-    .collect::<Vec<_>>()
-    .join("&");
-
-    let url = format!("{issuer}/oauth2/token");
-    let client = reqwest::Client::new();
-    let res = client
-        .post(&url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await?;
-
-    if !res.status().is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(format!("Token endpoint returned error: {text}").into());
-    }
-
-    let json: serde_json::Value = res.json().await?;
-    json["access_token"]
-        .as_str()
-        .map(String::from)
-        .ok_or_else(|| "No access_token in token response".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -608,9 +422,18 @@ async fn send_password_setup_email(
         urlencoding::encode(&token)
     );
 
+    let frontend_url = resources.config.frontend_url.trim_end_matches('/');
     let template = crate::email_templates::PasswordResetEmailTemplate {
         reset_url: setup_url,
         environment_name: resources.config.environment_name.clone(),
+        recipient_email: auth.email.clone(),
+        manage_url: format!("{}/account", frontend_url),
+        support_url: None,
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
     };
     let html_body = template.render_html().unwrap_or_default();
     let text_body = template.render_text();
@@ -931,8 +754,8 @@ async fn verify_email(
     Extension(resources): Extension<AppResources>,
     Query(params): Query<VerifyTokenQuery>,
 ) -> Response {
-    // After verification, redirect to the backend account page (same origin as this endpoint).
-    let issuer = resources.config.oauth2.issuer_url.trim_end_matches('/');
+    let frontend_url = resources.config.frontend_url.trim_end_matches('/');
+    let account_url = format!("{}/account", frontend_url);
 
     let row = match user_email::Entity::find()
         .filter(user_email::Column::VerificationToken.eq(&params.token))
@@ -941,12 +764,10 @@ async fn verify_email(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return Redirect::to(&format!("{}/oauth2/account?error=invalid_token", issuer))
-                .into_response();
+            return Redirect::to(&format!("{}?error=invalid_token", account_url)).into_response();
         }
         Err(_) => {
-            return Redirect::to(&format!("{}/oauth2/account?error=server_error", issuer))
-                .into_response();
+            return Redirect::to(&format!("{}?error=server_error", account_url)).into_response();
         }
     };
 
@@ -954,8 +775,7 @@ async fn verify_email(
         let _ = user_email::Entity::delete_by_id(&row.id)
             .exec(resources.db.as_ref())
             .await;
-        return Redirect::to(&format!("{}/oauth2/account?error=token_expired", issuer))
-            .into_response();
+        return Redirect::to(&format!("{}?error=token_expired", account_url)).into_response();
     }
 
     let mut active: user_email::ActiveModel = row.into();
@@ -965,11 +785,10 @@ async fn verify_email(
 
     if let Err(e) = active.update(resources.db.as_ref()).await {
         tracing::error!("Failed to verify additional email: {}", e);
-        return Redirect::to(&format!("{}/oauth2/account?error=server_error", issuer))
-            .into_response();
+        return Redirect::to(&format!("{}?error=server_error", account_url)).into_response();
     }
 
-    Redirect::to(&format!("{}/oauth2/account?verified=1", issuer)).into_response()
+    Redirect::to(&format!("{}?verified=1", account_url)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1247,16 +1066,21 @@ async fn send_verification_email(
         urlencoding::encode(token)
     );
 
-    let body_html = format!(
-        r#"<p>Click the link below to verify your email address:</p>
-<p><a href="{url}">{url}</a></p>
-<p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p>"#,
-        url = verify_url
-    );
-    let body_text = format!(
-        "Verify your email address:\n{}\n\nThis link expires in 24 hours.",
-        verify_url
-    );
+    let frontend_url = resources.config.frontend_url.trim_end_matches('/');
+    let template = crate::email_templates::AccountVerificationEmailTemplate {
+        verify_url,
+        environment_name: resources.config.environment_name.clone(),
+        recipient_email: to_email.to_string(),
+        manage_url: Some(format!("{}/account", frontend_url)),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    let html_body = template.render_html().unwrap_or_default();
+    let text_body = template.render_text();
     let subject = crate::email_templates::env_subject(
         "Verify your email address - Federation Tester",
         resources.config.environment_name.as_deref(),
@@ -1268,8 +1092,8 @@ async fn send_verification_email(
         resources.db.as_ref(),
         to_email,
         &subject,
-        Some(body_html),
-        body_text,
+        Some(html_body),
+        text_body,
         Some(expires_at),
     )
     .await

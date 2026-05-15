@@ -29,6 +29,20 @@ fn frontend_base(url: &str) -> String {
     format!("{}/", url.trim_end_matches('/'))
 }
 
+fn format_downtime(minutes: u64) -> String {
+    if minutes < 60 {
+        format!("{} min", minutes)
+    } else {
+        let h = minutes / 60;
+        let m = minutes % 60;
+        if m == 0 {
+            format!("{}h", h)
+        } else {
+            format!("{}h {}m", h, m)
+        }
+    }
+}
+
 /// Error type for email sending operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EmailError {
@@ -54,12 +68,32 @@ pub async fn send_failure_email(
     alert_id: i32,
     failure_count: i32,
     failure_reason: Option<String>,
+    first_detected: Option<time::OffsetDateTime>,
+    last_healthy: Option<time::OffsetDateTime>,
 ) -> Result<(), EmailError> {
-    let check_url = format!(
-        "{}results?serverName={}",
-        frontend_base(&config.frontend_url),
-        server_name
-    );
+    let base = frontend_base(&config.frontend_url);
+    let check_url = format!("{}results?serverName={}", base, server_name);
+    let alert_url = format!("{}alerts/edit/{}", base, alert_id);
+    let manage_url = format!("{}alerts", base);
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
+    let now = time::OffsetDateTime::now_utc();
+    let (first_detected_str, minutes_down) = if let Some(t) = first_detected {
+        let mins = (now - t).whole_minutes().max(0) as u64;
+        let formatted = t
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| t.to_string());
+        (Some(formatted), Some(mins))
+    } else {
+        (None, None)
+    };
+    let last_healthy_str = last_healthy.and_then(|t| {
+        t.format(&time::format_description::well_known::Rfc3339)
+            .ok()
+    });
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
@@ -93,6 +127,14 @@ pub async fn send_failure_email(
         failure_reason,
         environment_name: config.environment_name.clone(),
         quiet_hours_note: None,
+        first_detected: first_detected_str,
+        minutes_down,
+        last_healthy: last_healthy_str,
+        error_hint: None,
+        reminder_total: None,
+        alert_url,
+        manage_url,
+        sponsor_url,
     };
 
     let subject = env_subject(
@@ -210,6 +252,7 @@ pub async fn send_failure_email(
 }
 
 /// Send a recovery notification email.
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
 pub async fn send_recovery_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
@@ -218,12 +261,31 @@ pub async fn send_recovery_email(
     email: &str,
     server_name: &str,
     alert_id: i32,
+    recovered_at: time::OffsetDateTime,
+    first_detected: Option<time::OffsetDateTime>,
 ) -> Result<(), EmailError> {
-    let check_url = format!(
-        "{}results?serverName={}",
-        frontend_base(&config.frontend_url),
-        server_name
-    );
+    let base = frontend_base(&config.frontend_url);
+    let check_url = format!("{}results?serverName={}", base, server_name);
+    let manage_url = format!("{}alerts", base);
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
+    let recovered_at_str = recovered_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| recovered_at.to_string());
+
+    let (first_detected_str, minutes_down, downtime_human) = if let Some(fd) = first_detected {
+        let mins = (recovered_at - fd).whole_minutes().max(0) as u64;
+        let human = format_downtime(mins);
+        let fd_str = fd
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| fd.to_string());
+        (Some(fd_str), Some(mins), Some(human))
+    } else {
+        (None, None, None)
+    };
 
     let unsubscribe_url = generate_list_unsubscribe_url(
         &config.magic_token_secret,
@@ -238,6 +300,14 @@ pub async fn send_recovery_email(
         check_url: check_url.clone(),
         unsubscribe_url: unsubscribe_url.clone(),
         environment_name: config.environment_name.clone(),
+        recovered_at: Some(recovered_at_str),
+        first_detected: first_detected_str,
+        minutes_down,
+        downtime_human,
+        recovery_signal: None,
+        recovery_hint: None,
+        manage_url,
+        sponsor_url,
     };
 
     let subject = env_subject(
@@ -363,10 +433,14 @@ pub async fn send_server_name_change_email(
     email: &str,
     server_name: &str,
     alert_id: i32,
-    old_server_name: Option<String>,
-    new_server_name: Option<String>,
-    old_well_known: Vec<String>,
-    new_well_known: Vec<String>,
+    old_delegation_target: String,
+    old_resolution_method: String,
+    new_delegation_target: String,
+    new_resolution_method: String,
+    server_software: String,
+    server_version: String,
+    federation_status: String,
+    detected_at: time::OffsetDateTime,
 ) -> Result<(), EmailError> {
     let check_url = format!(
         "{}results?serverName={}",
@@ -380,20 +454,34 @@ pub async fn send_server_name_change_email(
         alert_id,
         &config.frontend_url,
     );
+    let manage_url = format!("{}alerts", frontend_base(&config.frontend_url));
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+    let detected_at_str = detected_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| detected_at.to_string());
 
     let template = ServerNameChangeEmailTemplate {
         server_name: server_name.to_string(),
-        old_server_name,
-        new_server_name,
-        old_well_known,
-        new_well_known,
+        environment_name: config.environment_name.clone(),
+        detected_at: detected_at_str,
+        old_delegation_target,
+        old_resolution_method,
+        new_delegation_target,
+        new_resolution_method,
+        server_software,
+        server_version,
+        federation_status,
         check_url,
         unsubscribe_url: unsubscribe_url.clone(),
-        environment_name: config.environment_name.clone(),
+        manage_url,
+        sponsor_url,
     };
 
     let subject = env_subject(
-        &format!("Federation Alert: server name changed for {server_name}"),
+        &format!("Federation Alert: delegation changed for {server_name}"),
         config.environment_name.as_deref(),
     );
 
@@ -424,6 +512,7 @@ pub async fn send_version_change_email(
     old_version_string: String,
     new_version_name: String,
     new_version_string: String,
+    detected_at: time::OffsetDateTime,
 ) -> Result<(), EmailError> {
     let check_url = format!(
         "{}results?serverName={}",
@@ -438,6 +527,20 @@ pub async fn send_version_change_email(
         &config.frontend_url,
     );
 
+    let detected_at_str = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        detected_at.year(),
+        detected_at.month() as u8,
+        detected_at.day(),
+        detected_at.hour(),
+        detected_at.minute(),
+    );
+    let manage_url = format!("{}/alerts", frontend_base(&config.frontend_url));
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
     let template = VersionChangeEmailTemplate {
         server_name: server_name.to_string(),
         old_version_name,
@@ -447,6 +550,9 @@ pub async fn send_version_change_email(
         check_url,
         unsubscribe_url: unsubscribe_url.clone(),
         environment_name: config.environment_name.clone(),
+        detected_at: Some(detected_at_str),
+        manage_url,
+        sponsor_url,
     };
 
     let subject = env_subject(
@@ -469,7 +575,7 @@ pub async fn send_version_change_email(
 
 /// Send a TLS certificate change notification email.
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(mailer, config, db, email))]
+#[tracing::instrument(skip(mailer, config, db, email, new_cert))]
 pub async fn send_tls_cert_change_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
@@ -479,6 +585,8 @@ pub async fn send_tls_cert_change_email(
     alert_id: i32,
     added_fingerprints: Vec<String>,
     removed_fingerprints: Vec<String>,
+    detected_at: time::OffsetDateTime,
+    new_cert: Option<crate::response::Certificate>,
 ) -> Result<(), EmailError> {
     let check_url = format!(
         "{}results?serverName={}",
@@ -493,6 +601,53 @@ pub async fn send_tls_cert_change_email(
         &config.frontend_url,
     );
 
+    let detected_at_str = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        detected_at.year(),
+        detected_at.month() as u8,
+        detected_at.day(),
+        detected_at.hour(),
+        detected_at.minute(),
+    );
+
+    let month_abbr = |m: time::Month| match m {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    };
+
+    let format_dt = |dt: time::OffsetDateTime| {
+        format!("{} {}, {}", month_abbr(dt.month()), dt.day(), dt.year(),)
+    };
+
+    let alert_url = format!(
+        "{}/alerts/edit/{}",
+        frontend_base(&config.frontend_url).trim_end_matches('/'),
+        alert_id
+    );
+    let manage_url = format!("{}/alerts", frontend_base(&config.frontend_url));
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
+    let old_fingerprint = removed_fingerprints.first().cloned();
+    let new_fingerprint = new_cert
+        .as_ref()
+        .map(|c| c.sha256fingerprint.clone())
+        .or_else(|| added_fingerprints.first().cloned());
+    let new_issuer = new_cert.as_ref().map(|c| c.issuer_common_name.clone());
+    let new_expires = new_cert.as_ref().and_then(|c| c.not_after).map(format_dt);
+
     let template = TlsCertChangeEmailTemplate {
         server_name: server_name.to_string(),
         added_fingerprints,
@@ -500,6 +655,16 @@ pub async fn send_tls_cert_change_email(
         check_url,
         unsubscribe_url: unsubscribe_url.clone(),
         environment_name: config.environment_name.clone(),
+        detected_at: Some(detected_at_str),
+        old_fingerprint,
+        old_issuer: None,
+        old_expires: None,
+        new_fingerprint,
+        new_issuer,
+        new_expires,
+        alert_url,
+        manage_url,
+        sponsor_url,
     };
 
     let subject = env_subject(
@@ -522,7 +687,7 @@ pub async fn send_tls_cert_change_email(
 
 /// Send a TLS certificate expiry warning email.
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(mailer, config, db, email))]
+#[tracing::instrument(skip(mailer, config, db, email, cert_info))]
 pub async fn send_tls_expiry_email(
     mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     config: &Arc<crate::config::AppConfig>,
@@ -532,6 +697,7 @@ pub async fn send_tls_expiry_email(
     alert_id: i32,
     expires_at: time::OffsetDateTime,
     days_remaining: i64,
+    cert_info: Option<&crate::response::Certificate>,
 ) -> Result<(), EmailError> {
     let check_url = format!(
         "{}results?serverName={}",
@@ -555,13 +721,49 @@ pub async fn send_tls_expiry_email(
         expires_at.minute(),
     );
 
+    let month_abbr = |m: time::Month| match m {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    };
+    let expires_human = format!(
+        "{} {}, {}",
+        month_abbr(expires_at.month()),
+        expires_at.day(),
+        expires_at.year(),
+    );
+
+    let manage_url = format!("{}/alerts", frontend_base(&config.frontend_url));
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
     let template = TlsExpiryEmailTemplate {
         server_name: server_name.to_string(),
         expires_at: expires_at_str,
+        expires_human,
         days_remaining,
         check_url,
         unsubscribe_url: unsubscribe_url.clone(),
         environment_name: config.environment_name.clone(),
+        issued_human: None,
+        cert_cn: cert_info.map(|c| c.subject_common_name.clone()),
+        cert_san: cert_info.and_then(|c| c.dnsnames.as_ref().map(|dns| dns.join(", "))),
+        cert_issuer: cert_info.map(|c| c.issuer_common_name.clone()),
+        cert_fingerprint: cert_info.map(|c| c.sha256fingerprint.clone()),
+        manage_url,
+        sponsor_url,
+        renewal_guide_url: None,
     };
 
     let subject = env_subject(
