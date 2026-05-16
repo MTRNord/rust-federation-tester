@@ -19,6 +19,7 @@ pub mod federation;
 pub mod health;
 pub mod metrics;
 pub mod openapi;
+pub mod probe;
 pub mod statistics;
 
 // Re-export oauth2 module from crate root
@@ -65,6 +66,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
             "/api/federation",
             federation::router::<P>(app_state, debug_mode),
         )
+        .nest("/api/probe", probe::router())
         .nest("/debug", debug::router())
         .routes(routes!(metrics::metrics))
         .routes(routes!(statistics::daily_stats));
