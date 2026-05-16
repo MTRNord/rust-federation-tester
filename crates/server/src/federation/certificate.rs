@@ -28,7 +28,11 @@ pub fn extract_certificate_info(
 
     let mut hasher = Sha256::new();
     hasher.update(cert_bytes);
-    let fingerprint = format!("{:X}", hasher.finalize());
+    let fingerprint = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<String>();
 
     let mut dns_names = Vec::new();
     if let Ok(extensions_map) = x509_cert.extensions_map()

@@ -1,5 +1,6 @@
 pub mod alert;
 pub mod alert_notification_email;
+pub mod alert_notification_webhook;
 pub mod alert_observed_state;
 pub mod alert_status_history;
 pub mod email_log;
@@ -12,3 +13,4 @@ pub mod oauth2_identity;
 pub mod oauth2_token;
 pub mod oauth2_user;
 pub mod user_email;
+pub mod webhook_outbox;

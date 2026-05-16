@@ -10,16 +10,18 @@
 //! - `PUT /{id}/settings` - Update alert settings including quiet hours
 
 use crate::AppResources;
+use crate::alerts::webhook::enqueue_ping;
 use crate::api::auth::{AuthError, OAuth2Auth, SCOPE_ALERTS_READ, SCOPE_ALERTS_WRITE};
 use crate::entity::{
-    alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
+    alert, alert_notification_email, alert_notification_webhook, alert_status_history, oauth2_user,
+    user_email, webhook_outbox,
 };
 use crate::oauth2::IdentityService;
 use axum::{Extension, Json, extract::Path};
 use hyper::StatusCode;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -61,6 +63,8 @@ pub struct AlertDto {
     pub is_currently_failing: bool,
     /// Email addresses that receive notifications for this alert
     pub notify_emails: Vec<String>,
+    /// Webhook endpoints configured for this alert (secret is never included)
+    pub notify_webhooks: Vec<WebhookDto>,
     /// Notify when the server's self-reported name or well-known delegation target changes
     pub notify_server_name_change: bool,
     /// Notify when the server's software version changes
@@ -118,6 +122,67 @@ pub struct CreateAlertResponse {
     pub created_at: OffsetDateTime,
 }
 
+/// A configured webhook endpoint (secret field is always omitted).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct WebhookDto {
+    pub id: i32,
+    pub url: String,
+    pub hmac_header: String,
+    pub respect_quiet_hours: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// Request to add a new webhook endpoint.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateWebhookRequest {
+    pub url: String,
+    #[serde(default)]
+    pub hmac_secret: Option<String>,
+    #[serde(default)]
+    pub hmac_header: Option<String>,
+    #[serde(default)]
+    pub respect_quiet_hours: Option<bool>,
+}
+
+/// Request to update an existing webhook endpoint (all fields optional).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PatchWebhookRequest {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub hmac_secret: Option<String>,
+    #[serde(default)]
+    pub hmac_header: Option<String>,
+    #[serde(default)]
+    pub respect_quiet_hours: Option<bool>,
+}
+
+/// A single delivery attempt from the webhook outbox.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeliveryDto {
+    pub id: String,
+    pub event_type: String,
+    pub status: String,
+    pub attempts: i32,
+    pub last_status_code: Option<i16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    pub delivered_at: Option<OffsetDateTime>,
+}
+
+/// Response for the delivery history endpoint.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeliveryHistoryResponse {
+    pub deliveries: Vec<DeliveryDto>,
+}
+
 /// Request to replace the notification email list for an alert.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateNotifyEmailsRequest {
@@ -147,18 +212,22 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(get_alert_events))
         .routes(routes!(update_notify_emails))
         .routes(routes!(update_alert_settings))
+        .routes(routes!(list_webhooks, add_webhook))
+        .routes(routes!(patch_webhook, delete_webhook))
+        .routes(routes!(test_webhook))
+        .routes(routes!(get_delivery_history))
+        .routes(routes!(test_email))
 }
 
-/// Build `AlertDto` values from alert models and a pre-loaded email map.
+/// Build `AlertDto` values from alert models and pre-loaded email/webhook maps.
 fn build_alert_dtos(
     alerts: Vec<alert::Model>,
     emails_by_alert: &HashMap<i32, Vec<String>>,
+    webhooks_by_alert: &HashMap<i32, Vec<WebhookDto>>,
 ) -> Vec<AlertDto> {
     alerts
         .into_iter()
         .map(|a| {
-            // Return effective recipients: explicit rows when present, otherwise
-            // fall back to alert.email so the frontend never shows an empty list.
             let notify_emails = match emails_by_alert.get(&a.id) {
                 Some(emails) if !emails.is_empty() => emails.clone(),
                 _ => {
@@ -169,6 +238,7 @@ fn build_alert_dtos(
                     }
                 }
             };
+            let notify_webhooks = webhooks_by_alert.get(&a.id).cloned().unwrap_or_default();
             AlertDto {
                 id: a.id,
                 server_name: a.server_name,
@@ -177,6 +247,7 @@ fn build_alert_dtos(
                 last_check_at: a.last_check_at,
                 is_currently_failing: a.is_currently_failing,
                 notify_emails,
+                notify_webhooks,
                 notify_server_name_change: a.notify_server_name_change,
                 notify_version_change: a.notify_version_change,
                 notify_tls_cert_change: a.notify_tls_cert_change,
@@ -211,6 +282,76 @@ async fn load_emails_by_alert(
         map.entry(row.alert_id).or_default().push(row.email);
     }
     Ok(map)
+}
+
+/// Batch-load webhook endpoints for a slice of alert IDs.
+async fn load_webhooks_by_alert(
+    db: &sea_orm::DatabaseConnection,
+    alert_ids: &[i32],
+) -> Result<HashMap<i32, Vec<WebhookDto>>, AuthError> {
+    if alert_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = alert_notification_webhook::Entity::find()
+        .filter(alert_notification_webhook::Column::AlertId.is_in(alert_ids.to_vec()))
+        .all(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading webhooks: {}", e);
+            AuthError::server_error()
+        })?;
+
+    let mut map: HashMap<i32, Vec<WebhookDto>> = HashMap::new();
+    for row in rows {
+        map.entry(row.alert_id).or_default().push(WebhookDto {
+            id: row.id,
+            url: row.url,
+            hmac_header: row.hmac_header,
+            respect_quiet_hours: row.respect_quiet_hours,
+            created_at: row.created_at,
+        });
+    }
+    Ok(map)
+}
+
+/// Validate that a webhook URL is safe to deliver to.
+///
+/// Rules:
+/// - Must use HTTPS scheme
+/// - Must not resolve to an RFC1918 / loopback address (SSRF prevention)
+fn validate_webhook_url(raw: &str) -> Result<(), AuthError> {
+    let parsed = url::Url::parse(raw)
+        .map_err(|_| AuthError::bad_request("webhook_url_invalid: must be a valid URL"))?;
+
+    if parsed.scheme() != "https" {
+        return Err(AuthError::bad_request(
+            "webhook_url_https_required: URL must use HTTPS",
+        ));
+    }
+
+    if let Some(host) = parsed.host_str()
+        && let Ok(ip) = host.parse::<std::net::IpAddr>()
+        && is_private_ip(ip)
+    {
+        return Err(AuthError::bad_request(
+            "webhook_url_private_ip: URL must not point to a private/internal IP address",
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_private_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+    }
 }
 
 /// Collect the set of verified email addresses owned by a user.
@@ -280,9 +421,10 @@ async fn list_alerts_v2(
 
     let alert_ids: Vec<i32> = alerts.iter().map(|a| a.id).collect();
     let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &alert_ids).await?;
+    let webhooks_by_alert = load_webhooks_by_alert(resources.db.as_ref(), &alert_ids).await?;
 
     let total = alerts.len();
-    let alert_dtos = build_alert_dtos(alerts, &emails_by_alert);
+    let alert_dtos = build_alert_dtos(alerts, &emails_by_alert, &webhooks_by_alert);
 
     Ok(Json(AlertsListResponse {
         alerts: alert_dtos,
@@ -582,6 +724,7 @@ async fn update_notify_emails(
         "Updated notification emails"
     );
 
+    let webhooks_by_alert = load_webhooks_by_alert(resources.db.as_ref(), &[id]).await?;
     let dto = AlertDto {
         id: alert_entity.id,
         server_name: alert_entity.server_name,
@@ -590,6 +733,7 @@ async fn update_notify_emails(
         last_check_at: alert_entity.last_check_at,
         is_currently_failing: alert_entity.is_currently_failing,
         notify_emails: payload.emails,
+        notify_webhooks: webhooks_by_alert.get(&id).cloned().unwrap_or_default(),
         notify_server_name_change: alert_entity.notify_server_name_change,
         notify_version_change: alert_entity.notify_version_change,
         notify_tls_cert_change: alert_entity.notify_tls_cert_change,
@@ -694,6 +838,7 @@ async fn update_alert_settings(
         }
     };
 
+    let webhooks_by_alert = load_webhooks_by_alert(resources.db.as_ref(), &[id]).await?;
     Ok(Json(AlertDto {
         id: updated.id,
         server_name: updated.server_name,
@@ -702,6 +847,7 @@ async fn update_alert_settings(
         last_check_at: updated.last_check_at,
         is_currently_failing: updated.is_currently_failing,
         notify_emails,
+        notify_webhooks: webhooks_by_alert.get(&id).cloned().unwrap_or_default(),
         notify_server_name_change: updated.notify_server_name_change,
         notify_version_change: updated.notify_version_change,
         notify_tls_cert_change: updated.notify_tls_cert_change,
@@ -758,6 +904,7 @@ async fn get_alert_v2(
     }
 
     let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &[id]).await?;
+    let webhooks_by_alert = load_webhooks_by_alert(resources.db.as_ref(), &[id]).await?;
     let notify_emails = match emails_by_alert.get(&id) {
         Some(emails) if !emails.is_empty() => emails.clone(),
         _ => {
@@ -777,6 +924,7 @@ async fn get_alert_v2(
         last_check_at: alert_entity.last_check_at,
         is_currently_failing: alert_entity.is_currently_failing,
         notify_emails,
+        notify_webhooks: webhooks_by_alert.get(&id).cloned().unwrap_or_default(),
         notify_server_name_change: alert_entity.notify_server_name_change,
         notify_version_change: alert_entity.notify_version_change,
         notify_tls_cert_change: alert_entity.notify_tls_cert_change,
@@ -891,4 +1039,482 @@ fn event_to_display(row: &alert_status_history::Model) -> (String, Option<String
             (desc.to_string(), None, "info".to_string())
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Ownership helper (shared by webhook handlers)
+// ---------------------------------------------------------------------------
+
+async fn require_alert_owner(
+    resources: &AppResources,
+    alert_id: i32,
+    auth: &crate::api::auth::AuthenticatedUser,
+    scope: &str,
+) -> Result<alert::Model, AuthError> {
+    if !auth.has_scope(scope) {
+        return Err(AuthError::insufficient_scope(scope));
+    }
+    let alert_entity = alert::Entity::find_by_id(alert_id)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error finding alert {}: {}", alert_id, e);
+            AuthError::server_error()
+        })?
+        .ok_or_else(|| AuthError::not_found("Alert not found"))?;
+
+    let is_owner = alert_entity
+        .user_id
+        .as_ref()
+        .map(|uid| uid == &auth.user_id)
+        .unwrap_or(false)
+        || alert_entity.email == auth.email;
+    if !is_owner {
+        return Err(AuthError::forbidden("You do not own this alert"));
+    }
+    Ok(alert_entity)
+}
+
+// ---------------------------------------------------------------------------
+// Webhook management handlers
+// ---------------------------------------------------------------------------
+
+/// List webhook endpoints for an alert.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    get,
+    path = "/{id}/notify-webhooks",
+    tag = ALERTS_V2_TAG,
+    operation_id = "List Webhooks",
+    summary = "List webhook endpoints for an alert",
+    security(("OAuth2" = ["alerts:read"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    responses(
+        (status = 200, description = "List of webhooks", body = DeliveryHistoryResponse),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn list_webhooks(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+) -> Result<Json<Vec<WebhookDto>>, AuthError> {
+    require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_READ).await?;
+
+    let rows = alert_notification_webhook::Entity::find()
+        .filter(alert_notification_webhook::Column::AlertId.eq(id))
+        .all(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error listing webhooks for alert {}: {}", id, e);
+            AuthError::server_error()
+        })?;
+
+    let dtos = rows
+        .into_iter()
+        .map(|r| WebhookDto {
+            id: r.id,
+            url: r.url,
+            hmac_header: r.hmac_header,
+            respect_quiet_hours: r.respect_quiet_hours,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(dtos))
+}
+
+/// Add a webhook endpoint to an alert.
+#[tracing::instrument(skip(resources, auth, payload), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    post,
+    path = "/{id}/notify-webhooks",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Add Webhook",
+    summary = "Add a webhook endpoint to an alert",
+    security(("OAuth2" = ["alerts:write"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    request_body(content = CreateWebhookRequest, description = "Webhook details"),
+    responses(
+        (status = 201, description = "Webhook created", body = WebhookDto),
+        (status = 400, description = "Invalid URL or max webhooks reached", body = AuthError),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn add_webhook(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+    Json(payload): Json<CreateWebhookRequest>,
+) -> Result<(StatusCode, Json<WebhookDto>), AuthError> {
+    require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
+
+    validate_webhook_url(&payload.url)?;
+
+    if let Some(max) = resources.config.max_webhooks_per_alert {
+        let count = alert_notification_webhook::Entity::find()
+            .filter(alert_notification_webhook::Column::AlertId.eq(id))
+            .count(resources.db.as_ref())
+            .await
+            .map_err(|_| AuthError::server_error())?;
+        if count as usize >= max {
+            return Err(AuthError::bad_request(format!(
+                "max_webhooks_reached: this alert already has {max} webhook(s) (the configured maximum)"
+            )));
+        }
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let row = alert_notification_webhook::ActiveModel {
+        alert_id: Set(id),
+        url: Set(payload.url),
+        hmac_secret: Set(payload.hmac_secret),
+        hmac_header: Set(payload
+            .hmac_header
+            .unwrap_or_else(|| "X-Signature-256".to_string())),
+        respect_quiet_hours: Set(payload.respect_quiet_hours.unwrap_or(false)),
+        created_at: Set(now),
+        ..Default::default()
+    };
+
+    let inserted = row.insert(resources.db.as_ref()).await.map_err(|e| {
+        tracing::error!("Failed to insert webhook for alert {}: {}", id, e);
+        AuthError::server_error()
+    })?;
+
+    tracing::info!(alert_id = id, webhook_id = inserted.id, "Added webhook");
+
+    Ok((
+        StatusCode::CREATED,
+        Json(WebhookDto {
+            id: inserted.id,
+            url: inserted.url,
+            hmac_header: inserted.hmac_header,
+            respect_quiet_hours: inserted.respect_quiet_hours,
+            created_at: inserted.created_at,
+        }),
+    ))
+}
+
+/// Update a webhook endpoint.
+#[tracing::instrument(skip(resources, auth, payload), fields(user_email = %auth.email, alert_id = %id, webhook_id = %wid))]
+#[utoipa::path(
+    patch,
+    path = "/{id}/notify-webhooks/{wid}",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Update Webhook",
+    summary = "Update a webhook endpoint",
+    security(("OAuth2" = ["alerts:write"])),
+    params(
+        ("id" = i32, Path, description = "Alert ID"),
+        ("wid" = i32, Path, description = "Webhook ID"),
+    ),
+    request_body(content = PatchWebhookRequest, description = "Fields to update"),
+    responses(
+        (status = 200, description = "Webhook updated", body = WebhookDto),
+        (status = 400, description = "Invalid URL", body = AuthError),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert or webhook not found", body = AuthError),
+    )
+)]
+async fn patch_webhook(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path((id, wid)): Path<(i32, i32)>,
+    Json(payload): Json<PatchWebhookRequest>,
+) -> Result<Json<WebhookDto>, AuthError> {
+    require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
+
+    if let Some(ref url) = payload.url {
+        validate_webhook_url(url)?;
+    }
+
+    let webhook = alert_notification_webhook::Entity::find_by_id(wid)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("Webhook not found"))?;
+
+    if webhook.alert_id != id {
+        return Err(AuthError::not_found("Webhook not found"));
+    }
+
+    let mut active: alert_notification_webhook::ActiveModel = webhook.into();
+    if let Some(url) = payload.url {
+        active.url = Set(url);
+    }
+    if let Some(secret) = payload.hmac_secret {
+        active.hmac_secret = Set(if secret.is_empty() {
+            None
+        } else {
+            Some(secret)
+        });
+    }
+    if let Some(header) = payload.hmac_header {
+        active.hmac_header = Set(header);
+    }
+    if let Some(qh) = payload.respect_quiet_hours {
+        active.respect_quiet_hours = Set(qh);
+    }
+
+    let updated = active.update(resources.db.as_ref()).await.map_err(|e| {
+        tracing::error!("Failed to update webhook {}: {}", wid, e);
+        AuthError::server_error()
+    })?;
+
+    Ok(Json(WebhookDto {
+        id: updated.id,
+        url: updated.url,
+        hmac_header: updated.hmac_header,
+        respect_quiet_hours: updated.respect_quiet_hours,
+        created_at: updated.created_at,
+    }))
+}
+
+/// Delete a webhook endpoint.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id, webhook_id = %wid))]
+#[utoipa::path(
+    delete,
+    path = "/{id}/notify-webhooks/{wid}",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Delete Webhook",
+    summary = "Delete a webhook endpoint",
+    security(("OAuth2" = ["alerts:write"])),
+    params(
+        ("id" = i32, Path, description = "Alert ID"),
+        ("wid" = i32, Path, description = "Webhook ID"),
+    ),
+    responses(
+        (status = 204, description = "Webhook deleted"),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert or webhook not found", body = AuthError),
+    )
+)]
+async fn delete_webhook(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path((id, wid)): Path<(i32, i32)>,
+) -> Result<StatusCode, AuthError> {
+    require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
+
+    let webhook = alert_notification_webhook::Entity::find_by_id(wid)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("Webhook not found"))?;
+
+    if webhook.alert_id != id {
+        return Err(AuthError::not_found("Webhook not found"));
+    }
+
+    alert_notification_webhook::Entity::delete_by_id(wid)
+        .exec(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete webhook {}: {}", wid, e);
+            AuthError::server_error()
+        })?;
+
+    tracing::info!(alert_id = id, webhook_id = wid, "Deleted webhook");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Enqueue a test delivery for a webhook.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id, webhook_id = %wid))]
+#[utoipa::path(
+    post,
+    path = "/{id}/notify-webhooks/{wid}/test",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Test Webhook",
+    summary = "Enqueue a ping delivery for a webhook",
+    security(("OAuth2" = ["alerts:write"])),
+    params(
+        ("id" = i32, Path, description = "Alert ID"),
+        ("wid" = i32, Path, description = "Webhook ID"),
+    ),
+    responses(
+        (status = 202, description = "Test delivery queued"),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert or webhook not found", body = AuthError),
+    )
+)]
+async fn test_webhook(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path((id, wid)): Path<(i32, i32)>,
+) -> Result<StatusCode, AuthError> {
+    let alert_entity = require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
+
+    let webhook = alert_notification_webhook::Entity::find_by_id(wid)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("Webhook not found"))?;
+
+    if webhook.alert_id != id {
+        return Err(AuthError::not_found("Webhook not found"));
+    }
+
+    enqueue_ping(resources.db.as_ref(), id, wid, &alert_entity.server_name)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to enqueue test delivery for webhook {}: {}", wid, e);
+            AuthError::server_error()
+        })?;
+
+    tracing::info!(
+        alert_id = id,
+        webhook_id = wid,
+        "Queued test webhook delivery"
+    );
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Get delivery history for a webhook (last 20 entries, newest first).
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id, webhook_id = %wid))]
+#[utoipa::path(
+    get,
+    path = "/{id}/notify-webhooks/{wid}/deliveries",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Get Webhook Deliveries",
+    summary = "Get recent delivery history for a webhook",
+    security(("OAuth2" = ["alerts:read"])),
+    params(
+        ("id" = i32, Path, description = "Alert ID"),
+        ("wid" = i32, Path, description = "Webhook ID"),
+    ),
+    responses(
+        (status = 200, description = "Delivery history", body = DeliveryHistoryResponse),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert or webhook not found", body = AuthError),
+    )
+)]
+async fn get_delivery_history(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path((id, wid)): Path<(i32, i32)>,
+) -> Result<Json<DeliveryHistoryResponse>, AuthError> {
+    require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_READ).await?;
+
+    let webhook = alert_notification_webhook::Entity::find_by_id(wid)
+        .one(resources.db.as_ref())
+        .await
+        .map_err(|_| AuthError::server_error())?
+        .ok_or_else(|| AuthError::not_found("Webhook not found"))?;
+
+    if webhook.alert_id != id {
+        return Err(AuthError::not_found("Webhook not found"));
+    }
+
+    let rows = webhook_outbox::Entity::find()
+        .filter(webhook_outbox::Column::WebhookId.eq(wid))
+        .order_by_desc(webhook_outbox::Column::CreatedAt)
+        .limit(20)
+        .all(resources.db.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "DB error loading delivery history for webhook {}: {}",
+                wid,
+                e
+            );
+            AuthError::server_error()
+        })?;
+
+    let deliveries = rows
+        .into_iter()
+        .map(|r| DeliveryDto {
+            id: r.id,
+            event_type: r.event_type,
+            status: r.status,
+            attempts: r.attempts,
+            last_status_code: r.last_status_code,
+            last_error: r.last_error,
+            created_at: r.created_at,
+            delivered_at: r.delivered_at,
+        })
+        .collect();
+
+    Ok(Json(DeliveryHistoryResponse { deliveries }))
+}
+
+/// Enqueue a test email to all notify_emails on this alert.
+#[tracing::instrument(skip(resources, auth), fields(user_email = %auth.email, alert_id = %id))]
+#[utoipa::path(
+    post,
+    path = "/{id}/test-email",
+    tag = ALERTS_V2_TAG,
+    operation_id = "Test Email",
+    summary = "Send a test email to all notification addresses for an alert",
+    security(("OAuth2" = ["alerts:write"])),
+    params(("id" = i32, Path, description = "Alert ID")),
+    responses(
+        (status = 202, description = "Test email(s) queued"),
+        (status = 401, description = "Missing or invalid token", body = AuthError),
+        (status = 403, description = "Not owner or missing scope", body = AuthError),
+        (status = 404, description = "Alert not found", body = AuthError),
+    )
+)]
+async fn test_email(
+    Extension(resources): Extension<AppResources>,
+    OAuth2Auth(auth): OAuth2Auth,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, AuthError> {
+    let alert_entity = require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
+
+    let emails_by_alert = load_emails_by_alert(resources.db.as_ref(), &[id]).await?;
+    let notify_emails: Vec<String> = match emails_by_alert.get(&id) {
+        Some(emails) if !emails.is_empty() => emails.clone(),
+        _ => {
+            if alert_entity.email.is_empty() {
+                vec![]
+            } else {
+                vec![alert_entity.email.clone()]
+            }
+        }
+    };
+
+    if notify_emails.is_empty() {
+        return Err(AuthError::bad_request(
+            "no_emails: this alert has no notification email addresses configured",
+        ));
+    }
+
+    for email in &notify_emails {
+        let subject = format!(
+            "[Test] Federation Alert: {} – test notification",
+            alert_entity.server_name
+        );
+        let text = format!(
+            "This is a test notification for your federation alert on {}.\n\n\
+             If you received this, email delivery is working correctly.",
+            alert_entity.server_name
+        );
+        if let Err(e) =
+            crate::email_outbox::enqueue(resources.db.as_ref(), email, &subject, None, text, None)
+                .await
+        {
+            tracing::error!(
+                alert_id = id,
+                email = %email,
+                error = %e,
+                "Failed to enqueue test email"
+            );
+        }
+    }
+
+    tracing::info!(
+        alert_id = id,
+        email_count = notify_emails.len(),
+        "Queued test emails"
+    );
+    Ok(StatusCode::ACCEPTED)
 }

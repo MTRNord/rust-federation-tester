@@ -87,6 +87,7 @@ fn create_test_config() -> AppConfig {
         liberapay_url: None,
         email_log_retention_days: 7,
         release_sources: Default::default(),
+        max_webhooks_per_alert: None,
     }
 }
 
@@ -104,6 +105,7 @@ async fn create_test_resources() -> (AppResources, OAuth2State) {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
 
     let oauth2_state = OAuth2State::new(
@@ -1341,6 +1343,7 @@ async fn test_password_reset_confirm_get_valid_token() {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1377,6 +1380,7 @@ async fn test_password_reset_confirm_post_password_mismatch() {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1418,6 +1422,7 @@ async fn test_password_reset_confirm_post_weak_password() {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,
@@ -1485,6 +1490,7 @@ async fn test_password_reset_confirm_post_success() {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
     let oauth2_state = OAuth2State::new(
         db.clone(),
@@ -1543,6 +1549,7 @@ async fn test_password_reset_confirm_post_expired_token() {
         config: config.clone(),
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     };
     let oauth2_state = OAuth2State::new(
         db,

@@ -3,7 +3,7 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::ResolverOpts;
 use lettre::{AsyncSmtpTransport, Tokio1Executor, transport::smtp::authentication::Credentials};
 use rust_federation_tester::AppResources;
-use rust_federation_tester::alerts::{active_check_loop, healthy_check_loop};
+use rust_federation_tester::alerts::{active_check_loop, healthy_check_loop, spawn_webhook_worker};
 use rust_federation_tester::api::federation_tester_api::AppState;
 use rust_federation_tester::api::start_webserver;
 use rust_federation_tester::config::load_config_or_panic;
@@ -370,12 +370,15 @@ async fn main() -> color_eyre::eyre::Result<()> {
         distributed::in_memory()
     };
 
+    let http_client = std::sync::Arc::new(reqwest::Client::new());
+
     let resources = std::sync::Arc::new(AppResources {
         db,
         mailer,
         config,
         email_guard,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client,
     });
 
     // Compute derived values for logging (explicit so fields are clear and type-safe)
@@ -435,7 +438,10 @@ async fn main() -> color_eyre::eyre::Result<()> {
     ));
 
     tracing::debug!("Starting email outbox worker (10-s poll interval)");
-    email_outbox::spawn_worker(resources.clone(), lock);
+    email_outbox::spawn_worker(resources.clone(), lock.clone());
+
+    tracing::debug!("Starting webhook outbox worker (10-s poll interval)");
+    spawn_webhook_worker(resources.clone(), lock);
 
     let debug_mode = is_debug_mode();
 

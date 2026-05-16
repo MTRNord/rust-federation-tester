@@ -152,6 +152,12 @@ pub struct AppConfig {
     /// ```
     #[serde(default)]
     pub release_sources: HashMap<String, ReleaseSourceConfig>,
+    /// Optional cap on how many webhook endpoints a single alert may have.
+    ///
+    /// When `None` (the default), there is no hard limit.
+    /// Set to a positive integer to prevent runaway webhook registrations.
+    #[serde(default)]
+    pub max_webhooks_per_alert: Option<usize>,
 }
 
 /// Configuration for fetching release notes for a specific server software.
@@ -199,6 +205,7 @@ impl fmt::Debug for AppConfig {
             .field("liberapay_url", &self.liberapay_url)
             .field("email_log_retention_days", &self.email_log_retention_days)
             .field("release_sources", &self.release_sources)
+            .field("max_webhooks_per_alert", &self.max_webhooks_per_alert)
             .finish()
     }
 }

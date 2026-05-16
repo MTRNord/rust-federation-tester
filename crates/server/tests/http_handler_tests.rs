@@ -57,6 +57,7 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
         liberapay_url: None,
         email_log_retention_days: 7,
         release_sources: Default::default(),
+        max_webhooks_per_alert: None,
     }
 }
 
@@ -74,6 +75,7 @@ async fn create_test_resources(stats_enabled: bool) -> AppResources {
         config,
         email_guard: rust_federation_tester::distributed::EmailGuard::Noop,
         release_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        http_client: std::sync::Arc::new(reqwest::Client::new()),
     }
 }
 

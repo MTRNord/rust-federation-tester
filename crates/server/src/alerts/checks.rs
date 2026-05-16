@@ -29,6 +29,7 @@
 
 use crate::AppResources;
 use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
+use crate::alerts::webhook::enqueue_for_alert;
 use crate::connection_pool::ConnectionPool;
 use crate::distributed::{Lock, Registry};
 use crate::email_outbox;
@@ -693,7 +694,7 @@ async fn promote_to_confirmed_failing(
         &a,
         &recipients,
         updated.failure_count,
-        failure_reason,
+        failure_reason.clone(),
         now,
     )
     .await;
@@ -711,6 +712,19 @@ async fn promote_to_confirmed_failing(
         .await;
         update_email_sent_at(updated, now, db).await;
     }
+
+    // Enqueue webhook notifications regardless of whether email was sent.
+    let _ = enqueue_for_alert(
+        db,
+        a.id,
+        &a.server_name,
+        "federation_down",
+        serde_json::json!({
+            "failure_count": 1,
+            "failure_reason": failure_reason,
+        }),
+    )
+    .await;
 }
 
 async fn dispatch_failure_emails(
@@ -877,6 +891,7 @@ async fn handle_confirmed_failure(
                 any_sent = true;
             }
         }
+        let current_failure_count = updated.failure_count;
         if any_sent {
             log_status_event(
                 db,
@@ -884,13 +899,26 @@ async fn handle_confirmed_failure(
                 &a.server_name,
                 EVENT_EMAIL_REMINDER,
                 false,
-                updated.failure_count,
+                current_failure_count,
                 None,
                 None,
             )
             .await;
             update_email_sent_at(updated, now, db).await;
         }
+
+        // Enqueue reminder webhooks regardless of email.
+        let _ = enqueue_for_alert(
+            db,
+            a.id,
+            &a.server_name,
+            "federation_reminder",
+            serde_json::json!({
+                "failure_count": current_failure_count,
+                "failure_reason": failure_reason,
+            }),
+        )
+        .await;
     }
 }
 
@@ -956,6 +984,18 @@ async fn handle_confirmed_recovery(a: alert::Model, resources: &AppResources, no
                 update_email_sent_at(refreshed, now, db).await;
             }
         }
+
+        // Enqueue recovery webhooks regardless of email.
+        let _ = enqueue_for_alert(
+            db,
+            a.id,
+            &a.server_name,
+            "federation_up",
+            serde_json::json!({
+                "failure_count": a.failure_count,
+            }),
+        )
+        .await;
     }
 
     tracing::info!(

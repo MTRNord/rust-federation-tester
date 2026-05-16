@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use lettre::{AsyncSmtpTransport, Tokio1Executor};
+use reqwest::Client as HttpClient;
 use sea_orm::DatabaseConnection;
 
 use crate::config::AppConfig;
@@ -40,4 +41,6 @@ pub struct AppResources {
     pub email_guard: distributed::EmailGuard,
     /// In-memory cache for release notes fetched from GitHub/Forgejo APIs.
     pub release_cache: Arc<release_notes::ReleaseCache>,
+    /// Shared HTTP client for outbound webhook delivery.
+    pub http_client: Arc<HttpClient>,
 }
