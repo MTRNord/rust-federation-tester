@@ -1,7 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hickory_resolver::Resolver;
-use hickory_resolver::config::ResolverConfig;
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::config::{self, ResolverConfig};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::response::generate_json_report;
 use rustls::crypto::CryptoProvider;
@@ -44,10 +44,14 @@ fn install_crypto_provider() {
     });
 }
 
-fn build_resolver(rt: &tokio::runtime::Runtime) -> Resolver<TokioConnectionProvider> {
+fn build_resolver(rt: &tokio::runtime::Runtime) -> Resolver<TokioRuntimeProvider> {
     let _guard = rt.enter();
-    Resolver::builder_with_config(ResolverConfig::google(), TokioConnectionProvider::default())
-        .build()
+    Resolver::builder_with_config(
+        ResolverConfig::udp_and_tcp(&config::GOOGLE),
+        TokioRuntimeProvider::default(),
+    )
+    .build()
+    .expect("failed to build resolver")
 }
 
 /// Benchmarks the full federation check against a known-good public server.
