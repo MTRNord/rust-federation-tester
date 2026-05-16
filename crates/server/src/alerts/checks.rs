@@ -38,8 +38,8 @@ use crate::entity::{
     alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
 };
 use crate::response::{Root, generate_json_report};
+use hickory_resolver::ConnectionProvider;
 use hickory_resolver::Resolver;
-use hickory_resolver::name_server::ConnectionProvider;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::HashSet;
 use std::sync::Arc;

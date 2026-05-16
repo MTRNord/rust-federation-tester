@@ -40,7 +40,7 @@ async fn test_connection_pool() {
 
 #[tokio::test]
 async fn test_generate_report() {
-    let resolver = Resolver::builder_tokio().unwrap().build();
+    let resolver = Resolver::builder_tokio().unwrap().build().unwrap();
     let connection_pool = ConnectionPool::default();
 
     // This test would ideally test against a known working Matrix server
@@ -64,7 +64,7 @@ async fn test_concurrent_requests() {
     use std::sync::Arc;
     use tokio::task::JoinSet;
 
-    let resolver = Arc::new(Resolver::builder_tokio().unwrap().build());
+    let resolver = Arc::new(Resolver::builder_tokio().unwrap().build().unwrap());
     let connection_pool = Arc::new(ConnectionPool::default());
 
     let mut join_set = JoinSet::new();

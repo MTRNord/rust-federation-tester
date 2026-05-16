@@ -3,8 +3,8 @@ use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownRes
 use crate::validation::server_name::parse_and_validate_server_name;
 use ::time as time_crate;
 use futures::{StreamExt, stream::FuturesUnordered};
-use hickory_resolver::proto::rr::RecordType;
-use hickory_resolver::{Resolver, name_server::ConnectionProvider};
+use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::{ConnectionProvider, Resolver};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{Duration, timeout};
@@ -178,15 +178,15 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
 
     let mut addrs: Vec<String> = vec![];
     if let Ok(lookup) = ipv4_result {
-        for record in lookup.record_iter() {
-            if let Some(ip) = record.data().as_a() {
+        for record in lookup.answers().iter() {
+            if let RData::A(ip) = &record.data {
                 addrs.push(format!("{}:443", ip.0));
             }
         }
     }
     if let Ok(lookup) = ipv6_result {
-        for record in lookup.record_iter() {
-            if let Some(ip) = record.data().as_aaaa() {
+        for record in lookup.answers().iter() {
+            if let RData::AAAA(ip) = &record.data {
                 addrs.push(format!("[{}]:443", ip.0));
             }
         }

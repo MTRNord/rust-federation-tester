@@ -16,7 +16,7 @@ use axum::{
     extract::{Query, State},
     response::IntoResponse,
 };
-use hickory_resolver::{Resolver, name_server::ConnectionProvider};
+use hickory_resolver::{ConnectionProvider, Resolver};
 use hyper::StatusCode;
 use serde::Deserialize;
 use serde_json::json;

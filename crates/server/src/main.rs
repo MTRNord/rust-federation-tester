@@ -321,7 +321,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
         opts.negative_max_ttl = Some(Duration::from_secs(5));
         // Increase cache size from the default 32 to hold more concurrent server lookups.
         opts.cache_size = 256;
-        Arc::new(builder.build())
+        Arc::new(builder.build()?)
     };
     let connection_pool = ConnectionPool::default();
 

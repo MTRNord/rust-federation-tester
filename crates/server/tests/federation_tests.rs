@@ -4,8 +4,8 @@
 #[cfg(test)]
 mod federation_tests {
     use hickory_resolver::Resolver;
-    use hickory_resolver::config::ResolverConfig;
-    use hickory_resolver::name_server::TokioConnectionProvider;
+    use hickory_resolver::config::{self, ResolverConfig};
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
     use rust_federation_tester::connection_pool::ConnectionPool;
     use rust_federation_tester::federation::{lookup_server, lookup_server_well_known};
     use rust_federation_tester::response::generate_json_report;
@@ -18,9 +18,13 @@ mod federation_tests {
     /// Build a resolver that uses Google DNS (8.8.8.8 / 8.8.4.4) for reliable test resolution.
     /// Using the system resolver (/etc/resolv.conf) often causes intermittent timeouts in tests
     /// because the local resolver is too slow or rate-limits concurrent queries.
-    fn test_resolver() -> Resolver<TokioConnectionProvider> {
-        Resolver::builder_with_config(ResolverConfig::google(), TokioConnectionProvider::default())
-            .build()
+    fn test_resolver() -> Resolver<TokioRuntimeProvider> {
+        Resolver::builder_with_config(
+            ResolverConfig::udp_and_tcp(&config::GOOGLE),
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .expect("failed to build resolver")
     }
 
     fn install_crypto_provider_once() {

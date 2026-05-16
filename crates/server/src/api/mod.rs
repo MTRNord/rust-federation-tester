@@ -35,7 +35,7 @@ pub use health::MISC_TAG;
 
 use crate::AppResources;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
-use hickory_resolver::name_server::ConnectionProvider;
+use hickory_resolver::ConnectionProvider;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     services::ServeDir,

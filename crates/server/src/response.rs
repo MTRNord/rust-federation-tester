@@ -4,8 +4,8 @@ use crate::validation::server_name::parse_and_validate_server_name;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use hickory_resolver::ConnectionProvider;
 use hickory_resolver::Resolver;
-use hickory_resolver::name_server::ConnectionProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;

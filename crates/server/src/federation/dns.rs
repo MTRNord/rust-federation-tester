@@ -12,8 +12,8 @@ pub struct DnsPhaseResult {
     pub errors: Vec<Error>,
 }
 
-use hickory_resolver::proto::rr::RecordType;
-use hickory_resolver::{ResolveErrorKind, Resolver, name_server::ConnectionProvider};
+use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::{ConnectionProvider, Resolver};
 use tokio::time::timeout;
 
 #[tracing::instrument()]
@@ -105,10 +105,15 @@ pub async fn lookup_server<P: ConnectionProvider>(
                 }
             };
             match srv_records {
-                Ok(records) if !records.as_lookup().is_empty() => {
-                    for record in records.iter() {
-                        let srv = record.clone();
-                        let target = absolutize_srv_target(&srv.target().to_utf8(), server_name);
+                Ok(records) if !records.answers().is_empty() => {
+                    for record in records.answers().iter() {
+                        let RData::SRV(srv) = &record.data else {
+                            continue;
+                        };
+                        let target = absolutize_srv_target(&srv.target.to_utf8(), server_name);
+                        let srv_port = srv.port;
+                        let srv_priority = srv.priority;
+                        let srv_weight = srv.weight;
                         match timeout(
                             network_timeout(),
                             resolver.lookup(&target, RecordType::CNAME),
@@ -116,11 +121,12 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         .await
                         {
                             Ok(Ok(cname)) => {
-                                let cname_target = cname.record_iter().next().map(|c| {
-                                    c.data()
-                                        .as_cname()
-                                        .expect("CNAME record expected")
-                                        .to_utf8()
+                                let cname_target = cname.answers().iter().next().and_then(|c| {
+                                    if let RData::CNAME(cname_rdata) = &c.data {
+                                        Some(cname_rdata.to_utf8())
+                                    } else {
+                                        None
+                                    }
                                 });
                                 if cname_target.clone().is_some_and(|c| c != target) {
                                     let srv_data = SRVData {
@@ -133,9 +139,9 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                                 "SRV record target {target} is a CNAME record, which is forbidden (as per RFC2782)"
                                             ),
                                         }),
-                                        port: srv.port(),
-                                        priority: Some(srv.priority()),
-                                        weight: Some(srv.weight()),
+                                        port: srv_port,
+                                        priority: Some(srv_priority),
+                                        weight: Some(srv_weight),
                                     };
                                     srv_targets
                                         .entry(target.clone())
@@ -145,16 +151,15 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                 }
                             }
                             Ok(Err(e)) => {
-                                if let ResolveErrorKind::Proto(_proto_error) = e.kind() {
-                                    let cname_target = target.clone();
+                                if e.is_no_records_found() {
                                     let srv_data = SRVData {
-                                        target: cname_target,
+                                        target: target.clone(),
                                         srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
                                         error: None,
-                                        port: srv.port(),
-                                        priority: Some(srv.priority()),
-                                        weight: Some(srv.weight()),
+                                        port: srv_port,
+                                        priority: Some(srv_priority),
+                                        weight: Some(srv_weight),
                                     };
                                     srv_targets
                                         .entry(target.clone())
@@ -172,9 +177,9 @@ pub async fn lookup_server<P: ConnectionProvider>(
                                         srv_prefix: Some(srv_prefix.to_string()),
                                         addrs: vec![],
                                         error: Some(err.clone()),
-                                        port: srv.port(),
-                                        priority: Some(srv.priority()),
-                                        weight: Some(srv.weight()),
+                                        port: srv_port,
+                                        priority: Some(srv_priority),
+                                        weight: Some(srv_weight),
                                     };
                                     srv_targets
                                         .entry(target.clone())
@@ -244,15 +249,15 @@ pub async fn lookup_server<P: ConnectionProvider>(
             );
             let ipv4_records = match ipv4_result {
                 Ok(r) => r,
-                Err(_) => {
-                    Err(hickory_resolver::ResolveErrorKind::Message("A lookup timed out").into())
-                }
+                Err(_) => Err(hickory_resolver::net::NetError::Message(
+                    "A lookup timed out",
+                )),
             };
             let ipv6_records = match ipv6_result {
                 Ok(r) => r,
-                Err(_) => {
-                    Err(hickory_resolver::ResolveErrorKind::Message("AAAA lookup timed out").into())
-                }
+                Err(_) => Err(hickory_resolver::net::NetError::Message(
+                    "AAAA lookup timed out",
+                )),
             };
             Ok::<_, color_eyre::eyre::Error>((
                 host,
@@ -268,12 +273,12 @@ pub async fn lookup_server<P: ConnectionProvider>(
         match result {
             Ok((host, mut records, cname_resp, ipv4_records, ipv6_records)) => {
                 let cname_target = if let Ok(Ok(cname)) = &cname_resp {
-                    cname.record_iter().next().map(|c| {
-                        c.data()
-                            .as_cname()
-                            .expect("CNAME record expected")
-                            .to_utf8()
-                            .to_string()
+                    cname.answers().iter().next().and_then(|c| {
+                        if let RData::CNAME(cname_rdata) = &c.data {
+                            Some(cname_rdata.to_utf8().to_string())
+                        } else {
+                            None
+                        }
                     })
                 } else {
                     None
@@ -284,8 +289,8 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     let mut addrs_with_port: Vec<String> = vec![];
                     match ipv4_records {
                         Ok(ref ipv4) => {
-                            for addr in ipv4.record_iter() {
-                                if let Some(ip) = addr.data().as_a() {
+                            for addr in ipv4.answers().iter() {
+                                if let RData::A(ip) = &addr.data {
                                     addrs_with_port.push(format_addr_port(&ip.0.to_string(), port));
                                 }
                             }
@@ -299,8 +304,8 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     }
                     match ipv6_records {
                         Ok(ref ipv6) => {
-                            for addr in ipv6.record_iter() {
-                                if let Some(ip) = addr.data().as_aaaa() {
+                            for addr in ipv6.answers().iter() {
+                                if let RData::AAAA(ip) = &addr.data {
                                     addrs_with_port.push(format_ipv6_port(&ip.0.to_string(), port));
                                 }
                             }
@@ -368,16 +373,18 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     error_code: ErrorCode::Unknown,
                 });
                 (
-                    Err(hickory_resolver::ResolveErrorKind::Message("A lookup failed").into()),
-                    Err(hickory_resolver::ResolveErrorKind::Message("AAAA lookup failed").into()),
+                    Err(hickory_resolver::net::NetError::Message("A lookup failed")),
+                    Err(hickory_resolver::net::NetError::Message(
+                        "AAAA lookup failed",
+                    )),
                 )
             }
         };
         let mut addrs_with_port: Vec<String> = vec![];
         match ipv4_records {
             Ok(ref ipv4) => {
-                for addr in ipv4.record_iter() {
-                    if let Some(ip) = addr.data().as_a() {
+                for addr in ipv4.answers().iter() {
+                    if let RData::A(ip) = &addr.data {
                         addrs_with_port.push(format_addr_port(
                             &ip.0.to_string(),
                             port.parse().unwrap_or(8448),
@@ -394,8 +401,8 @@ pub async fn lookup_server<P: ConnectionProvider>(
         }
         match ipv6_records {
             Ok(ref ipv6) => {
-                for addr in ipv6.record_iter() {
-                    if let Some(ip) = addr.data().as_aaaa() {
+                for addr in ipv6.answers().iter() {
+                    if let RData::AAAA(ip) = &addr.data {
                         addrs_with_port.push(format_ipv6_port(
                             &ip.0.to_string(),
                             port.parse().unwrap_or(8448),

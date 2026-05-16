@@ -244,15 +244,11 @@ async fn process_batch(resources: &AppResources) -> Result<(), sea_orm::DbErr> {
     Ok(())
 }
 
-async fn deliver_item(
-    db: &sea_orm::DatabaseConnection,
+fn build_request(
     http: &reqwest::Client,
-    item: webhook_outbox::Model,
     webhook: &alert_notification_webhook::Model,
-    now: OffsetDateTime,
-) {
-    let body_bytes = item.payload.as_bytes().to_vec();
-
+    body_bytes: Vec<u8>,
+) -> reqwest::RequestBuilder {
     let mut request = http
         .post(&webhook.url)
         .header("Content-Type", "application/json")
@@ -264,38 +260,49 @@ async fn deliver_item(
         request = request.header(webhook.hmac_header.as_str(), sig);
     }
 
+    request
+}
+
+async fn handle_response(
+    db: &sea_orm::DatabaseConnection,
+    item: webhook_outbox::Model,
+    now: OffsetDateTime,
+    resp: reqwest::Response,
+) {
+    let status = resp.status().as_u16();
+    if resp.status().is_success() {
+        tracing::info!(
+            name = "webhook_outbox.worker.delivered",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            id = %item.id,
+            status,
+            message = "Webhook delivered"
+        );
+        mark_delivered(db, item, now, status).await;
+    } else {
+        tracing::warn!(
+            name = "webhook_outbox.worker.non_2xx",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            id = %item.id,
+            status,
+            message = "Webhook returned non-2xx"
+        );
+        schedule_retry_or_fail(db, item, now, Some(status as i16), format!("HTTP {status}")).await;
+    }
+}
+
+async fn deliver_item(
+    db: &sea_orm::DatabaseConnection,
+    http: &reqwest::Client,
+    item: webhook_outbox::Model,
+    webhook: &alert_notification_webhook::Model,
+    now: OffsetDateTime,
+) {
+    let body_bytes = item.payload.as_bytes().to_vec();
+    let request = build_request(http, webhook, body_bytes);
+
     match request.send().await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            if resp.status().is_success() {
-                tracing::info!(
-                    name = "webhook_outbox.worker.delivered",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    id = %item.id,
-                    url = %webhook.url,
-                    status,
-                    message = "Webhook delivered"
-                );
-                mark_delivered(db, item, now, status).await;
-            } else {
-                tracing::warn!(
-                    name = "webhook_outbox.worker.non_2xx",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    id = %item.id,
-                    url = %webhook.url,
-                    status,
-                    message = "Webhook returned non-2xx"
-                );
-                schedule_retry_or_fail(
-                    db,
-                    item,
-                    now,
-                    Some(status as i16),
-                    format!("HTTP {status}"),
-                )
-                .await;
-            }
-        }
+        Ok(resp) => handle_response(db, item, now, resp).await,
         Err(e) => {
             tracing::warn!(
                 name = "webhook_outbox.worker.delivery_error",
