@@ -137,7 +137,7 @@ async fn test_authorize_invalid_response_type() {
         .route("/authorize", get(authorize))
         .with_state(oauth2_state)
         .layer(Extension(resources));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/authorize")
@@ -160,7 +160,7 @@ async fn test_authorize_invalid_client() {
         .route("/authorize", get(authorize))
         .with_state(oauth2_state)
         .layer(Extension(resources));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/authorize")
@@ -183,7 +183,7 @@ async fn test_authorize_invalid_redirect_uri() {
         .route("/authorize", get(authorize))
         .with_state(oauth2_state)
         .layer(Extension(resources));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/authorize")
@@ -207,7 +207,7 @@ async fn test_authorize_valid_request_redirects_to_login() {
         .route("/authorize", get(authorize))
         .with_state(oauth2_state)
         .layer(Extension(resources));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/authorize")
@@ -239,7 +239,7 @@ async fn test_authorize_with_pkce_and_nonce() {
         .route("/authorize", get(authorize))
         .with_state(oauth2_state)
         .layer(Extension(resources));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/authorize")
@@ -281,7 +281,7 @@ async fn test_token_missing_client_id() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -302,7 +302,7 @@ async fn test_token_invalid_client() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -327,7 +327,7 @@ async fn test_token_unsupported_grant_type() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -351,7 +351,7 @@ async fn test_token_authorization_code_not_found() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -376,7 +376,7 @@ async fn test_token_refresh_not_found() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -405,7 +405,7 @@ async fn test_revoke_nonexistent_token() {
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Per RFC 7009, should return 200 even for nonexistent tokens
     let response = server
@@ -425,7 +425,7 @@ async fn test_revoke_with_token_type_hint_access() {
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/revoke")
@@ -444,7 +444,7 @@ async fn test_revoke_with_token_type_hint_refresh() {
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/revoke")
@@ -466,7 +466,7 @@ async fn test_revoke_with_unknown_token_type_hint() {
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // RFC 7009: Server should ignore unknown hints
     let response = server
@@ -490,7 +490,7 @@ async fn test_userinfo_missing_token() {
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/userinfo").await;
 
@@ -508,7 +508,7 @@ async fn test_userinfo_invalid_token() {
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/userinfo")
@@ -539,7 +539,7 @@ async fn test_openid_configuration() {
             get(openid_configuration),
         )
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/.well-known/openid-configuration").await;
 
@@ -770,7 +770,7 @@ async fn test_token_authorization_code_success() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -806,7 +806,7 @@ async fn test_token_refresh_success() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -840,7 +840,7 @@ async fn test_userinfo_with_valid_token() {
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/userinfo")
@@ -873,7 +873,7 @@ async fn test_revoke_existing_token() {
     let app: Router = Router::new()
         .route("/revoke", post(revoke))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Revoke the access token
     let response = server
@@ -923,7 +923,7 @@ async fn test_token_confidential_client_with_basic_auth() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Use Basic auth header
     let credentials =
@@ -956,7 +956,7 @@ async fn test_token_confidential_client_wrong_secret() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -1013,7 +1013,7 @@ async fn test_token_authorization_code_expired() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -1050,7 +1050,7 @@ async fn test_token_authorization_code_client_mismatch() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Try to use auth code with different client
     let response = server
@@ -1083,7 +1083,7 @@ async fn test_token_authorization_code_redirect_uri_mismatch() {
     let app: Router = Router::new()
         .route("/token", post(token))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .post("/token")
@@ -1140,7 +1140,7 @@ async fn test_userinfo_insufficient_scope() {
     let app: Router = Router::new()
         .route("/userinfo", get(userinfo))
         .with_state(oauth2_state);
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server
         .get("/userinfo")
@@ -1265,8 +1265,7 @@ async fn test_is_password_reset_valid_no_token() {
 #[tokio::test]
 async fn test_password_reset_request_get_renders_form() {
     let (resources, oauth2_state) = create_test_resources().await;
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server.get("/password-reset").await;
 
@@ -1279,8 +1278,7 @@ async fn test_password_reset_request_get_renders_form() {
 #[tokio::test]
 async fn test_password_reset_request_post_unknown_email() {
     let (resources, oauth2_state) = create_test_resources().await;
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     // Unknown email — anti-enumeration: always returns "check your email"
     let response = server
@@ -1296,8 +1294,7 @@ async fn test_password_reset_request_post_unknown_email() {
 #[tokio::test]
 async fn test_password_reset_request_post_known_email() {
     let (resources, oauth2_state) = create_test_resources().await;
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     // Known email — still shows same "check your email" page (anti-enumeration)
     let response = server
@@ -1313,8 +1310,7 @@ async fn test_password_reset_request_post_known_email() {
 #[tokio::test]
 async fn test_password_reset_confirm_get_invalid_token() {
     let (resources, oauth2_state) = create_test_resources().await;
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .get("/password-reset/confirm")
@@ -1350,8 +1346,7 @@ async fn test_password_reset_confirm_get_valid_token() {
         config.oauth2.issuer_url.clone(),
         config.frontend_url.clone(),
     );
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .get("/password-reset/confirm")
@@ -1387,8 +1382,7 @@ async fn test_password_reset_confirm_post_password_mismatch() {
         config.oauth2.issuer_url.clone(),
         config.frontend_url.clone(),
     );
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .post("/password-reset/confirm")
@@ -1429,8 +1423,7 @@ async fn test_password_reset_confirm_post_weak_password() {
         config.oauth2.issuer_url.clone(),
         config.frontend_url.clone(),
     );
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .post("/password-reset/confirm")
@@ -1456,8 +1449,7 @@ async fn test_password_reset_confirm_post_weak_password() {
 #[tokio::test]
 async fn test_password_reset_confirm_post_invalid_token() {
     let (resources, oauth2_state) = create_test_resources().await;
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .post("/password-reset/confirm")
@@ -1497,8 +1489,7 @@ async fn test_password_reset_confirm_post_success() {
         config.oauth2.issuer_url.clone(),
         config.frontend_url.clone(),
     );
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .post("/password-reset/confirm")
@@ -1556,8 +1547,7 @@ async fn test_password_reset_confirm_post_expired_token() {
         config.oauth2.issuer_url.clone(),
         config.frontend_url.clone(),
     );
-    let server =
-        TestServer::new(build_oauth2_app(resources, oauth2_state)).expect("create test server");
+    let server = TestServer::new(build_oauth2_app(resources, oauth2_state));
 
     let response = server
         .post("/password-reset/confirm")

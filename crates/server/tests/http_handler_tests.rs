@@ -86,7 +86,7 @@ async fn create_test_resources(stats_enabled: bool) -> AppResources {
 #[tokio::test]
 async fn test_health_endpoint_returns_ok() {
     let app = Router::new().route("/healthz", get(health::health));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/healthz").await;
 
@@ -106,7 +106,7 @@ async fn test_metrics_endpoint_with_stats_disabled() {
         .route("/metrics", get(metrics::metrics))
         .layer(Extension(resources));
 
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/metrics").await;
 
@@ -122,7 +122,7 @@ async fn test_metrics_endpoint_with_stats_enabled() {
         .route("/metrics", get(metrics::metrics))
         .layer(Extension(resources));
 
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/metrics").await;
 
@@ -165,7 +165,7 @@ async fn test_federation_report_missing_server_name() {
     }
 
     let app = Router::new().route("/api/federation/report", get(mock_report));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Test missing server_name - Axum returns 400 for missing required query params
     let response = server.get("/api/federation/report").await;
@@ -199,7 +199,7 @@ async fn test_federation_report_empty_server_name() {
     }
 
     let app = Router::new().route("/api/federation/report", get(mock_report));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Test empty server_name
     let response = server
@@ -226,7 +226,7 @@ async fn test_federation_ok_missing_server_name() {
     }
 
     let app = Router::new().route("/api/federation/federation-ok", get(mock_fed_ok));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Axum returns 400 for missing required query params
     let response = server.get("/api/federation/federation-ok").await;
@@ -250,7 +250,7 @@ async fn test_alerts_verify_invalid_token() {
     let resources = create_test_resources(false).await;
     // Convert OpenApiRouter to regular Router
     let app: Router = alerts::router().layer(Extension(resources)).into();
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Test with invalid token
     let response = server
@@ -275,7 +275,7 @@ async fn test_alerts_verify_missing_token() {
     let resources = create_test_resources(false).await;
     // Convert OpenApiRouter to regular Router
     let app: Router = alerts::router().layer(Extension(resources)).into();
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Test without token parameter - should fail
     let response = server.get("/verify").await;
@@ -291,7 +291,7 @@ async fn test_alerts_delete_nonexistent() {
     let resources = create_test_resources(false).await;
     // Convert OpenApiRouter to regular Router
     let app: Router = alerts::router().layer(Extension(resources)).into();
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Try to delete a non-existent alert
     let response = server.delete("/99999").await;
@@ -308,7 +308,7 @@ async fn test_alerts_delete_nonexistent() {
 #[tokio::test]
 async fn test_health_returns_text_plain() {
     let app = Router::new().route("/healthz", get(health::health));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/healthz").await;
 
@@ -331,7 +331,7 @@ async fn test_combined_health_and_metrics() {
         .route("/metrics", get(metrics::metrics))
         .layer(Extension(resources));
 
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Health should work
     let health_response = server.get("/healthz").await;
@@ -346,7 +346,7 @@ async fn test_combined_health_and_metrics() {
 #[tokio::test]
 async fn test_404_for_unknown_routes() {
     let app = Router::new().route("/healthz", get(health::health));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     let response = server.get("/unknown").await;
     response.assert_status_not_found();
@@ -384,7 +384,7 @@ async fn test_federation_stats_opt_in_parameter() {
     }
 
     let app = Router::new().route("/api/federation/report", get(mock_report));
-    let server = TestServer::new(app).expect("create test server");
+    let server = TestServer::new(app);
 
     // Test with stats_opt_in=true
     let response = server
