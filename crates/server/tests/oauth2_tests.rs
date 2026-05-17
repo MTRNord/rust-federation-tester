@@ -57,6 +57,7 @@ async fn create_oauth2_test_db() -> Arc<DatabaseConnection> {
 
 fn create_test_config() -> AppConfig {
     AppConfig {
+        listen_addr: Some("[::]:8080".into()),
         database_url: "sqlite::memory:".into(),
         smtp: SmtpConfig {
             enabled: true,

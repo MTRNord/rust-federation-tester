@@ -75,6 +75,7 @@ fn default_smtp_timeout_secs() -> u64 {
 #[derive(Deserialize)]
 pub struct AppConfig {
     pub database_url: String,
+    pub listen_addr: Option<String>,
     pub smtp: SmtpConfig,
     pub frontend_url: String,
     pub magic_token_secret: String,

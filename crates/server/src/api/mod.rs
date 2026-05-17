@@ -110,6 +110,12 @@ pub async fn start_webserver<P: ConnectionProvider>(
         );
     }
 
+    let listen_addr = app_resources
+        .config
+        .listen_addr
+        .clone()
+        .unwrap_or("0.0.0.0:8080".into());
+
     // Apply middleware layers and finalize router
     let (router, api) = router
         // include trace context as header into the response
@@ -139,7 +145,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
     let router = router.nest_service("/assets/css", ServeDir::new(static_dir.join("css")));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     tracing::info!("Server running at 0.0.0.0:8080");
     axum::serve(
         listener,
