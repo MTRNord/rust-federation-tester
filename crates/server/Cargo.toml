@@ -101,9 +101,9 @@ utoipa = { version = "5.4.0", features = [
 utoipa-axum = "0.2.0"
 utoipa-redoc = { version = "6.0.0", features = ["axum"] }
 uuid = "1.17.0"
-webpki-roots = "1.0"
 x509-parser = "0.18"
 pulldown-cmark = "0.13.3"
+rustls-native-certs = "0.8.3"
 
 [dev-dependencies]
 axum-test = "20.0.0"

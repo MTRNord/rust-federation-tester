@@ -18,7 +18,11 @@ pub fn get_shared_tls_config() -> Arc<ClientConfig> {
     TLS_CONFIG
         .get_or_init(|| {
             let mut root_cert_store = RootCertStore::empty();
-            root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            for cert in
+                rustls_native_certs::load_native_certs().expect("could not load platform certs")
+            {
+                root_cert_store.add(cert).unwrap();
+            }
 
             let config = ClientConfig::builder()
                 .with_root_certificates(root_cert_store)
