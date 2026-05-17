@@ -22,9 +22,12 @@ pub mod openapi;
 pub mod probe;
 pub mod statistics;
 
+use std::{path::Path, sync::Arc};
+
 // Re-export oauth2 module from crate root
 pub use crate::oauth2;
 
+use axum::{extract::connect_info::Connected, serve::IncomingStream};
 // Re-export for backward compatibility with existing code
 pub use federation::AppState;
 
@@ -32,6 +35,7 @@ pub use federation::AppState;
 pub use alerts::ALERTS_TAG;
 pub use federation::FEDERATION_TAG;
 pub use health::MISC_TAG;
+use tokio::net::unix::UCred;
 
 use crate::AppResources;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
@@ -145,14 +149,41 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
     let router = router.nest_service("/assets/css", ServeDir::new(static_dir.join("css")));
 
-    let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
-    tracing::info!("Server running at 0.0.0.0:8080");
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await
-    .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?;
+    tracing::info!("Server running at {listen_addr}");
+    if let Some(uds) = listen_addr.strip_prefix("unix:") {
+        axum::serve(
+            tokio::net::UnixListener::bind(Path::new(uds))?,
+            router.into_make_service_with_connect_info::<UdsConnectInfo>(),
+        )
+        .await
+        .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?
+
+    } else {
+        axum::serve(
+            tokio::net::TcpListener::bind(&listen_addr).await?,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?
+    };
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct UdsConnectInfo {
+    peer_addr: Arc<tokio::net::unix::SocketAddr>,
+    peer_cred: UCred,
+}
+
+impl Connected<IncomingStream<'_, tokio::net::UnixListener>> for UdsConnectInfo {
+    fn connect_info(stream: IncomingStream<'_, tokio::net::UnixListener>) -> Self {
+        let peer_addr = stream.io().peer_addr().unwrap();
+        let peer_cred = stream.io().peer_cred().unwrap();
+        Self {
+            peer_addr: Arc::new(peer_addr),
+            peer_cred,
+        }
+    }
 }
