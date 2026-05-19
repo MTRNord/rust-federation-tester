@@ -6,8 +6,8 @@ use crate::AppResources;
 use crate::email_templates::{
     AccountVerificationEmailTemplate, FailureEmailTemplate, MagicLinkEmailTemplate,
     PasswordResetEmailTemplate, RecoveryEmailTemplate, ServerNameChangeEmailTemplate,
-    TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VerificationEmailTemplate,
-    VersionChangeEmailTemplate,
+    TestEmailTemplate, TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate,
+    VerificationEmailTemplate, VersionChangeEmailTemplate,
 };
 use crate::release_notes::{fetch_release_excerpt_direct, get_release_info};
 use axum::{
@@ -36,6 +36,7 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(preview_version_change_email_live))
         .routes(routes!(preview_account_verification_email))
         .routes(routes!(preview_server_name_change_email))
+        .routes(routes!(preview_test_email))
 }
 
 /// Check if the client IP is allowed to access debug endpoints.
@@ -702,6 +703,54 @@ pub async fn preview_server_name_change_email(
         check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
         unsubscribe_url: "https://example.com/alerts/unsubscribe?token=sample-token".to_string(),
         manage_url: "https://example.com/alerts".to_string(),
+        sponsor_url: resources
+            .config
+            .github_sponsors_url
+            .clone()
+            .or_else(|| resources.config.liberapay_url.clone()),
+    };
+
+    match template.render_html() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to render template: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Preview the test notification email template.
+#[utoipa::path(
+    get,
+    path = "/email/test-notification",
+    tag = DEBUG_TAG,
+    operation_id = "Preview Test Notification Email",
+    summary = "Preview test notification email template",
+    description = "Renders the test notification email template with sample data.\n\n\
+                   This is the email sent when a user clicks 'Send test email' on an alert.\n\n\
+                   **Access control:** Only accessible from allowed networks.",
+    responses(
+        (status = 200, description = "Rendered HTML email template", content_type = "text/html"),
+        (status = 403, description = "Access denied - client IP not in allowed networks"),
+        (status = 500, description = "Template rendering failed"),
+    )
+)]
+pub async fn preview_test_email(
+    Extension(resources): Extension<AppResources>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_allowed(&resources, &addr, &headers) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let template = TestEmailTemplate {
+        server_name: "example.matrix.org".to_string(),
+        check_url: "https://example.com/results?serverName=example.matrix.org".to_string(),
+        alert_url: "https://example.com/alerts/edit/1".to_string(),
+        manage_url: "https://example.com/alerts".to_string(),
+        environment_name: resources.config.environment_name.clone(),
         sponsor_url: resources
             .config
             .github_sponsors_url
