@@ -28,7 +28,9 @@
 //! See [`crate::distributed`] for details.
 
 use crate::AppResources;
-use crate::alerts::email::{REMINDER_EMAIL_INTERVAL, send_failure_email, send_recovery_email};
+use crate::alerts::email::{
+    REMINDER_EMAIL_INTERVAL, format_email_datetime, send_failure_email, send_recovery_email,
+};
 use crate::alerts::webhook::enqueue_for_alert;
 use crate::connection_pool::ConnectionPool;
 use crate::distributed::{Lock, Registry};
@@ -44,7 +46,6 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilt
 use std::collections::HashSet;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use time_tz::{OffsetDateTimeExt, PrimitiveDateTimeExt, timezones};
 use tokio::task::JoinSet;
 use tokio::time::Duration;
@@ -151,9 +152,7 @@ async fn queue_failure_email_delayed(
     detected_at: OffsetDateTime,
     send_after: OffsetDateTime,
 ) {
-    let detected_str = detected_at
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| detected_at.to_string());
+    let detected_str = format_email_datetime(detected_at);
 
     let base = format!("{}/", config.frontend_url.trim_end_matches('/'));
     let check_url = format!("{}results?serverName={}", base, server_name);

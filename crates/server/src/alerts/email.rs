@@ -30,6 +30,19 @@ fn frontend_base(url: &str) -> String {
     format!("{}/", url.trim_end_matches('/'))
 }
 
+/// Format a UTC timestamp for email display: `2026-05-19 09:59 UTC`.
+/// Strips sub-second precision and the ISO-8601 `T` separator for readability.
+pub(crate) fn format_email_datetime(dt: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        dt.year(),
+        dt.month() as u8,
+        dt.day(),
+        dt.hour(),
+        dt.minute()
+    )
+}
+
 fn format_downtime(minutes: u64) -> String {
     if minutes < 60 {
         format!("{} min", minutes)
@@ -84,17 +97,11 @@ pub async fn send_failure_email(
     let now = time::OffsetDateTime::now_utc();
     let (first_detected_str, minutes_down) = if let Some(t) = first_detected {
         let mins = (now - t).whole_minutes().max(0) as u64;
-        let formatted = t
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_else(|_| t.to_string());
-        (Some(formatted), Some(mins))
+        (Some(format_email_datetime(t)), Some(mins))
     } else {
         (None, None)
     };
-    let last_healthy_str = last_healthy.and_then(|t| {
-        t.format(&time::format_description::well_known::Rfc3339)
-            .ok()
-    });
+    let last_healthy_str = last_healthy.map(format_email_datetime);
 
     // Convert REMINDER_EMAIL_INTERVAL to hours for display
     let reminder_hours = REMINDER_EMAIL_INTERVAL.as_secs() / 3600;
@@ -273,17 +280,12 @@ pub async fn send_recovery_email(
         .clone()
         .or_else(|| config.liberapay_url.clone());
 
-    let recovered_at_str = recovered_at
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| recovered_at.to_string());
+    let recovered_at_str = format_email_datetime(recovered_at);
 
     let (first_detected_str, minutes_down, downtime_human) = if let Some(fd) = first_detected {
         let mins = (recovered_at - fd).whole_minutes().max(0) as u64;
         let human = format_downtime(mins);
-        let fd_str = fd
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_else(|_| fd.to_string());
-        (Some(fd_str), Some(mins), Some(human))
+        (Some(format_email_datetime(fd)), Some(mins), Some(human))
     } else {
         (None, None, None)
     };
@@ -460,9 +462,7 @@ pub async fn send_server_name_change_email(
         .github_sponsors_url
         .clone()
         .or_else(|| config.liberapay_url.clone());
-    let detected_at_str = detected_at
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| detected_at.to_string());
+    let detected_at_str = format_email_datetime(detected_at);
 
     let template = ServerNameChangeEmailTemplate {
         server_name: server_name.to_string(),

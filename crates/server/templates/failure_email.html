@@ -34,7 +34,7 @@ td { mso-line-height-rule:exactly; }
 </style>
 </head>
 <body style="margin:0;padding:0;background-color:#E1DCC9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1B1714;">
-<div class="preheader">Federation for {{ server_name }} stopped responding{% if let Some(m) = minutes_down %} {{ m }} minutes ago{% endif %}.</div>
+<div class="preheader">Federation for {{ server_name }} stopped responding{% if let Some(m) = minutes_down %} {{ m }} {% if *m == 1_u64 %}minute{% else %}minutes{% endif %} ago{% endif %}.</div>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#E1DCC9;">
   <tr>
     <td align="center" style="padding:32px 16px;">
@@ -82,14 +82,14 @@ td { mso-line-height-rule:exactly; }
             <p style="margin:0 0 8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#57190C;font-weight:700;line-height:1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">● Federation alert</p>
             <h1 class="h1" style="margin:0;font-size:28px;font-weight:800;letter-spacing:-0.025em;color:#1B1714;line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{{ server_name }} isn't reachable.</h1>
             <p style="margin:10px 0 0;font-size:14px;color:#2F2A25;line-height:1.5;">
-              {% if let Some(fd) = first_detected %}First detected <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ fd }}</span>{% if let Some(m) = minutes_down %} · {{ m }} minutes ago{% endif %}{% else %}{% if let Some(m) = minutes_down %}Detected {{ m }} minutes ago{% endif %}{% endif %}
+              {% if let Some(fd) = first_detected %}First detected <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ fd }}</span>{% if let Some(m) = minutes_down %} · {{ m }} {% if *m == 1_u64 %}minute{% else %}minutes{% endif %} ago{% endif %}{% else %}{% if let Some(m) = minutes_down %}Detected {{ m }} {% if *m == 1_u64 %}minute{% else %}minutes{% endif %} ago{% endif %}{% endif %}
             </p>
           </td>
         </tr>
         <!-- Main content -->
         <tr>
           <td style="padding:32px;background-color:#F7F2E8;" class="mobile-pad mobile-pad-y">
-            <p style="margin:0 0 20px;font-size:16px;line-height:1.65;color:#2F2A25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Federation health checks for <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ server_name }}</strong> have been failing{% if let Some(m) = minutes_down %} for <strong>{{ m }} minutes</strong>{% endif %}. While this lasts, other homeservers can't deliver messages to your users.</p>
+            <p style="margin:0 0 20px;font-size:16px;line-height:1.65;color:#2F2A25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Federation health checks for <strong style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ server_name }}</strong> have been failing{% if let Some(m) = minutes_down %} for <strong>{{ m }} {% if *m == 1_u64 %}minute{% else %}minutes{% endif %}</strong>{% endif %}. While this lasts, other homeservers can't deliver messages to your users.</p>
             <!-- Error box -->
             {% if failure_reason.is_some() || error_hint.is_some() %}
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#EFE9DB;border:1px solid #C9C2AE;border-radius:5px;margin:0 0 20px;">
