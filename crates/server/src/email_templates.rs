@@ -627,6 +627,42 @@ Manage account: {}
     }
 }
 
+/// Template for test notification emails (triggered via "Send test email" button)
+#[derive(Template)]
+#[template(path = "test_email.html")]
+pub struct TestEmailTemplate {
+    pub server_name: String,
+    pub check_url: String,
+    pub alert_url: String,
+    pub manage_url: String,
+    pub environment_name: Option<String>,
+    pub sponsor_url: Option<String>,
+}
+
+impl TestEmailTemplate {
+    #[tracing::instrument(skip(self))]
+    pub fn render_html(&self) -> Result<String, askama::Error> {
+        let html = self.render()?;
+        Ok(inline_css(&html))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn render_text(&self) -> String {
+        let env_banner = env_banner_text(self.environment_name.as_deref());
+
+        format!(
+            r#"{}This is a test notification for your federation alert on {}.
+
+If you received this, email delivery is working correctly.
+
+View current status: {}
+Manage alert: {}
+"#,
+            env_banner, self.server_name, self.check_url, self.alert_url
+        )
+    }
+}
+
 fn strip_html_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;

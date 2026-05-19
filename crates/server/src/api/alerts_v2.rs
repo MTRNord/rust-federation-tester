@@ -1488,19 +1488,45 @@ async fn test_email(
         ));
     }
 
-    for email in &notify_emails {
-        let subject = format!(
+    let config = &resources.config;
+    let base = format!("{}/", config.frontend_url.trim_end_matches('/'));
+    let check_url = format!("{}results?serverName={}", base, alert_entity.server_name);
+    let alert_url = format!("{}alerts/edit/{}", base, id);
+    let manage_url = format!("{}alerts", base);
+    let sponsor_url = config
+        .github_sponsors_url
+        .clone()
+        .or_else(|| config.liberapay_url.clone());
+
+    let tmpl = crate::email_templates::TestEmailTemplate {
+        server_name: alert_entity.server_name.clone(),
+        check_url,
+        alert_url,
+        manage_url,
+        environment_name: config.environment_name.clone(),
+        sponsor_url,
+    };
+    let html_body = tmpl.render_html().ok();
+    let text_body = tmpl.render_text();
+
+    let subject = crate::email_templates::env_subject(
+        &format!(
             "[Test] Federation Alert: {} – test notification",
             alert_entity.server_name
-        );
-        let text = format!(
-            "This is a test notification for your federation alert on {}.\n\n\
-             If you received this, email delivery is working correctly.",
-            alert_entity.server_name
-        );
-        if let Err(e) =
-            crate::email_outbox::enqueue(resources.db.as_ref(), email, &subject, None, text, None)
-                .await
+        ),
+        config.environment_name.as_deref(),
+    );
+
+    for email in &notify_emails {
+        if let Err(e) = crate::email_outbox::enqueue(
+            resources.db.as_ref(),
+            email,
+            &subject,
+            html_body.clone(),
+            text_body.clone(),
+            None,
+        )
+        .await
         {
             tracing::error!(
                 alert_id = id,
