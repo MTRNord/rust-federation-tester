@@ -3248,6 +3248,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -4161,6 +4162,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "provided-listeners"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e55c3f507f4d21d4fbd015ec546259feb993b775f6d81fbeb290ee6d3df29d09"
+dependencies = [
+ "nix 0.31.3",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4752,6 +4764,7 @@ dependencies = [
  "opentelemetry_sdk",
  "oxide-auth",
  "oxide-auth-axum",
+ "provided-listeners",
  "pulldown-cmark",
  "rcgen",
  "redis",

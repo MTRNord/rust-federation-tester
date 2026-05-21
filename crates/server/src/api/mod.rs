@@ -22,7 +22,7 @@ pub mod openapi;
 pub mod probe;
 pub mod statistics;
 
-use std::{path::Path, sync::Arc};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 
 // Re-export oauth2 module from crate root
 pub use crate::oauth2;
@@ -35,6 +35,7 @@ pub use federation::AppState;
 pub use alerts::ALERTS_TAG;
 pub use federation::FEDERATION_TAG;
 pub use health::MISC_TAG;
+use provided_listeners::ProvidedListeners;
 use tokio::net::unix::UCred;
 
 use crate::AppResources;
@@ -149,18 +150,24 @@ pub async fn start_webserver<P: ConnectionProvider>(
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
     let router = router.nest_service("/assets/css", ServeDir::new(static_dir.join("css")));
 
+    let mut provided_listeners = ProvidedListeners::from_env()?;
     tracing::info!("Server running at {listen_addr}");
-    if let Some(uds) = listen_addr.strip_prefix("unix:") {
+    if let Some(uds) = listen_addr.strip_prefix("unix:").map(Path::new) {
         axum::serve(
-            tokio::net::UnixListener::bind(Path::new(uds))?,
+            match provided_listeners.unix_tokio(uds) {
+                Some(l) => l?,
+                None => tokio::net::UnixListener::bind(uds)?,
+            },
             router.into_make_service_with_connect_info::<UdsConnectInfo>(),
         )
         .await
         .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?
-
     } else {
         axum::serve(
-            tokio::net::TcpListener::bind(&listen_addr).await?,
+            match provided_listeners.tcp_tokio(&listen_addr.parse::<SocketAddr>()?) {
+                Some(l) => l?,
+                None => tokio::net::TcpListener::bind(&listen_addr).await?,
+            },
             router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
