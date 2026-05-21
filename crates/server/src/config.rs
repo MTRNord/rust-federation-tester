@@ -539,7 +539,7 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
 
     if app.magic_token_secret.len() < 32 {
         return Err(ConfigError::Validation(
-            "magic_token_secret must be at least 16 characters".into(),
+            "magic_token_secret must be at least 32 characters".into(),
         ));
     }
 
