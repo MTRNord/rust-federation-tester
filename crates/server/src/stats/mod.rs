@@ -566,6 +566,7 @@ mod tests {
     fn dummy_config(stats_enabled: bool, salt: &str) -> AppConfig {
         AppConfig {
             database_url: "sqlite::memory:".into(),
+            listen_addr: Some("[::]:8080".into()),
             smtp: SmtpConfig {
                 enabled: true,
                 server: "localhost".into(),
