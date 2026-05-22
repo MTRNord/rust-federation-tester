@@ -4757,6 +4757,7 @@ dependencies = [
  "redis",
  "reqwest 0.13.3",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "rustls-webpki",
  "sea-orm",
@@ -4783,7 +4784,6 @@ dependencies = [
  "utoipa-axum",
  "utoipa-redoc",
  "uuid",
- "webpki-roots 1.0.7",
  "wiremock",
  "x509-parser",
 ]
