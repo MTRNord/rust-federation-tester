@@ -33,7 +33,7 @@ fn test_ed25519_verification_invalid_signature() {
 
     let server_name = "example.org";
     let key_id = "ed25519:a_1";
-    let valid_until_ts = time::OffsetDateTime::now_utc().unix_timestamp() + 3600;
+    let valid_until_ts = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 + 3_600_000;
 
     let keys_json = build_keys_json(
         server_name,
@@ -62,11 +62,13 @@ fn test_ed25519_verification_invalid_signature() {
         },
     };
 
-    let (_future_valid, has_ed25519, all_ok, ed_checks, _verify_keys, matching_server) =
-        verify_keys(server_name, &keys, &keys_json);
+    let kv = verify_keys(server_name, &keys, &keys_json);
 
-    assert!(has_ed25519, "Should detect ed25519 key present");
-    assert!(!all_ok, "Random signature must NOT verify");
-    assert!(ed_checks.contains_key(key_id));
-    assert!(matching_server, "Server name must match in this test");
+    assert!(kv.has_ed25519key, "Should detect ed25519 key present");
+    assert!(!kv.all_ed25519checks_ok, "Random signature must NOT verify");
+    assert!(kv.ed25519checks.contains_key(key_id));
+    assert!(
+        kv.matching_server_name,
+        "Server name must match in this test"
+    );
 }

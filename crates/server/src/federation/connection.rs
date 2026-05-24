@@ -94,25 +94,25 @@ pub async fn connection_check(
         }
     };
 
-    let (
-        future_valid_until_ts,
-        has_ed25519_key,
-        all_ed25519checks_ok,
-        ed25519_checks,
-        ed25519_verify_keys,
-        matching_server_name,
-    ) = verify_keys(server_name, &report.keys, &key_resp.keys_string);
-    report.checks.future_valid_until_ts = future_valid_until_ts;
-    report.checks.has_ed25519key = has_ed25519_key;
-    report.checks.all_ed25519checks_ok = all_ed25519checks_ok;
-    report.checks.matching_server_name = matching_server_name;
-    report.checks.ed25519checks = ed25519_checks;
+    let kv = verify_keys(server_name, &report.keys, &key_resp.keys_string);
+    report.checks.future_valid_until_ts = kv.future_valid_until_ts;
+    report.checks.valid_until_ts_within_7_days = kv.valid_until_ts_within_7_days;
+    report.checks.valid_until_ts_not_expiring_soon = kv.valid_until_ts_not_expiring_soon;
+    report.checks.has_ed25519key = kv.has_ed25519key;
+    report.checks.all_ed25519checks_ok = kv.all_ed25519checks_ok;
+    report.checks.matching_server_name = kv.matching_server_name;
+    report.checks.ed25519checks = kv.ed25519checks;
+    report.checks.keys_content_type_ok = key_resp.content_type_ok;
+    report.checks.tls_version_ok = matches!(key_resp.protocol.as_str(), "TLSv1_2" | "TLSv1_3");
+    // valid_until_ts_within_7_days is a SHOULD NOT (not MUST NOT) for servers per spec,
+    // so excluded from all_checks_ok to avoid false failures for compliant servers.
     report.checks.all_checks_ok = report.checks.has_ed25519key
         && report.checks.all_ed25519checks_ok
         && report.checks.valid_certificates
         && report.checks.matching_server_name
         && report.checks.future_valid_until_ts
-        && report.checks.server_version_parses;
-    report.ed25519verify_keys = ed25519_verify_keys;
+        && report.checks.server_version_parses
+        && report.checks.keys_content_type_ok;
+    report.ed25519verify_keys = kv.ed25519_verify_keys;
     Ok(report)
 }

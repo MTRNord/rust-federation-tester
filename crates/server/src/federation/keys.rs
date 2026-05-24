@@ -22,6 +22,8 @@ pub struct FullKeysResponse {
     pub cipher_suite: String,
     pub certificates: Vec<Certificate>,
     pub keys_string: String,
+    /// Whether /_matrix/key/v2/server returned Content-Type: application/json.
+    pub content_type_ok: bool,
 }
 
 #[tracing::instrument(skip(pool))]
@@ -53,6 +55,12 @@ pub async fn fetch_keys(
         ));
     }
 
+    let content_type_ok = http_response
+        .headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"));
+
     let body = http_response
         .into_body()
         .collect()
@@ -71,35 +79,48 @@ pub async fn fetch_keys(
         cipher_suite: response.cipher_suite,
         certificates: response.certificates,
         keys_string,
+        content_type_ok,
     })
 }
 
+pub struct KeyVerificationResult {
+    pub matching_server_name: bool,
+    pub future_valid_until_ts: bool,
+    /// Spec MUST: valid_until_ts ≤ now + 7 days.
+    pub valid_until_ts_within_7_days: bool,
+    /// Spec SHOULD: valid_until_ts ≥ now + 1 hour (useful for caching).
+    pub valid_until_ts_not_expiring_soon: bool,
+    pub has_ed25519key: bool,
+    pub all_ed25519checks_ok: bool,
+    pub ed25519checks: BTreeMap<String, Ed25519Check>,
+    pub ed25519_verify_keys: BTreeMap<String, String>,
+}
+
 #[tracing::instrument()]
-pub fn verify_keys(
-    server_name: &str,
-    keys: &Keys,
-    keys_string: &str,
-) -> (
-    bool,
-    bool,
-    bool,
-    BTreeMap<String, Ed25519Check>,
-    BTreeMap<String, String>,
-    bool,
-) {
+pub fn verify_keys(server_name: &str, keys: &Keys, keys_string: &str) -> KeyVerificationResult {
+    let now_ms = time_crate::OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    let valid_until_ms = keys.valid_until_ts;
+
     let matching_server_name = keys.server_name == server_name;
-    let future_valid_until_ts =
-        keys.valid_until_ts > time_crate::OffsetDateTime::now_utc().unix_timestamp();
+    let future_valid_until_ts = valid_until_ms > now_ms;
+    let seven_days_ms: i64 = 7 * 24 * 60 * 60 * 1000;
+    let one_hour_ms: i64 = 60 * 60 * 1000;
+    let valid_until_ts_within_7_days = valid_until_ms <= now_ms + seven_days_ms;
+    let valid_until_ts_not_expiring_soon = valid_until_ms >= now_ms + one_hour_ms;
+
     let (ed25519checks, has_ed25519key, all_ed25519checks_ok, ed25519_verify_keys) =
         check_verify_keys(server_name, keys, keys_string);
-    (
+
+    KeyVerificationResult {
+        matching_server_name,
         future_valid_until_ts,
+        valid_until_ts_within_7_days,
+        valid_until_ts_not_expiring_soon,
         has_ed25519key,
         all_ed25519checks_ok,
         ed25519checks,
         ed25519_verify_keys,
-        matching_server_name,
-    )
+    }
 }
 
 /// Errors that can occur while verifying an ed25519 signature.

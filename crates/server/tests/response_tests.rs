@@ -202,11 +202,15 @@ fn test_checks_default() {
     assert!(!checks.all_checks_ok);
     assert!(!checks.matching_server_name);
     assert!(!checks.future_valid_until_ts);
+    assert!(!checks.valid_until_ts_within_7_days);
+    assert!(!checks.valid_until_ts_not_expiring_soon);
     assert!(!checks.has_ed25519key);
     assert!(!checks.all_ed25519checks_ok);
     assert!(checks.ed25519checks.is_empty());
     assert!(!checks.valid_certificates);
     assert!(!checks.server_version_parses);
+    assert!(!checks.keys_content_type_ok);
+    assert!(!checks.tls_version_ok);
 }
 
 #[test]

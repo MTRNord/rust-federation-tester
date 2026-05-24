@@ -219,6 +219,19 @@ mod federation_tests {
                         "    {}: AllChecksOK={}, Error={:?}",
                         addr, report.checks.all_checks_ok, report.error
                     );
+                    println!(
+                        "      future_valid={} within7d={} not_expiring_soon={} content_type={} tls_ok={} certs={} server_ver={} ed25519={} matching_name={} valid_until_ts={}",
+                        report.checks.future_valid_until_ts,
+                        report.checks.valid_until_ts_within_7_days,
+                        report.checks.valid_until_ts_not_expiring_soon,
+                        report.checks.keys_content_type_ok,
+                        report.checks.tls_version_ok,
+                        report.checks.valid_certificates,
+                        report.checks.server_version_parses,
+                        report.checks.all_ed25519checks_ok,
+                        report.checks.matching_server_name,
+                        report.keys.valid_until_ts,
+                    );
                 }
                 println!("  Connection Errors: {:?}", result.connection_errors);
             }

@@ -134,6 +134,12 @@ pub struct Checks {
     pub matching_server_name: bool,
     #[serde(rename = "FutureValidUntilTS")]
     pub future_valid_until_ts: bool,
+    /// Spec MUST: valid_until_ts must not exceed 7 days from now.
+    #[serde(rename = "ValidUntilTSWithin7Days")]
+    pub valid_until_ts_within_7_days: bool,
+    /// Spec SHOULD: valid_until_ts should be at least 1 hour from now for useful caching.
+    #[serde(rename = "ValidUntilTSNotExpiringSoon")]
+    pub valid_until_ts_not_expiring_soon: bool,
     #[serde(rename = "HasEd25519Key")]
     pub has_ed25519key: bool,
     #[serde(rename = "AllEd25519ChecksOK")]
@@ -143,6 +149,12 @@ pub struct Checks {
     pub ed25519checks: BTreeMap<String, Ed25519Check>,
     pub valid_certificates: bool,
     pub server_version_parses: bool,
+    /// Spec MUST: /_matrix/key/v2/server must return Content-Type: application/json.
+    #[serde(rename = "KeysContentTypeOK")]
+    pub keys_content_type_ok: bool,
+    /// Informational: TLS 1.0/1.1 are deprecated (RFC 8996); 1.2+ expected.
+    #[serde(rename = "TLSVersionOK")]
+    pub tls_version_ok: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

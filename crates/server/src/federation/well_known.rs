@@ -409,3 +409,144 @@ async fn fetch_url_with_redirects(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_ip_literal ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ip_literal_ipv4() {
+        assert!(is_ip_literal("192.168.1.1"));
+        assert!(is_ip_literal("10.0.0.1"));
+        assert!(is_ip_literal("127.0.0.1"));
+        assert!(is_ip_literal("203.0.113.1"));
+    }
+
+    #[test]
+    fn ip_literal_ipv4_with_port() {
+        assert!(is_ip_literal("192.168.1.1:8448"));
+    }
+
+    #[test]
+    fn ip_literal_ipv6_brackets() {
+        assert!(is_ip_literal("[::1]"));
+        assert!(is_ip_literal("[2001:db8::1]"));
+        assert!(is_ip_literal("[::1]:8448"));
+    }
+
+    #[test]
+    fn ip_literal_hostname_not_literal() {
+        assert!(!is_ip_literal("example.org"));
+        assert!(!is_ip_literal("matrix.org"));
+        assert!(!is_ip_literal("matrix.org:8448"));
+    }
+
+    // ── is_private_or_internal_ip ─────────────────────────────────────────────
+
+    #[test]
+    fn private_ip_rfc1918() {
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "172.16.0.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "192.168.1.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn private_ip_loopback() {
+        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "::1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn private_ip_link_local() {
+        let ip: std::net::IpAddr = "169.254.169.254".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn private_ip_rfc5737_test_ranges() {
+        let ip: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "198.51.100.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "203.0.113.1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn private_ip_ipv6_unique_local() {
+        let ip: std::net::IpAddr = "fc00::1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "fd00::1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn private_ip_ipv6_documentation() {
+        let ip: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        assert!(is_private_or_internal_ip(&ip));
+    }
+
+    #[test]
+    fn public_ip_not_private() {
+        let ip: std::net::IpAddr = "1.1.1.1".parse().unwrap();
+        assert!(!is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(!is_private_or_internal_ip(&ip));
+        let ip: std::net::IpAddr = "2606:4700:4700::1111".parse().unwrap();
+        assert!(!is_private_or_internal_ip(&ip));
+    }
+
+    // ── validate_well_known_security ──────────────────────────────────────────
+
+    #[test]
+    fn validate_well_known_empty_m_server() {
+        let result = validate_well_known_security("example.org", "");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.error.contains("Empty"));
+    }
+
+    #[test]
+    fn validate_well_known_too_long() {
+        let long = "a".repeat(256);
+        let result = validate_well_known_security("example.org", &long);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_well_known_valid() {
+        let result = validate_well_known_security("example.org", "matrix.example.org:8448");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_well_known_self_referential_allowed() {
+        // Self-referential delegation is allowed (with a warning), not an error
+        let result = validate_well_known_security("example.org", "example.org");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_well_known_private_ip_rejected() {
+        // Ensure ALLOW_PRIVATE_TARGETS is false for this test
+        ALLOW_PRIVATE_TARGETS.store(false, std::sync::atomic::Ordering::Relaxed);
+        let result = validate_well_known_security("example.org", "192.168.1.1:8448");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_well_known_localhost_rejected() {
+        ALLOW_PRIVATE_TARGETS.store(false, std::sync::atomic::Ordering::Relaxed);
+        let result = validate_well_known_security("example.org", "localhost:8448");
+        assert!(result.is_err());
+    }
+}

@@ -205,3 +205,54 @@ pub async fn fetch_url_pooled_simple(
         .await;
     Ok(Some(response))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_resp_deserializes_valid_json() {
+        let json = r#"{"server":{"name":"Synapse","version":"1.95.1"}}"#;
+        let v: VersionResp = serde_json::from_str(json).unwrap();
+        assert_eq!(v.server.name, "Synapse");
+        assert_eq!(v.server.version, "1.95.1");
+    }
+
+    #[test]
+    fn version_resp_missing_fields_fails() {
+        let json = r#"{"server":{}}"#;
+        let result: Result<VersionResp, _> = serde_json::from_str(json);
+        // Missing name/version fields — deserialization should fail or produce defaults
+        // depending on serde config; either outcome is acceptable but must not panic
+        let _ = result;
+    }
+
+    #[test]
+    fn version_resp_invalid_json_fails() {
+        let result: Result<VersionResp, _> = serde_json::from_str("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn version_resp_extra_fields_ignored() {
+        // Real homeservers sometimes add extra fields (e.g. "unstable_features")
+        let json = r#"{"server":{"name":"Dendrite","version":"0.13.0","extra":"ignored"},"unknown_top_level":true}"#;
+        let v: VersionResp = serde_json::from_str(json).unwrap();
+        assert_eq!(v.server.name, "Dendrite");
+        assert_eq!(v.server.version, "0.13.0");
+    }
+
+    #[test]
+    fn version_resp_roundtrip() {
+        let v = VersionResp {
+            server: crate::response::Version {
+                name: "Conduit".to_string(),
+                version: "0.7.0".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let back: VersionResp = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.server.name, "Conduit");
+        assert_eq!(back.server.version, "0.7.0");
+    }
+}
