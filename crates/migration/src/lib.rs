@@ -62,3 +62,40 @@ impl MigratorTrait for Migrator {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::Database;
+
+    async fn open_db() -> sea_orm::DatabaseConnection {
+        Database::connect("sqlite::memory:").await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn migrate_up_succeeds() {
+        let db = open_db().await;
+        Migrator::up(&db, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrate_up_then_down_succeeds() {
+        let db = open_db().await;
+        Migrator::up(&db, None).await.unwrap();
+        Migrator::down(&db, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrate_up_down_up_is_idempotent() {
+        let db = open_db().await;
+        Migrator::up(&db, None).await.unwrap();
+        Migrator::down(&db, None).await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn partial_migration_up_one_step() {
+        let db = open_db().await;
+        Migrator::up(&db, Some(1)).await.unwrap();
+    }
+}

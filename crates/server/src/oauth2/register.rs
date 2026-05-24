@@ -623,3 +623,229 @@ fn redirect_to_register_with_message(
 
     Redirect::to(&url).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, Database};
+    use std::sync::Arc;
+    use time::OffsetDateTime;
+
+    async fn make_db() -> Arc<sea_orm::DatabaseConnection> {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        Arc::new(db)
+    }
+
+    fn make_state(db: Arc<sea_orm::DatabaseConnection>) -> OAuth2State {
+        OAuth2State::new(
+            db,
+            "https://auth.example.com".to_string(),
+            "https://app.example.com".to_string(),
+        )
+    }
+
+    fn base_form() -> RegisterForm {
+        RegisterForm {
+            response_type: "code".to_string(),
+            client_id: "my-client".to_string(),
+            redirect_uri: "https://app.example.com/cb".to_string(),
+            scope: "openid".to_string(),
+            state: "state-xyz".to_string(),
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            email: "user@example.com".to_string(),
+            password: "Password1!".to_string(),
+            password_confirm: "Password1!".to_string(),
+        }
+    }
+
+    fn location(response: &axum::response::Response) -> String {
+        response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn server_location(response: &axum_test::TestResponse) -> String {
+        response
+            .maybe_header("location")
+            .and_then(|v| v.to_str().ok().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    // ── redirect_to_register_with_error ────────────────────────────────────────
+
+    #[test]
+    fn error_redirect_contains_error_param() {
+        let resp =
+            redirect_to_register_with_error(&base_form(), "bad input", "https://app.example.com");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert!(location(&resp).contains("error=bad%20input"));
+    }
+
+    #[test]
+    fn error_redirect_preserves_email() {
+        let resp = redirect_to_register_with_error(&base_form(), "oops", "https://app.example.com");
+        assert!(location(&resp).contains("email=user%40example.com"));
+    }
+
+    #[test]
+    fn error_redirect_skips_empty_email() {
+        let mut form = base_form();
+        form.email = String::new();
+        let resp = redirect_to_register_with_error(&form, "oops", "https://app.example.com");
+        assert!(!location(&resp).contains("email="));
+    }
+
+    #[test]
+    fn error_redirect_preserves_pkce_params() {
+        let mut form = base_form();
+        form.code_challenge = Some("chall123".to_string());
+        form.code_challenge_method = Some("S256".to_string());
+        form.nonce = Some("nonce42".to_string());
+        let resp = redirect_to_register_with_error(&form, "oops", "https://app.example.com");
+        let loc = location(&resp);
+        assert!(loc.contains("code_challenge=chall123"));
+        assert!(loc.contains("code_challenge_method=S256"));
+        assert!(loc.contains("nonce=nonce42"));
+    }
+
+    // ── redirect_to_register_with_message ──────────────────────────────────────
+
+    #[test]
+    fn message_redirect_contains_message_param() {
+        let resp = redirect_to_register_with_message(
+            &base_form(),
+            "check inbox",
+            "https://app.example.com",
+        );
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert!(location(&resp).contains("message=check%20inbox"));
+    }
+
+    #[test]
+    fn message_redirect_preserves_pkce_params() {
+        let mut form = base_form();
+        form.code_challenge = Some("abc".to_string());
+        form.code_challenge_method = Some("S256".to_string());
+        let resp = redirect_to_register_with_message(&form, "ok", "https://app.example.com");
+        let loc = location(&resp);
+        assert!(loc.contains("code_challenge=abc"));
+        assert!(loc.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
+    fn message_redirect_uses_correct_frontend_url() {
+        let resp =
+            redirect_to_register_with_message(&base_form(), "ok", "https://custom.example.com");
+        assert!(location(&resp).starts_with("https://custom.example.com/alerts/register?"));
+    }
+
+    // ── verify_email handler ───────────────────────────────────────────────────
+
+    fn make_verify_email_server(state: OAuth2State) -> TestServer {
+        let app = axum::Router::new()
+            .route("/verify-email", axum::routing::get(verify_email))
+            .with_state(state);
+        TestServer::new(app)
+    }
+
+    #[tokio::test]
+    async fn verify_email_invalid_token_redirects_with_error() {
+        let db = make_db().await;
+        let server = make_verify_email_server(make_state(db));
+
+        let resp = server.get("/verify-email?token=no-such-token").await;
+
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        assert!(server_location(&resp).contains("error="));
+    }
+
+    #[tokio::test]
+    async fn verify_email_valid_token_marks_user_verified() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+
+        let now = OffsetDateTime::now_utc();
+        let user_id = uuid::Uuid::new_v4().to_string();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(user_id.clone()),
+            email: Set("alice@example.com".to_string()),
+            email_verified: Set(false),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(Some("hash".to_string())),
+            email_verification_token: Set(Some("good-token-abc".to_string())),
+            email_verification_expires_at: Set(Some(now + time::Duration::hours(24))),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_verify_email_server(state);
+        let resp = server.get("/verify-email?token=good-token-abc").await;
+
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        assert!(
+            loc.contains("message="),
+            "expected success message, got: {loc}"
+        );
+        assert!(
+            !loc.contains("error="),
+            "should not contain error, got: {loc}"
+        );
+
+        let updated = crate::entity::oauth2_user::Entity::find_by_id(&user_id)
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.email_verified);
+        assert!(updated.email_verification_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn verify_email_expired_token_redirects_with_error() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+
+        let now = OffsetDateTime::now_utc();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            email: Set("bob@example.com".to_string()),
+            email_verified: Set(false),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(Some("hash".to_string())),
+            email_verification_token: Set(Some("expired-token".to_string())),
+            email_verification_expires_at: Set(Some(now - time::Duration::hours(1))),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_verify_email_server(state);
+        let resp = server.get("/verify-email?token=expired-token").await;
+
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        assert!(server_location(&resp).contains("error="));
+    }
+}

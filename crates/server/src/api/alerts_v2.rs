@@ -1580,6 +1580,8 @@ async fn test_email(
 mod tests {
     use super::*;
     use crate::entity::alert_status_history;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
 
     // ── is_private_ip ─────────────────────────────────────────────────────────
 
@@ -1728,5 +1730,193 @@ mod tests {
         assert_eq!(desc, "some_custom_event");
         assert!(detail.is_none());
         assert_eq!(kind, "info");
+    }
+
+    // ── build_alert_dtos ──────────────────────────────────────────────────────
+
+    fn base_alert_model(id: i32, email: &str) -> alert::Model {
+        alert::Model {
+            id,
+            email: email.to_string(),
+            server_name: "matrix.example.com".to_string(),
+            verified: true,
+            magic_token: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_check_at: None,
+            last_failure_at: None,
+            last_success_at: None,
+            last_email_sent_at: None,
+            failure_count: 0,
+            is_currently_failing: false,
+            last_recovery_at: None,
+            user_id: None,
+            notify_server_name_change: false,
+            notify_version_change: false,
+            notify_tls_cert_change: false,
+            notify_tls_expiry: false,
+            quiet_hours_enabled: false,
+            quiet_hours_from: "22:00".to_string(),
+            quiet_hours_to: "07:00".to_string(),
+        }
+    }
+
+    #[test]
+    fn build_alert_dtos_falls_back_to_alert_email() {
+        let alert = base_alert_model(1, "owner@example.com");
+        let result = build_alert_dtos(vec![alert], &HashMap::new(), &HashMap::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].notify_emails, vec!["owner@example.com"]);
+    }
+
+    #[test]
+    fn build_alert_dtos_uses_notification_emails_map() {
+        let alert = base_alert_model(1, "owner@example.com");
+        let mut emails: HashMap<i32, Vec<String>> = HashMap::new();
+        emails.insert(
+            1,
+            vec!["a@example.com".to_string(), "b@example.com".to_string()],
+        );
+        let result = build_alert_dtos(vec![alert], &emails, &HashMap::new());
+        assert_eq!(
+            result[0].notify_emails,
+            vec!["a@example.com", "b@example.com"]
+        );
+    }
+
+    #[test]
+    fn build_alert_dtos_empty_email_and_no_map_returns_empty() {
+        let alert = base_alert_model(1, "");
+        let result = build_alert_dtos(vec![alert], &HashMap::new(), &HashMap::new());
+        assert!(result[0].notify_emails.is_empty());
+    }
+
+    #[test]
+    fn build_alert_dtos_empty_map_entry_falls_back_to_alert_email() {
+        let alert = base_alert_model(1, "owner@example.com");
+        let mut emails: HashMap<i32, Vec<String>> = HashMap::new();
+        emails.insert(1, vec![]);
+        let result = build_alert_dtos(vec![alert], &emails, &HashMap::new());
+        assert_eq!(result[0].notify_emails, vec!["owner@example.com"]);
+    }
+
+    #[test]
+    fn build_alert_dtos_includes_webhooks() {
+        let webhook = WebhookDto {
+            id: 99,
+            url: "https://hook.example.com".to_string(),
+            hmac_header: "X-Sig".to_string(),
+            respect_quiet_hours: false,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let mut webhooks: HashMap<i32, Vec<WebhookDto>> = HashMap::new();
+        webhooks.insert(5, vec![webhook]);
+        let result = build_alert_dtos(
+            vec![base_alert_model(5, "a@example.com")],
+            &HashMap::new(),
+            &webhooks,
+        );
+        assert_eq!(result[0].notify_webhooks.len(), 1);
+        assert_eq!(result[0].notify_webhooks[0].url, "https://hook.example.com");
+    }
+
+    // ── load_emails_by_alert / load_webhooks_by_alert ─────────────────────────
+
+    async fn make_db() -> sea_orm::DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn insert_minimal_alert(db: &sea_orm::DatabaseConnection, id: i32) {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "INSERT INTO alert (id, email, server_name, verified, failure_count, \
+                 is_currently_failing, notify_server_name_change, notify_version_change, \
+                 notify_tls_cert_change, notify_tls_expiry, quiet_hours_enabled, \
+                 quiet_hours_from, quiet_hours_to, created_at) \
+                 VALUES ({id}, 'alert{id}@example.com', 'server{id}.example.com', 1, 0, 0, 0, 0, 0, 0, 0, '22:00', '07:00', datetime('now'))"
+            ),
+        ))
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_emails_by_alert_empty_ids_returns_empty_map() {
+        let db = make_db().await;
+        let result = load_emails_by_alert(&db, &[]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_emails_by_alert_no_rows_returns_empty_map() {
+        let db = make_db().await;
+        let result = load_emails_by_alert(&db, &[1, 2, 3]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_emails_by_alert_groups_by_alert_id() {
+        let db = make_db().await;
+        let now = time::OffsetDateTime::now_utc();
+        insert_minimal_alert(&db, 1).await;
+        insert_minimal_alert(&db, 2).await;
+
+        // Insert two emails for alert 1, one for alert 2
+        for (alert_id, email) in [
+            (1, "a@example.com"),
+            (1, "b@example.com"),
+            (2, "c@example.com"),
+        ] {
+            crate::entity::alert_notification_email::ActiveModel {
+                id: sea_orm::ActiveValue::NotSet,
+                alert_id: Set(alert_id),
+                email: Set(email.to_string()),
+                created_at: Set(now),
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        let result = load_emails_by_alert(&db, &[1, 2]).await.unwrap();
+        let mut emails_1 = result[&1].clone();
+        emails_1.sort();
+        assert_eq!(emails_1, vec!["a@example.com", "b@example.com"]);
+        assert_eq!(result[&2], vec!["c@example.com"]);
+    }
+
+    #[tokio::test]
+    async fn load_webhooks_by_alert_empty_ids_returns_empty_map() {
+        let db = make_db().await;
+        let result = load_webhooks_by_alert(&db, &[]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_webhooks_by_alert_groups_webhooks() {
+        let db = make_db().await;
+        let now = time::OffsetDateTime::now_utc();
+        insert_minimal_alert(&db, 7).await;
+
+        crate::entity::alert_notification_webhook::ActiveModel {
+            id: sea_orm::ActiveValue::NotSet,
+            alert_id: Set(7),
+            url: Set("https://hook.example.com/a".to_string()),
+            hmac_secret: Set(None),
+            hmac_header: Set("X-Sig".to_string()),
+            respect_quiet_hours: Set(false),
+            created_at: Set(now),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let result = load_webhooks_by_alert(&db, &[7]).await.unwrap();
+        assert_eq!(result[&7].len(), 1);
+        assert_eq!(result[&7][0].url, "https://hook.example.com/a");
+        assert_eq!(result[&7][0].hmac_header, "X-Sig");
     }
 }
