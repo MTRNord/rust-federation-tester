@@ -98,4 +98,4 @@ LABEL security.read-only-rootfs="true"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:8080/healthz || exit 1
 
-CMD ["sh", "-c", "migration up && rust-federation-tester"]
+CMD ["sh", "-c", "for i in 1 2 3 4 5; do migration up && break || { echo \"Migration failed (attempt $i/5), retrying in 5s...\"; sleep 5; }; done && rust-federation-tester"]
