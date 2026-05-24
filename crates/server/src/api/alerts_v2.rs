@@ -318,8 +318,10 @@ async fn load_webhooks_by_alert(
 ///
 /// Rules:
 /// - Must use HTTPS scheme
-/// - Must not resolve to an RFC1918 / loopback address (SSRF prevention)
-fn validate_webhook_url(raw: &str) -> Result<(), AuthError> {
+/// - Literal IP addresses must not be private/loopback
+/// - Hostnames are resolved via DNS; all returned addresses must be public
+///   (prevents SSRF via domains that point to internal IPs or via DNS rebinding)
+async fn validate_webhook_url(raw: &str) -> Result<(), AuthError> {
     let parsed = url::Url::parse(raw)
         .map_err(|_| AuthError::bad_request("webhook_url_invalid: must be a valid URL"))?;
 
@@ -329,13 +331,42 @@ fn validate_webhook_url(raw: &str) -> Result<(), AuthError> {
         ));
     }
 
-    if let Some(host) = parsed.host_str()
-        && let Ok(ip) = host.parse::<std::net::IpAddr>()
-        && is_private_ip(ip)
-    {
-        return Err(AuthError::bad_request(
-            "webhook_url_private_ip: URL must not point to a private/internal IP address",
-        ));
+    match parsed.host() {
+        Some(url::Host::Ipv4(ip)) => {
+            if is_private_ip(std::net::IpAddr::V4(ip)) {
+                return Err(AuthError::bad_request(
+                    "webhook_url_private_ip: URL must not point to a private/internal IP address",
+                ));
+            }
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            if is_private_ip(std::net::IpAddr::V6(ip)) {
+                return Err(AuthError::bad_request(
+                    "webhook_url_private_ip: URL must not point to a private/internal IP address",
+                ));
+            }
+        }
+        Some(url::Host::Domain(name)) => {
+            let lookup = tokio::net::lookup_host(format!("{}:443", name))
+                .await
+                .map_err(|_| {
+                    AuthError::bad_request(
+                        "webhook_url_unresolvable: hostname could not be resolved",
+                    )
+                })?;
+            for addr in lookup {
+                if is_private_ip(addr.ip()) {
+                    return Err(AuthError::bad_request(
+                        "webhook_url_private_ip: URL must not point to a private/internal IP address",
+                    ));
+                }
+            }
+        }
+        None => {
+            return Err(AuthError::bad_request(
+                "webhook_url_invalid: URL has no host",
+            ));
+        }
     }
 
     Ok(())
@@ -1153,7 +1184,7 @@ async fn add_webhook(
 ) -> Result<(StatusCode, Json<WebhookDto>), AuthError> {
     require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
 
-    validate_webhook_url(&payload.url)?;
+    validate_webhook_url(&payload.url).await?;
 
     if let Some(max) = resources.config.max_webhooks_per_alert {
         let count = alert_notification_webhook::Entity::find()
@@ -1231,7 +1262,7 @@ async fn patch_webhook(
     require_alert_owner(&resources, id, &auth, SCOPE_ALERTS_WRITE).await?;
 
     if let Some(ref url) = payload.url {
-        validate_webhook_url(url)?;
+        validate_webhook_url(url).await?;
     }
 
     let webhook = alert_notification_webhook::Entity::find_by_id(wid)
