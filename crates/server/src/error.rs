@@ -142,3 +142,117 @@ impl From<FetchError> for ApiError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phase_of(e: &FederationError) -> Option<Phase> {
+        e.phase()
+    }
+
+    #[test]
+    fn phase_well_known() {
+        let e = FederationError::Fetch(FetchError::WellKnown(WellKnownError::NoAddresses));
+        assert!(matches!(phase_of(&e), Some(Phase::WellKnown)));
+    }
+
+    #[test]
+    fn phase_tls() {
+        let e = FederationError::Fetch(FetchError::Tls("cert error".into()));
+        assert!(matches!(phase_of(&e), Some(Phase::Tls)));
+    }
+
+    #[test]
+    fn phase_timeout_is_http_request() {
+        let e = FederationError::Fetch(FetchError::Timeout(Duration::from_secs(10)));
+        assert!(matches!(phase_of(&e), Some(Phase::HttpRequest)));
+    }
+
+    #[test]
+    fn phase_network_is_connection() {
+        let e = FederationError::Fetch(FetchError::Network("refused".into()));
+        assert!(matches!(phase_of(&e), Some(Phase::Connection)));
+    }
+
+    #[test]
+    fn phase_http_is_http_request() {
+        let e = FederationError::Fetch(FetchError::Http {
+            status: hyper::StatusCode::NOT_FOUND,
+            context: "404".into(),
+        });
+        assert!(matches!(phase_of(&e), Some(Phase::HttpRequest)));
+    }
+
+    #[test]
+    fn phase_json_is_json_decode() {
+        let e = FederationError::Fetch(FetchError::Json("bad json".into()));
+        assert!(matches!(phase_of(&e), Some(Phase::JsonDecode)));
+    }
+
+    #[test]
+    fn phase_invalid_domain_is_dns() {
+        let e = FederationError::Fetch(FetchError::InvalidDomain("not.a.domain".into()));
+        assert!(matches!(phase_of(&e), Some(Phase::Dns)));
+    }
+
+    #[test]
+    fn phase_unexpected_content_type_is_http_request() {
+        let e = FederationError::Fetch(FetchError::UnexpectedContentType("text/html".into()));
+        assert!(matches!(phase_of(&e), Some(Phase::HttpRequest)));
+    }
+
+    #[test]
+    fn phase_dns_error_is_dns() {
+        let e = FederationError::Dns("NXDOMAIN".into());
+        assert!(matches!(phase_of(&e), Some(Phase::Dns)));
+    }
+
+    #[test]
+    fn phase_ed25519_is_signature() {
+        let e = FederationError::Ed25519("bad key".into());
+        assert!(matches!(phase_of(&e), Some(Phase::Signature)));
+    }
+
+    #[test]
+    fn phase_invalid_server_name_is_dns() {
+        let e = FederationError::InvalidServerName("_bad".into());
+        assert!(matches!(phase_of(&e), Some(Phase::Dns)));
+    }
+
+    #[test]
+    fn phase_internal_is_none() {
+        let e = FederationError::Internal("oops".into());
+        assert!(phase_of(&e).is_none());
+    }
+
+    #[test]
+    fn is_retryable_timeout() {
+        let e = FederationError::Fetch(FetchError::Timeout(Duration::from_secs(5)));
+        assert!(e.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_network() {
+        let e = FederationError::Fetch(FetchError::Network("conn reset".into()));
+        assert!(e.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_dns() {
+        let e = FederationError::Dns("timeout".into());
+        assert!(e.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_false_for_tls() {
+        let e = FederationError::Fetch(FetchError::Tls("bad cert".into()));
+        assert!(!e.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_false_for_json() {
+        let e = FederationError::Fetch(FetchError::Json("bad json".into()));
+        assert!(!e.is_retryable());
+    }
+}

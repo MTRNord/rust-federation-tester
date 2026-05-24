@@ -165,3 +165,118 @@ impl OAuth2State {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::Database;
+
+    async fn make_db() -> Arc<DatabaseConnection> {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        Arc::new(db)
+    }
+
+    fn make_state(db: Arc<DatabaseConnection>) -> OAuth2State {
+        OAuth2State::new(
+            db,
+            "https://auth.example.com".to_string(),
+            "https://app.example.com".to_string(),
+        )
+    }
+
+    // ── generate_token ────────────────────────────────────────────────────────
+
+    #[test]
+    fn generate_token_is_non_empty() {
+        let tok = OAuth2State::generate_token();
+        assert!(!tok.is_empty());
+    }
+
+    #[test]
+    fn generate_token_is_url_safe_base64() {
+        let tok = OAuth2State::generate_token();
+        assert!(
+            tok.chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        );
+    }
+
+    #[test]
+    fn generate_token_differs_each_call() {
+        let a = OAuth2State::generate_token();
+        let b = OAuth2State::generate_token();
+        assert_ne!(a, b);
+    }
+
+    // ── new ───────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn new_sets_default_lifetimes() {
+        let db = make_db().await;
+        let state = make_state(db);
+        assert_eq!(state.access_token_lifetime, 3600);
+        assert_eq!(state.refresh_token_lifetime, 86400 * 7);
+        assert_eq!(state.issuer_url, "https://auth.example.com");
+        assert_eq!(state.frontend_url, "https://app.example.com");
+    }
+
+    // ── get_or_create_user ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_or_create_user_creates_new_user() {
+        let db = make_db().await;
+        let state = make_state(db);
+        let user = state.get_or_create_user("alice@example.com").await.unwrap();
+        assert_eq!(user.email, "alice@example.com");
+        assert!(!user.email_verified);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_user_returns_existing_user() {
+        let db = make_db().await;
+        let state = make_state(db);
+        let first = state.get_or_create_user("bob@example.com").await.unwrap();
+        let second = state.get_or_create_user("bob@example.com").await.unwrap();
+        assert_eq!(first.id, second.id);
+    }
+
+    // ── verify_user_email ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn verify_user_email_sets_verified() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let user = state.get_or_create_user("carol@example.com").await.unwrap();
+        assert!(!user.email_verified);
+
+        state.verify_user_email(&user.id).await.unwrap();
+
+        let updated = oauth2_user::Entity::find_by_id(&user.id)
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.email_verified);
+    }
+
+    // ── update_last_login ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_last_login_sets_timestamp() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let user = state.get_or_create_user("dave@example.com").await.unwrap();
+        assert!(user.last_login_at.is_none());
+
+        state.update_last_login(&user.id).await.unwrap();
+
+        let updated = oauth2_user::Entity::find_by_id(&user.id)
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.last_login_at.is_some());
+    }
+}

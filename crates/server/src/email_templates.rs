@@ -772,4 +772,433 @@ mod tests {
         assert!(!css.is_empty());
         assert!(css.contains("email-container"));
     }
+
+    // ── env_subject ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn env_subject_prepends_staging() {
+        assert_eq!(env_subject("Hello", Some("staging")), "[staging] Hello");
+    }
+
+    #[test]
+    fn env_subject_prepends_mixed_case() {
+        assert_eq!(env_subject("Hello", Some("Staging")), "[Staging] Hello");
+    }
+
+    #[test]
+    fn env_subject_skips_production() {
+        assert_eq!(env_subject("Hello", Some("production")), "Hello");
+    }
+
+    #[test]
+    fn env_subject_skips_production_upper() {
+        assert_eq!(env_subject("Hello", Some("PRODUCTION")), "Hello");
+    }
+
+    #[test]
+    fn env_subject_skips_empty_string() {
+        assert_eq!(env_subject("Hello", Some("")), "Hello");
+    }
+
+    #[test]
+    fn env_subject_skips_none() {
+        assert_eq!(env_subject("Hello", None), "Hello");
+    }
+
+    // ── env_banner_text ───────────────────────────────────────────────────────
+
+    #[test]
+    fn env_banner_text_staging_is_uppercased() {
+        assert_eq!(
+            env_banner_text(Some("staging")),
+            "*** Sent from the STAGING environment ***\n\n"
+        );
+    }
+
+    #[test]
+    fn env_banner_text_production_is_empty() {
+        assert_eq!(env_banner_text(Some("production")), "");
+    }
+
+    #[test]
+    fn env_banner_text_none_is_empty() {
+        assert_eq!(env_banner_text(None), "");
+    }
+
+    #[test]
+    fn env_banner_text_empty_string_is_empty() {
+        assert_eq!(env_banner_text(Some("")), "");
+    }
+
+    // ── strip_html_tags ───────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_html_plain_text_unchanged() {
+        assert_eq!(strip_html_tags("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn strip_html_removes_tags() {
+        assert_eq!(strip_html_tags("<p>Hello</p>"), "Hello");
+    }
+
+    #[test]
+    fn strip_html_removes_nested_tags() {
+        assert_eq!(
+            strip_html_tags("<p><strong>Bold</strong> text</p>"),
+            "Bold text"
+        );
+    }
+
+    #[test]
+    fn strip_html_normalises_whitespace() {
+        assert_eq!(strip_html_tags("  foo   bar  "), "foo bar");
+    }
+
+    #[test]
+    fn strip_html_leaves_entities_as_is() {
+        // The function does NOT decode HTML entities — they pass through literally.
+        assert_eq!(strip_html_tags("&amp;"), "&amp;");
+    }
+
+    // ── FailureEmailTemplate::render_text ─────────────────────────────────────
+
+    fn base_failure_template() -> FailureEmailTemplate {
+        FailureEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            check_url: "https://checker.example/results?s=matrix.example.com".to_string(),
+            failure_count: 1,
+            reminder_interval: "12 hours".to_string(),
+            unsubscribe_url: "https://checker.example/unsub?t=abc".to_string(),
+            failure_reason: None,
+            environment_name: None,
+            quiet_hours_note: None,
+            first_detected: None,
+            minutes_down: None,
+            last_healthy: None,
+            error_hint: None,
+            reminder_total: None,
+            alert_url: "https://checker.example/alerts/1".to_string(),
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+        }
+    }
+
+    #[test]
+    fn failure_render_text_count_1_no_reminder_line() {
+        let t = base_failure_template();
+        let text = t.render_text();
+        assert!(
+            !text.contains("reminder #"),
+            "count=1 should not include reminder line"
+        );
+    }
+
+    #[test]
+    fn failure_render_text_count_2_includes_reminder_line() {
+        let t = FailureEmailTemplate {
+            failure_count: 2,
+            ..base_failure_template()
+        };
+        let text = t.render_text();
+        assert!(text.contains("reminder #2"));
+    }
+
+    #[test]
+    fn failure_render_text_includes_failure_reason() {
+        let t = FailureEmailTemplate {
+            failure_reason: Some("TLS handshake timeout".to_string()),
+            ..base_failure_template()
+        };
+        let text = t.render_text();
+        assert!(text.contains("TLS handshake timeout"));
+    }
+
+    #[test]
+    fn failure_render_text_includes_quiet_hours_note() {
+        let t = FailureEmailTemplate {
+            quiet_hours_note: Some("Email was delayed by quiet hours".to_string()),
+            ..base_failure_template()
+        };
+        let text = t.render_text();
+        assert!(text.contains("Email was delayed by quiet hours"));
+    }
+
+    #[test]
+    fn failure_render_text_staging_banner() {
+        let t = FailureEmailTemplate {
+            environment_name: Some("staging".to_string()),
+            ..base_failure_template()
+        };
+        let text = t.render_text();
+        assert!(text.starts_with("*** Sent from the STAGING environment ***"));
+    }
+
+    // ── RecoveryEmailTemplate::render_text ────────────────────────────────────
+
+    fn base_recovery_template() -> RecoveryEmailTemplate {
+        RecoveryEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            check_url: "https://checker.example/results".to_string(),
+            unsubscribe_url: "https://checker.example/unsub".to_string(),
+            environment_name: None,
+            recovered_at: None,
+            first_detected: None,
+            minutes_down: None,
+            downtime_human: None,
+            recovery_signal: None,
+            recovery_hint: None,
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+        }
+    }
+
+    #[test]
+    fn recovery_render_text_uses_downtime_human_when_available() {
+        let t = RecoveryEmailTemplate {
+            minutes_down: Some(135),
+            downtime_human: Some("2h 15m".to_string()),
+            ..base_recovery_template()
+        };
+        assert!(t.render_text().contains("Total downtime: 2h 15m"));
+    }
+
+    #[test]
+    fn recovery_render_text_falls_back_to_minutes_when_no_human() {
+        let t = RecoveryEmailTemplate {
+            minutes_down: Some(45),
+            downtime_human: None,
+            ..base_recovery_template()
+        };
+        assert!(t.render_text().contains("Total downtime: 45 minutes"));
+    }
+
+    #[test]
+    fn recovery_render_text_no_downtime_line_when_none() {
+        let t = base_recovery_template();
+        let text = t.render_text();
+        assert!(
+            !text.contains("downtime"),
+            "no downtime info should produce no downtime line"
+        );
+    }
+
+    // ── TlsExpiryEmailTemplate::render_text ───────────────────────────────────
+
+    fn base_expiry_template(days: i64) -> TlsExpiryEmailTemplate {
+        TlsExpiryEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            expires_at: "2024-02-01 00:00 UTC".to_string(),
+            expires_human: "Feb 1, 2024".to_string(),
+            days_remaining: days,
+            check_url: "https://checker.example/results".to_string(),
+            unsubscribe_url: "https://checker.example/unsub".to_string(),
+            environment_name: None,
+            issued_human: None,
+            cert_cn: None,
+            cert_san: None,
+            cert_issuer: None,
+            cert_fingerprint: None,
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+            renewal_guide_url: None,
+        }
+    }
+
+    #[test]
+    fn tls_expiry_render_text_urgent_when_7_days_or_fewer() {
+        let text = base_expiry_template(5).render_text();
+        assert!(text.contains("URGENT:"));
+    }
+
+    #[test]
+    fn tls_expiry_render_text_not_urgent_when_more_than_7_days() {
+        let text = base_expiry_template(14).render_text();
+        assert!(!text.contains("URGENT:"));
+    }
+
+    #[test]
+    fn tls_expiry_render_text_singular_day() {
+        let text = base_expiry_template(1).render_text();
+        assert!(text.contains("1 day "), "should say '1 day' not '1 days'");
+    }
+
+    #[test]
+    fn tls_expiry_render_text_plural_days() {
+        let text = base_expiry_template(3).render_text();
+        assert!(text.contains("3 days"));
+    }
+
+    // ── VersionChangeEmailTemplate::render_text ───────────────────────────────
+
+    fn base_version_template() -> VersionChangeEmailTemplate {
+        VersionChangeEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            old_version_name: "Synapse".to_string(),
+            old_version_string: "1.99.0".to_string(),
+            new_version_name: "Synapse".to_string(),
+            new_version_string: "1.100.0".to_string(),
+            check_url: "https://checker.example/results".to_string(),
+            unsubscribe_url: "https://checker.example/unsub".to_string(),
+            environment_name: None,
+            detected_at: None,
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+            release_url: None,
+            release_notes_excerpt: None,
+        }
+    }
+
+    #[test]
+    fn version_render_text_shows_versions() {
+        let text = base_version_template().render_text();
+        assert!(text.contains("1.99.0"));
+        assert!(text.contains("1.100.0"));
+    }
+
+    #[test]
+    fn version_render_text_release_url_only() {
+        let t = VersionChangeEmailTemplate {
+            release_url: Some("https://github.com/synapse/releases/1.100.0".to_string()),
+            ..base_version_template()
+        };
+        let text = t.render_text();
+        assert!(text.contains("Release notes:"));
+        assert!(!text.contains("What's new:"));
+    }
+
+    #[test]
+    fn version_render_text_release_url_with_excerpt() {
+        let t = VersionChangeEmailTemplate {
+            release_url: Some("https://github.com/synapse/releases/1.100.0".to_string()),
+            release_notes_excerpt: Some(
+                "<p>Bug fixes and performance improvements</p>".to_string(),
+            ),
+            ..base_version_template()
+        };
+        let text = t.render_text();
+        assert!(text.contains("What's new:"));
+        assert!(text.contains("Bug fixes and performance improvements"));
+    }
+
+    // ── TlsCertChangeEmailTemplate::render_text ───────────────────────────────
+
+    #[test]
+    fn tls_cert_change_render_text_with_fingerprints() {
+        let t = TlsCertChangeEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            added_fingerprints: vec!["AA:BB:CC".to_string()],
+            removed_fingerprints: vec!["11:22:33".to_string()],
+            check_url: "https://checker.example/results".to_string(),
+            unsubscribe_url: "https://checker.example/unsub".to_string(),
+            environment_name: None,
+            detected_at: Some("2024-01-15 14:32 UTC".to_string()),
+            old_fingerprint: None,
+            old_issuer: None,
+            old_expires: None,
+            new_fingerprint: None,
+            new_issuer: None,
+            new_expires: None,
+            alert_url: "https://checker.example/alerts/1".to_string(),
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("AA:BB:CC"));
+        assert!(text.contains("11:22:33"));
+        assert!(text.contains("2024-01-15 14:32 UTC"));
+    }
+
+    // ── ServerNameChangeEmailTemplate::render_text ────────────────────────────
+
+    #[test]
+    fn server_name_change_render_text() {
+        let t = ServerNameChangeEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            environment_name: None,
+            detected_at: "2024-01-15 14:32 UTC".to_string(),
+            old_delegation_target: "old.matrix.example.com:8448".to_string(),
+            old_resolution_method: "well-known".to_string(),
+            new_delegation_target: "new.matrix.example.com:8448".to_string(),
+            new_resolution_method: "SRV".to_string(),
+            server_software: "Synapse".to_string(),
+            server_version: "1.100.0".to_string(),
+            federation_status: "OK".to_string(),
+            check_url: "https://checker.example/results".to_string(),
+            unsubscribe_url: "https://checker.example/unsub".to_string(),
+            manage_url: "https://checker.example/alerts".to_string(),
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("old.matrix.example.com"));
+        assert!(text.contains("new.matrix.example.com"));
+        assert!(text.contains("well-known"));
+        assert!(text.contains("SRV"));
+    }
+
+    // ── AccountVerificationEmailTemplate::render_text ─────────────────────────
+
+    #[test]
+    fn account_verification_render_text() {
+        let t = AccountVerificationEmailTemplate {
+            verify_url: "https://checker.example/verify?token=abc123".to_string(),
+            environment_name: None,
+            recipient_email: "user@example.com".to_string(),
+            manage_url: None,
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("user@example.com"));
+        assert!(text.contains("abc123"));
+    }
+
+    // ── PasswordResetEmailTemplate::render_text ───────────────────────────────
+
+    #[test]
+    fn password_reset_render_text() {
+        let t = PasswordResetEmailTemplate {
+            reset_url: "https://checker.example/reset?token=xyz".to_string(),
+            environment_name: None,
+            recipient_email: "user@example.com".to_string(),
+            manage_url: "https://checker.example/account".to_string(),
+            support_url: None,
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("user@example.com"));
+        assert!(text.contains("xyz"));
+    }
+
+    // ── MagicLinkEmailTemplate::render_text ───────────────────────────────────
+
+    #[test]
+    fn magic_link_render_text() {
+        let t = MagicLinkEmailTemplate {
+            verify_url: "https://checker.example/magic?token=tok".to_string(),
+            environment_name: None,
+            recipient_email: "user@example.com".to_string(),
+            manage_url: "https://checker.example/account".to_string(),
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("user@example.com"));
+        assert!(text.contains("tok"));
+    }
+
+    // ── TestEmailTemplate::render_text ────────────────────────────────────────
+
+    #[test]
+    fn test_email_render_text() {
+        let t = TestEmailTemplate {
+            server_name: "matrix.example.com".to_string(),
+            check_url: "https://checker.example/results".to_string(),
+            alert_url: "https://checker.example/alerts/1".to_string(),
+            manage_url: "https://checker.example/alerts".to_string(),
+            environment_name: None,
+            sponsor_url: None,
+        };
+        let text = t.render_text();
+        assert!(text.contains("matrix.example.com"));
+        assert!(text.contains("test notification"));
+    }
 }

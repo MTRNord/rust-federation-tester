@@ -185,3 +185,26 @@ impl RedisLock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn noop_try_acquire_always_returns_true() {
+        assert!(Lock::Noop.try_acquire("test_loop", 5000).await);
+    }
+
+    #[tokio::test]
+    async fn noop_try_renew_always_returns_true() {
+        assert!(Lock::Noop.try_renew("test_loop", 5000).await);
+    }
+
+    #[tokio::test]
+    async fn noop_multiple_acquires_all_succeed() {
+        let lock = Lock::Noop;
+        assert!(lock.try_acquire("loop_a", 1000).await);
+        assert!(lock.try_acquire("loop_a", 1000).await);
+        assert!(lock.try_acquire("loop_b", 1000).await);
+    }
+}

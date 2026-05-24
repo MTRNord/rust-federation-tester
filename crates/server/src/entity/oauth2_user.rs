@@ -91,3 +91,119 @@ impl Related<super::oauth2_identity::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::OffsetDateTime;
+
+    fn base_user() -> Model {
+        Model {
+            id: "u1".into(),
+            email: "u@e.com".into(),
+            email_verified: true,
+            name: None,
+            receives_alerts: true,
+            created_at: OffsetDateTime::now_utc(),
+            last_login_at: None,
+            password_hash: None,
+            email_verification_token: None,
+            email_verification_expires_at: None,
+            password_reset_token: None,
+            password_reset_expires_at: None,
+            timezone: "UTC".into(),
+        }
+    }
+
+    #[test]
+    fn has_password_false_when_none() {
+        assert!(!base_user().has_password());
+    }
+
+    #[test]
+    fn has_password_true_when_set() {
+        let mut u = base_user();
+        u.password_hash = Some("hash".into());
+        assert!(u.has_password());
+    }
+
+    #[test]
+    fn has_pending_verification_false_when_no_token() {
+        assert!(!base_user().has_pending_verification());
+    }
+
+    #[test]
+    fn has_pending_verification_false_when_only_token_no_expiry() {
+        let mut u = base_user();
+        u.email_verification_token = Some("tok".into());
+        // expires_at is None → false
+        assert!(!u.has_pending_verification());
+    }
+
+    #[test]
+    fn has_pending_verification_true_when_future_expiry() {
+        let mut u = base_user();
+        u.email_verification_token = Some("tok".into());
+        u.email_verification_expires_at =
+            Some(OffsetDateTime::now_utc() + time::Duration::hours(1));
+        assert!(u.has_pending_verification());
+    }
+
+    #[test]
+    fn has_pending_verification_false_when_expired() {
+        let mut u = base_user();
+        u.email_verification_token = Some("tok".into());
+        u.email_verification_expires_at =
+            Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
+        assert!(!u.has_pending_verification());
+    }
+
+    #[test]
+    fn is_verification_expired_true_when_no_expiry() {
+        assert!(base_user().is_verification_expired());
+    }
+
+    #[test]
+    fn is_verification_expired_true_when_past() {
+        let mut u = base_user();
+        u.email_verification_expires_at =
+            Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
+        assert!(u.is_verification_expired());
+    }
+
+    #[test]
+    fn is_verification_expired_false_when_future() {
+        let mut u = base_user();
+        u.email_verification_expires_at =
+            Some(OffsetDateTime::now_utc() + time::Duration::hours(1));
+        assert!(!u.is_verification_expired());
+    }
+
+    #[test]
+    fn is_password_reset_valid_false_when_no_token() {
+        assert!(!base_user().is_password_reset_valid());
+    }
+
+    #[test]
+    fn is_password_reset_valid_false_when_only_token_no_expiry() {
+        let mut u = base_user();
+        u.password_reset_token = Some("reset".into());
+        assert!(!u.is_password_reset_valid());
+    }
+
+    #[test]
+    fn is_password_reset_valid_true_when_future() {
+        let mut u = base_user();
+        u.password_reset_token = Some("reset".into());
+        u.password_reset_expires_at = Some(OffsetDateTime::now_utc() + time::Duration::hours(1));
+        assert!(u.is_password_reset_valid());
+    }
+
+    #[test]
+    fn is_password_reset_valid_false_when_expired() {
+        let mut u = base_user();
+        u.password_reset_token = Some("reset".into());
+        u.password_reset_expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
+        assert!(!u.is_password_reset_valid());
+    }
+}

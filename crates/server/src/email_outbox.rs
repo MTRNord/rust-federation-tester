@@ -417,3 +417,243 @@ fn build_message(
 
     Ok(msg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::email_outbox::{
+        self, Entity as EmailOutboxEntity, STATUS_FAILED, STATUS_PENDING,
+    };
+    use migration::MigratorTrait;
+    use sea_orm::{ColumnTrait, Database, EntityTrait, QueryFilter};
+
+    async fn create_test_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        migration::Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    // ── backoff_secs ───────────────────────────────────────────────────────
+
+    #[test]
+    fn backoff_attempt_1_is_30s() {
+        assert_eq!(backoff_secs(1), 30);
+    }
+
+    #[test]
+    fn backoff_attempt_2_is_2min() {
+        assert_eq!(backoff_secs(2), 120);
+    }
+
+    #[test]
+    fn backoff_attempt_3_is_10min() {
+        assert_eq!(backoff_secs(3), 600);
+    }
+
+    #[test]
+    fn backoff_attempt_4_is_1h() {
+        assert_eq!(backoff_secs(4), 3_600);
+    }
+
+    #[test]
+    fn backoff_attempt_5_and_beyond_is_6h() {
+        assert_eq!(backoff_secs(5), 21_600);
+        assert_eq!(backoff_secs(99), 21_600);
+        assert_eq!(backoff_secs(0), 21_600);
+    }
+
+    // ── build_message ──────────────────────────────────────────────────────
+
+    fn make_outbox_item(html: Option<&str>) -> email_outbox::Model {
+        email_outbox::Model {
+            id: uuid::Uuid::new_v4().to_string(),
+            to_email: "recipient@example.com".into(),
+            subject: "Test Subject".into(),
+            html_body: html.map(String::from),
+            text_body: "Plain text body".into(),
+            status: STATUS_PENDING.to_string(),
+            attempts: 0,
+            max_attempts: 5,
+            next_attempt_at: OffsetDateTime::now_utc(),
+            expires_at: None,
+            last_error: None,
+            created_at: OffsetDateTime::now_utc(),
+            sent_at: None,
+        }
+    }
+
+    #[test]
+    fn build_message_plain_text_only() {
+        let item = make_outbox_item(None);
+        let msg = build_message("sender@example.com", &item);
+        assert!(msg.is_ok());
+    }
+
+    #[test]
+    fn build_message_with_html() {
+        let item = make_outbox_item(Some("<p>Hello</p>"));
+        let msg = build_message("sender@example.com", &item);
+        assert!(msg.is_ok());
+    }
+
+    #[test]
+    fn build_message_invalid_from_returns_err() {
+        let item = make_outbox_item(None);
+        let msg = build_message("not-an-email", &item);
+        assert!(msg.is_err());
+    }
+
+    #[test]
+    fn build_message_invalid_to_returns_err() {
+        let mut item = make_outbox_item(None);
+        item.to_email = "not-an-email".into();
+        let msg = build_message("sender@example.com", &item);
+        assert!(msg.is_err());
+    }
+
+    // ── enqueue / enqueue_at ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn enqueue_inserts_pending_row() {
+        let db = create_test_db().await;
+        enqueue(&db, "to@example.com", "Subject", None, "body".into(), None)
+            .await
+            .unwrap();
+
+        let rows = EmailOutboxEntity::find().all(&db).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, STATUS_PENDING);
+        assert_eq!(rows[0].to_email, "to@example.com");
+        assert_eq!(rows[0].subject, "Subject");
+        assert_eq!(rows[0].text_body, "body");
+        assert!(rows[0].html_body.is_none());
+    }
+
+    #[tokio::test]
+    async fn enqueue_with_html_stores_html_body() {
+        let db = create_test_db().await;
+        enqueue(
+            &db,
+            "to@example.com",
+            "Subj",
+            Some("<p>html</p>".into()),
+            "plain".into(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows = EmailOutboxEntity::find().all(&db).await.unwrap();
+        assert_eq!(rows[0].html_body.as_deref(), Some("<p>html</p>"));
+    }
+
+    #[tokio::test]
+    async fn enqueue_at_with_send_after_sets_next_attempt() {
+        let db = create_test_db().await;
+        let send_after = OffsetDateTime::now_utc() + time::Duration::hours(1);
+        enqueue_at(
+            &db,
+            "to@example.com",
+            "S",
+            None,
+            "b".into(),
+            None,
+            Some(send_after),
+        )
+        .await
+        .unwrap();
+
+        let rows = EmailOutboxEntity::find().all(&db).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        // next_attempt_at should be roughly send_after (within a second)
+        let diff = (rows[0].next_attempt_at - send_after).whole_seconds().abs();
+        assert!(diff <= 1, "next_attempt_at should match send_after");
+    }
+
+    // ── requeue_failed ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn requeue_failed_resets_failed_rows() {
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        let db = create_test_db().await;
+
+        // Insert a failed row
+        let row = email_outbox::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            to_email: Set("a@b.com".into()),
+            subject: Set("s".into()),
+            html_body: Set(None),
+            text_body: Set("t".into()),
+            status: Set(STATUS_FAILED.to_string()),
+            attempts: Set(3),
+            max_attempts: Set(5),
+            next_attempt_at: Set(OffsetDateTime::now_utc()),
+            expires_at: Set(None),
+            last_error: Set(Some("smtp error".into())),
+            created_at: Set(OffsetDateTime::now_utc()),
+            sent_at: Set(None),
+        };
+        row.insert(&db).await.unwrap();
+
+        let (requeued, skipped) = requeue_failed(&db).await.unwrap();
+        assert_eq!(requeued, 1);
+        assert_eq!(skipped, 0);
+
+        let rows = EmailOutboxEntity::find().all(&db).await.unwrap();
+        assert_eq!(rows[0].status, STATUS_PENDING);
+        assert_eq!(rows[0].attempts, 0);
+        assert!(rows[0].last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn requeue_failed_skips_expired_rows() {
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        let db = create_test_db().await;
+
+        // Insert a failed row that has already expired
+        let expired_at = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let row = email_outbox::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            to_email: Set("a@b.com".into()),
+            subject: Set("s".into()),
+            html_body: Set(None),
+            text_body: Set("t".into()),
+            status: Set(STATUS_FAILED.to_string()),
+            attempts: Set(5),
+            max_attempts: Set(5),
+            next_attempt_at: Set(OffsetDateTime::now_utc()),
+            expires_at: Set(Some(expired_at)),
+            last_error: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+            sent_at: Set(None),
+        };
+        row.insert(&db).await.unwrap();
+
+        let (requeued, skipped) = requeue_failed(&db).await.unwrap();
+        assert_eq!(requeued, 0);
+        assert_eq!(skipped, 1);
+
+        // Row should remain failed
+        let rows = EmailOutboxEntity::find()
+            .filter(email_outbox::Column::Status.eq(STATUS_FAILED))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn requeue_failed_ignores_pending_and_sent_rows() {
+        let db = create_test_db().await;
+        // Only enqueue pending rows — requeue_failed should not touch them
+        enqueue(&db, "a@b.com", "s", None, "t".into(), None)
+            .await
+            .unwrap();
+
+        let (requeued, skipped) = requeue_failed(&db).await.unwrap();
+        assert_eq!(requeued, 0);
+        assert_eq!(skipped, 0);
+    }
+}

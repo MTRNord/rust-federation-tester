@@ -1182,3 +1182,254 @@ pub(crate) async fn log_status_event(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::response::{Error, ErrorCode};
+    use time::OffsetDateTime;
+
+    fn base_alert(last_email: Option<OffsetDateTime>) -> alert::Model {
+        alert::Model {
+            id: 1,
+            email: "test@example.com".into(),
+            server_name: "example.com".into(),
+            verified: true,
+            magic_token: None,
+            created_at: OffsetDateTime::now_utc(),
+            last_check_at: None,
+            last_failure_at: None,
+            last_success_at: None,
+            last_email_sent_at: last_email,
+            failure_count: 0,
+            is_currently_failing: false,
+            last_recovery_at: None,
+            user_id: None,
+            notify_server_name_change: true,
+            notify_version_change: true,
+            notify_tls_cert_change: true,
+            notify_tls_expiry: true,
+            quiet_hours_enabled: false,
+            quiet_hours_from: "22:00".into(),
+            quiet_hours_to: "07:00".into(),
+        }
+    }
+
+    fn utc_hms(h: u8, m: u8, s: u8) -> OffsetDateTime {
+        time::Date::from_calendar_date(2026, time::Month::January, 1)
+            .unwrap()
+            .with_hms(h, m, s)
+            .unwrap()
+            .assume_utc()
+    }
+
+    // ── quiet_hours_end ────────────────────────────────────────────────────
+
+    #[test]
+    fn quiet_hours_disabled_returns_none() {
+        assert!(quiet_hours_end(false, "22:00", "07:00", utc_hms(23, 0, 0), "UTC").is_none());
+    }
+
+    #[test]
+    fn quiet_hours_outside_overnight_window() {
+        // 12:00 is outside 22:00–07:00
+        assert!(quiet_hours_end(true, "22:00", "07:00", utc_hms(12, 0, 0), "UTC").is_none());
+    }
+
+    #[test]
+    fn quiet_hours_inside_overnight_window_evening_side() {
+        // 23:00 is inside 22:00–07:00, evening side → wake at 07:00 next day
+        let result = quiet_hours_end(true, "22:00", "07:00", utc_hms(23, 0, 0), "UTC");
+        assert!(result.is_some());
+        let wake = result.unwrap();
+        assert_eq!(wake.hour(), 7);
+        assert_eq!(wake.minute(), 0);
+        // Date should be Jan 2 (next day)
+        assert_eq!(wake.day(), 2);
+    }
+
+    #[test]
+    fn quiet_hours_inside_overnight_window_morning_side() {
+        // 03:00 is inside 22:00–07:00, morning side → wake at 07:00 same day
+        let result = quiet_hours_end(true, "22:00", "07:00", utc_hms(3, 0, 0), "UTC");
+        assert!(result.is_some());
+        let wake = result.unwrap();
+        assert_eq!(wake.hour(), 7);
+        assert_eq!(wake.day(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_inside_daytime_window() {
+        // 14:00 inside 09:00–18:00 (not overnight) → wake at 18:00 same day
+        let result = quiet_hours_end(true, "09:00", "18:00", utc_hms(14, 0, 0), "UTC");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().hour(), 18);
+    }
+
+    #[test]
+    fn quiet_hours_outside_daytime_window() {
+        // 08:00 is outside 09:00–18:00
+        assert!(quiet_hours_end(true, "09:00", "18:00", utc_hms(8, 0, 0), "UTC").is_none());
+    }
+
+    #[test]
+    fn quiet_hours_invalid_from_returns_none() {
+        assert!(quiet_hours_end(true, "nottime", "07:00", utc_hms(23, 0, 0), "UTC").is_none());
+    }
+
+    #[test]
+    fn quiet_hours_invalid_to_returns_none() {
+        assert!(quiet_hours_end(true, "22:00", "nottime", utc_hms(23, 0, 0), "UTC").is_none());
+    }
+
+    #[test]
+    fn quiet_hours_unknown_timezone_falls_back_to_utc() {
+        // Unknown timezone → falls back to UTC; 23:00 is in 22:00–07:00 window
+        let result = quiet_hours_end(true, "22:00", "07:00", utc_hms(23, 0, 0), "Not/ATimezone");
+        assert!(result.is_some());
+    }
+
+    // ── should_send_reminder_email ─────────────────────────────────────────
+
+    #[test]
+    fn reminder_true_when_never_sent() {
+        assert!(should_send_reminder_email(
+            &base_alert(None),
+            OffsetDateTime::now_utc()
+        ));
+    }
+
+    #[test]
+    fn reminder_true_when_sent_more_than_12h_ago() {
+        let sent = OffsetDateTime::now_utc() - time::Duration::hours(13);
+        assert!(should_send_reminder_email(
+            &base_alert(Some(sent)),
+            OffsetDateTime::now_utc()
+        ));
+    }
+
+    #[test]
+    fn reminder_false_when_sent_less_than_12h_ago() {
+        let sent = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        assert!(!should_send_reminder_email(
+            &base_alert(Some(sent)),
+            OffsetDateTime::now_utc()
+        ));
+    }
+
+    #[test]
+    fn reminder_true_when_exactly_at_12h_boundary() {
+        // exactly 12 h ago: elapsed >= interval → true
+        let sent = OffsetDateTime::now_utc() - time::Duration::hours(12);
+        assert!(should_send_reminder_email(
+            &base_alert(Some(sent)),
+            OffsetDateTime::now_utc()
+        ));
+    }
+
+    // ── extract_failure_reason ─────────────────────────────────────────────
+
+    #[test]
+    fn failure_reason_none_when_no_errors() {
+        assert!(extract_failure_reason(&Root::default()).is_none());
+    }
+
+    #[test]
+    fn failure_reason_returns_top_level_error() {
+        let r = Root {
+            error: Some(Error {
+                error: "Invalid server name".into(),
+                error_code: ErrorCode::Unknown,
+            }),
+            ..Root::default()
+        };
+        assert_eq!(
+            extract_failure_reason(&r).as_deref(),
+            Some("Invalid server name")
+        );
+    }
+
+    #[test]
+    fn failure_reason_returns_connection_error_when_no_top_level() {
+        let mut r = Root::default();
+        r.connection_errors.insert(
+            "1.2.3.4:8448".into(),
+            Error {
+                error: "Connection refused".into(),
+                error_code: ErrorCode::Unknown,
+            },
+        );
+        assert_eq!(
+            extract_failure_reason(&r).as_deref(),
+            Some("Connection refused")
+        );
+    }
+
+    #[test]
+    fn failure_reason_prefers_top_level_over_connection_error() {
+        let mut r = Root {
+            error: Some(Error {
+                error: "Top level".into(),
+                error_code: ErrorCode::Unknown,
+            }),
+            ..Root::default()
+        };
+        r.connection_errors.insert(
+            "addr".into(),
+            Error {
+                error: "Connection".into(),
+                error_code: ErrorCode::Unknown,
+            },
+        );
+        assert_eq!(extract_failure_reason(&r).as_deref(), Some("Top level"));
+    }
+
+    // ── get_notification_emails with SQLite ────────────────────────────────
+
+    async fn create_test_db() -> Arc<sea_orm::DatabaseConnection> {
+        use migration::MigratorTrait;
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        migration::Migrator::up(&db, None).await.unwrap();
+        Arc::new(db)
+    }
+
+    #[tokio::test]
+    async fn get_notification_emails_empty_alert() {
+        let db = create_test_db().await;
+        let alert = base_alert(None);
+        let recipients = get_notification_emails(&db, &alert).await;
+        // alert.email is "test@example.com" and no notification_email rows → falls back to alert.email
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(recipients[0].email, "test@example.com");
+        assert_eq!(recipients[0].timezone, "UTC");
+    }
+
+    #[tokio::test]
+    async fn get_notification_emails_empty_email_returns_empty() {
+        let db = create_test_db().await;
+        let mut alert = base_alert(None);
+        alert.email = "".into();
+        let recipients = get_notification_emails(&db, &alert).await;
+        assert!(recipients.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_notification_emails_uses_oauth2_user_timezone() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let db = create_test_db().await;
+        // Insert oauth2_user with non-UTC timezone
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"INSERT INTO oauth2_user (id, email, email_verified, name, receives_alerts, created_at, timezone)
+               VALUES ('u1', 'tz@example.com', 1, NULL, 1, datetime('now'), 'Europe/Berlin');"#,
+        ))
+        .await
+        .unwrap();
+
+        let mut alert = base_alert(None);
+        alert.email = "tz@example.com".into();
+        let recipients = get_notification_emails(&db, &alert).await;
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(recipients[0].timezone, "Europe/Berlin");
+    }
+}

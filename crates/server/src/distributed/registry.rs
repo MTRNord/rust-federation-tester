@@ -231,3 +231,95 @@ impl RedisRegistry {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn new_in_memory() -> Registry {
+        Registry::InMemory(InMemoryRegistry::new())
+    }
+
+    // ── InMemoryRegistry via Registry enum ────────────────────────────────
+
+    #[tokio::test]
+    async fn get_returns_none_for_unknown_alert() {
+        let r = new_in_memory().await;
+        assert!(r.get(99).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn increment_starts_at_one() {
+        let r = new_in_memory().await;
+        assert_eq!(r.increment(1).await, 1);
+    }
+
+    #[tokio::test]
+    async fn increment_accumulates() {
+        let r = new_in_memory().await;
+        assert_eq!(r.increment(1).await, 1);
+        assert_eq!(r.increment(1).await, 2);
+        assert_eq!(r.increment(1).await, 3);
+    }
+
+    #[tokio::test]
+    async fn get_returns_value_after_increment() {
+        let r = new_in_memory().await;
+        r.increment(5).await;
+        r.increment(5).await;
+        assert_eq!(r.get(5).await, Some(2));
+    }
+
+    #[tokio::test]
+    async fn set_overrides_existing_value() {
+        let r = new_in_memory().await;
+        r.increment(7).await;
+        r.increment(7).await;
+        r.set(7, 42).await;
+        assert_eq!(r.get(7).await, Some(42));
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_entry() {
+        let r = new_in_memory().await;
+        r.set(3, 10).await;
+        r.remove(3).await;
+        assert!(r.get(3).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_nonexistent_is_noop() {
+        let r = new_in_memory().await;
+        r.remove(999).await; // should not panic
+        assert!(r.get(999).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn all_ids_returns_all_keys() {
+        let r = new_in_memory().await;
+        r.set(1, 1).await;
+        r.set(2, 5).await;
+        r.set(3, 9).await;
+        let ids = r.all_ids().await;
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
+    }
+
+    #[tokio::test]
+    async fn all_ids_empty_when_nothing_set() {
+        let r = new_in_memory().await;
+        assert!(r.all_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn increment_different_alerts_are_independent() {
+        let r = new_in_memory().await;
+        r.increment(10).await;
+        r.increment(10).await;
+        r.increment(20).await;
+        assert_eq!(r.get(10).await, Some(2));
+        assert_eq!(r.get(20).await, Some(1));
+    }
+}

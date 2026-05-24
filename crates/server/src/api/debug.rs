@@ -39,12 +39,15 @@ pub fn router() -> OpenApiRouter {
         .routes(routes!(preview_test_email))
 }
 
-/// Check if the client IP is allowed to access debug endpoints.
-fn is_allowed(resources: &AppResources, addr: &SocketAddr, headers: &HeaderMap) -> bool {
-    let direct_ip = addr.ip();
-    let client_ip = if resources
-        .config
-        .trusted_proxy_nets
+/// Resolve the effective client IP: if the direct connection comes from a
+/// trusted proxy, use the rightmost value in `X-Forwarded-For`; otherwise
+/// use the direct connection IP.
+fn resolve_client_ip(
+    direct_ip: IpAddr,
+    trusted_proxy_nets: &[crate::config::IpNet],
+    headers: &HeaderMap,
+) -> IpAddr {
+    if trusted_proxy_nets
         .iter()
         .any(|net| net.contains(&direct_ip))
     {
@@ -57,13 +60,90 @@ fn is_allowed(resources: &AppResources, addr: &SocketAddr, headers: &HeaderMap) 
             .unwrap_or(direct_ip)
     } else {
         direct_ip
-    };
+    }
+}
 
+/// Check if the client IP is allowed to access debug endpoints.
+fn is_allowed(resources: &AppResources, addr: &SocketAddr, headers: &HeaderMap) -> bool {
+    let client_ip = resolve_client_ip(addr.ip(), &resources.config.trusted_proxy_nets, headers);
     resources
         .config
         .debug_allowed_nets
         .iter()
         .any(|net| net.contains(&client_ip))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::IpNet;
+    use axum::http::HeaderMap;
+
+    fn parse_nets(cidrs: &[&str]) -> Vec<IpNet> {
+        cidrs.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    fn xff_headers(value: &str) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        map.insert("x-forwarded-for", value.parse().unwrap());
+        map
+    }
+
+    // ── resolve_client_ip: no trusted proxy ──────────────────────────────────
+
+    #[test]
+    fn no_trusted_proxy_returns_direct_ip() {
+        let direct: IpAddr = "203.0.113.1".parse().unwrap();
+        let result = resolve_client_ip(direct, &[], &HeaderMap::new());
+        assert_eq!(result, direct);
+    }
+
+    #[test]
+    fn no_trusted_proxy_ignores_xff() {
+        let direct: IpAddr = "203.0.113.1".parse().unwrap();
+        let headers = xff_headers("10.0.0.1");
+        // 10.0.0.1 is NOT in trusted_proxy_nets, so XFF is ignored
+        let result = resolve_client_ip(direct, &[], &headers);
+        assert_eq!(result, direct);
+    }
+
+    // ── resolve_client_ip: with trusted proxy ─────────────────────────────────
+
+    #[test]
+    fn trusted_proxy_uses_rightmost_xff() {
+        let proxy_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let trusted = parse_nets(&["10.0.0.0/8"]);
+        // XFF: client → intermediate → proxy; rightmost = real client
+        let headers = xff_headers("203.0.113.99, 172.16.1.1, 10.0.0.2");
+        let result = resolve_client_ip(proxy_ip, &trusted, &headers);
+        assert_eq!(result, "10.0.0.2".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn trusted_proxy_with_invalid_xff_falls_back_to_direct() {
+        let proxy_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let trusted = parse_nets(&["10.0.0.0/8"]);
+        let headers = xff_headers("not-an-ip");
+        let result = resolve_client_ip(proxy_ip, &trusted, &headers);
+        assert_eq!(result, proxy_ip);
+    }
+
+    #[test]
+    fn trusted_proxy_with_no_xff_falls_back_to_direct() {
+        let proxy_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let trusted = parse_nets(&["10.0.0.0/8"]);
+        let result = resolve_client_ip(proxy_ip, &trusted, &HeaderMap::new());
+        assert_eq!(result, proxy_ip);
+    }
+
+    #[test]
+    fn trusted_proxy_with_single_xff_uses_it() {
+        let proxy_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let trusted = parse_nets(&["10.0.0.0/8"]);
+        let headers = xff_headers("203.0.113.55");
+        let result = resolve_client_ip(proxy_ip, &trusted, &headers);
+        assert_eq!(result, "203.0.113.55".parse::<IpAddr>().unwrap());
+    }
 }
 
 /// Preview the verification email template.

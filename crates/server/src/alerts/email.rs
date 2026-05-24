@@ -1038,3 +1038,150 @@ impl AsRef<str> for UnsubscribeHeader {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── frontend_base ──────────────────────────────────────────────────────
+
+    #[test]
+    fn frontend_base_adds_slash_when_missing() {
+        assert_eq!(frontend_base("https://example.com"), "https://example.com/");
+    }
+
+    #[test]
+    fn frontend_base_keeps_single_slash() {
+        assert_eq!(
+            frontend_base("https://example.com/"),
+            "https://example.com/"
+        );
+    }
+
+    #[test]
+    fn frontend_base_collapses_multiple_trailing_slashes() {
+        assert_eq!(
+            frontend_base("https://example.com///"),
+            "https://example.com/"
+        );
+    }
+
+    // ── format_downtime ────────────────────────────────────────────────────
+
+    #[test]
+    fn format_downtime_under_an_hour() {
+        assert_eq!(format_downtime(0), "0 min");
+        assert_eq!(format_downtime(1), "1 min");
+        assert_eq!(format_downtime(59), "59 min");
+    }
+
+    #[test]
+    fn format_downtime_whole_hours() {
+        assert_eq!(format_downtime(60), "1h");
+        assert_eq!(format_downtime(120), "2h");
+        assert_eq!(format_downtime(180), "3h");
+    }
+
+    #[test]
+    fn format_downtime_hours_and_minutes() {
+        assert_eq!(format_downtime(61), "1h 1m");
+        assert_eq!(format_downtime(90), "1h 30m");
+        assert_eq!(format_downtime(125), "2h 5m");
+    }
+
+    // ── format_email_datetime ──────────────────────────────────────────────
+
+    #[test]
+    fn format_email_datetime_utc() {
+        let dt = time::Date::from_calendar_date(2026, time::Month::May, 19)
+            .unwrap()
+            .with_hms(9, 59, 0)
+            .unwrap()
+            .assume_utc();
+        assert_eq!(format_email_datetime(dt), "2026-05-19 09:59 UTC");
+    }
+
+    #[test]
+    fn format_email_datetime_zero_padded() {
+        let dt = time::Date::from_calendar_date(2026, time::Month::January, 3)
+            .unwrap()
+            .with_hms(7, 5, 0)
+            .unwrap()
+            .assume_utc();
+        assert_eq!(format_email_datetime(dt), "2026-01-03 07:05 UTC");
+    }
+
+    // ── generate_list_unsubscribe_url ──────────────────────────────────────
+
+    #[test]
+    fn generate_list_unsubscribe_url_contains_token_and_base() {
+        let url = generate_list_unsubscribe_url(
+            "secret-32-chars-xxxxxxxxxxxxxxxxxxxx",
+            "user@example.com",
+            "matrix.example.com",
+            42,
+            "https://frontend.example.com",
+        );
+        assert!(url.starts_with("https://frontend.example.com/verify?token="));
+    }
+
+    #[test]
+    fn generate_list_unsubscribe_url_adds_trailing_slash_to_base() {
+        // frontend_url without trailing slash
+        let url = generate_list_unsubscribe_url(
+            "secret-32-chars-xxxxxxxxxxxxxxxxxxxx",
+            "user@example.com",
+            "matrix.example.com",
+            1,
+            "https://frontend.example.com",
+        );
+        // The path segment starts immediately after the base URL
+        assert!(!url.contains("//verify"), "double-slash should not appear");
+    }
+
+    #[test]
+    fn generate_list_unsubscribe_url_token_is_jwt() {
+        let url = generate_list_unsubscribe_url(
+            "secret-32-chars-xxxxxxxxxxxxxxxxxxxx",
+            "user@example.com",
+            "matrix.example.com",
+            1,
+            "https://frontend.example.com",
+        );
+        let token = url.split("token=").nth(1).unwrap_or("");
+        // JWTs have exactly 2 dots separating the 3 base64url segments
+        assert_eq!(
+            token.matches('.').count(),
+            2,
+            "expected JWT format: header.payload.sig"
+        );
+    }
+
+    // ── UnsubscribeHeader ──────────────────────────────────────────────────────
+
+    #[test]
+    fn unsubscribe_header_from_string() {
+        let h = UnsubscribeHeader::from("<https://example.com/unsub>".to_string());
+        assert_eq!(h.as_ref(), "<https://example.com/unsub>");
+    }
+
+    #[test]
+    fn unsubscribe_header_parse_roundtrip() {
+        let raw = "<https://example.com/unsub>, <mailto:unsub@example.com>";
+        let h = UnsubscribeHeader::parse(raw).unwrap();
+        assert_eq!(h.as_ref(), raw);
+    }
+
+    #[test]
+    fn unsubscribe_header_name_is_list_unsubscribe() {
+        let name = UnsubscribeHeader::name();
+        // HeaderName implements Debug — check it contains the expected name
+        assert!(format!("{name:?}").contains("List-Unsubscribe"));
+    }
+
+    #[test]
+    fn unsubscribe_header_display_does_not_panic() {
+        let h = UnsubscribeHeader::from("<https://example.com/unsub>".to_string());
+        let _hv = h.display();
+    }
+}

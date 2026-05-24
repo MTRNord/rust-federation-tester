@@ -53,3 +53,40 @@ impl Model {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::Duration;
+
+    fn make_model(verification_expires_at: Option<OffsetDateTime>) -> Model {
+        Model {
+            id: "id-1".to_string(),
+            user_id: "user-1".to_string(),
+            email: "test@example.com".to_string(),
+            verified: true,
+            receives_alerts: true,
+            timezone: "UTC".to_string(),
+            verification_token: None,
+            verification_expires_at,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn is_verification_expired_none_returns_true() {
+        assert!(make_model(None).is_verification_expired());
+    }
+
+    #[test]
+    fn is_verification_expired_past_returns_true() {
+        let past = OffsetDateTime::now_utc() - Duration::hours(1);
+        assert!(make_model(Some(past)).is_verification_expired());
+    }
+
+    #[test]
+    fn is_verification_expired_future_returns_false() {
+        let future = OffsetDateTime::now_utc() + Duration::hours(1);
+        assert!(!make_model(Some(future)).is_verification_expired());
+    }
+}

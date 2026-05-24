@@ -1575,3 +1575,158 @@ async fn test_email(
     );
     Ok(StatusCode::ACCEPTED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::alert_status_history;
+
+    // ── is_private_ip ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn private_ip_v4_loopback() {
+        assert!(is_private_ip("127.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_rfc1918_10() {
+        assert!(is_private_ip("10.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_rfc1918_172() {
+        assert!(is_private_ip("172.16.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_rfc1918_192() {
+        assert!(is_private_ip("192.168.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_link_local() {
+        assert!(is_private_ip("169.254.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_broadcast() {
+        assert!(is_private_ip("255.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_unspecified() {
+        assert!(is_private_ip("0.0.0.0".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v4_public_is_false() {
+        assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v6_loopback() {
+        assert!(is_private_ip("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v6_unspecified() {
+        assert!(is_private_ip("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn private_ip_v6_public_is_false() {
+        assert!(!is_private_ip("2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    // ── event_to_display ─────────────────────────────────────────────────────
+
+    fn make_event(
+        event_type: &str,
+        failure_reason: Option<&str>,
+        details: Option<&str>,
+    ) -> alert_status_history::Model {
+        alert_status_history::Model {
+            id: 1,
+            alert_id: 1,
+            server_name: "matrix.example.com".to_string(),
+            event_type: event_type.to_string(),
+            federation_ok: true,
+            failure_count: 0,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            details: details.map(str::to_string),
+            failure_reason: failure_reason.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn event_check_fail_with_reason() {
+        let row = make_event("check_fail", Some("TLS error"), None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Check failed");
+        assert_eq!(detail.as_deref(), Some("TLS error"));
+        assert_eq!(kind, "bad");
+    }
+
+    #[test]
+    fn event_check_fail_without_reason_uses_unknown() {
+        let row = make_event("check_fail", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Check failed");
+        assert_eq!(detail.as_deref(), Some("unknown reason"));
+        assert_eq!(kind, "bad");
+    }
+
+    #[test]
+    fn event_check_ok() {
+        let row = make_event("check_ok", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Check passed");
+        assert!(detail.is_none());
+        assert_eq!(kind, "ok");
+    }
+
+    #[test]
+    fn event_email_failure() {
+        let row = make_event("email_failure", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Failure notification sent");
+        assert!(detail.is_none());
+        assert_eq!(kind, "bad");
+    }
+
+    #[test]
+    fn event_email_recovery() {
+        let row = make_event("email_recovery", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Recovery notification sent");
+        assert!(detail.is_none());
+        assert_eq!(kind, "ok");
+    }
+
+    #[test]
+    fn event_email_reminder() {
+        let row = make_event("email_reminder", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Downtime reminder sent");
+        assert!(detail.is_none());
+        assert_eq!(kind, "info");
+    }
+
+    #[test]
+    fn event_unknown_with_details_uses_details() {
+        let row = make_event("tls_cert_change", None, Some("Certificate rotated"));
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "Certificate rotated");
+        assert!(detail.is_none());
+        assert_eq!(kind, "info");
+    }
+
+    #[test]
+    fn event_unknown_without_details_uses_event_type() {
+        let row = make_event("some_custom_event", None, None);
+        let (desc, detail, kind) = event_to_display(&row);
+        assert_eq!(desc, "some_custom_event");
+        assert!(detail.is_none());
+        assert_eq!(kind, "info");
+    }
+}

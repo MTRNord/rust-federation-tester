@@ -636,3 +636,159 @@ fn deserialize_json_array(json: Option<&str>) -> Vec<String> {
     json.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::response::{Certificate, ConnectionReportData, Keys, Version, WellKnownResult};
+
+    // ── deserialize_json_array ─────────────────────────────────────────────
+
+    #[test]
+    fn deser_none_returns_empty() {
+        assert!(deserialize_json_array(None).is_empty());
+    }
+
+    #[test]
+    fn deser_valid_json_array() {
+        let v = deserialize_json_array(Some(r#"["a","b","c"]"#));
+        assert_eq!(v, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn deser_empty_json_array() {
+        assert!(deserialize_json_array(Some("[]")).is_empty());
+    }
+
+    #[test]
+    fn deser_invalid_json_returns_empty() {
+        assert!(deserialize_json_array(Some("not-json")).is_empty());
+    }
+
+    #[test]
+    fn deser_json_object_not_array_returns_empty() {
+        assert!(deserialize_json_array(Some(r#"{"key":"val"}"#)).is_empty());
+    }
+
+    // ── extract_current_state ──────────────────────────────────────────────
+
+    fn make_report_empty() -> Root {
+        Root::default()
+    }
+
+    fn make_report_with_data() -> Root {
+        let not_after = time::Date::from_calendar_date(2027, time::Month::June, 1)
+            .unwrap()
+            .with_hms(0, 0, 0)
+            .unwrap()
+            .assume_utc();
+
+        let cert = Certificate {
+            sha256fingerprint: "AABBCC".into(),
+            not_after: Some(not_after),
+            ..Certificate::default()
+        };
+        let cr = ConnectionReportData {
+            keys: Keys {
+                server_name: "matrix.example.com".into(),
+                ..Keys::default()
+            },
+            certificates: vec![cert],
+            ..ConnectionReportData::default()
+        };
+        let wk = WellKnownResult {
+            m_server: "matrix.example.com:443".into(),
+            ..WellKnownResult::default()
+        };
+
+        let mut report = Root {
+            version: Version {
+                name: "Synapse".into(),
+                version: "1.95.1".into(),
+            },
+            ..Root::default()
+        };
+        report.connection_reports.insert("1.2.3.4:8448".into(), cr);
+        report
+            .well_known_result
+            .insert("1.2.3.4".into(), wk.clone());
+        report.well_known_result.insert("1.2.3.5".into(), wk);
+        report
+    }
+
+    #[test]
+    fn extract_empty_report_gives_empty_state() {
+        let state = extract_current_state(&make_report_empty());
+        assert!(state.server_name.is_none());
+        assert!(state.well_known_json.is_none());
+        assert!(state.fingerprints_json.is_none());
+        assert!(state.fingerprints.is_empty());
+        assert!(state.well_known.is_empty());
+        assert!(state.earliest_expiry.is_none());
+        assert!(state.cert_details.is_empty());
+    }
+
+    #[test]
+    fn extract_server_name_from_keys() {
+        let state = extract_current_state(&make_report_with_data());
+        assert_eq!(state.server_name.as_deref(), Some("matrix.example.com"));
+    }
+
+    #[test]
+    fn extract_well_known_deduplicates() {
+        // Both IPs return same m_server → dedup'd to one entry
+        let state = extract_current_state(&make_report_with_data());
+        assert_eq!(state.well_known.len(), 1);
+        assert_eq!(state.well_known[0], "matrix.example.com:443");
+    }
+
+    #[test]
+    fn extract_well_known_json_is_serialized() {
+        let state = extract_current_state(&make_report_with_data());
+        assert!(state.well_known_json.is_some());
+        let parsed: Vec<String> =
+            serde_json::from_str(state.well_known_json.as_ref().unwrap()).unwrap();
+        assert_eq!(parsed, vec!["matrix.example.com:443"]);
+    }
+
+    #[test]
+    fn extract_fingerprints_from_certs() {
+        let state = extract_current_state(&make_report_with_data());
+        assert_eq!(state.fingerprints, vec!["AABBCC"]);
+        assert!(state.fingerprints_json.is_some());
+    }
+
+    #[test]
+    fn extract_earliest_expiry() {
+        let state = extract_current_state(&make_report_with_data());
+        assert!(state.earliest_expiry.is_some());
+    }
+
+    #[test]
+    fn extract_cert_details_keyed_by_fingerprint() {
+        let state = extract_current_state(&make_report_with_data());
+        assert!(state.cert_details.contains_key("AABBCC"));
+    }
+
+    #[test]
+    fn extract_version_fields() {
+        let state = extract_current_state(&make_report_with_data());
+        assert_eq!(state.version_name, "Synapse");
+        assert_eq!(state.version_string, "1.95.1");
+    }
+
+    #[test]
+    fn extract_skips_empty_fingerprints() {
+        let mut report = make_report_with_data();
+        // Add a cert with empty fingerprint — should be filtered out
+        let bad_cert = Certificate {
+            sha256fingerprint: "".into(),
+            ..Certificate::default()
+        };
+        if let Some(cr) = report.connection_reports.values_mut().next() {
+            cr.certificates.push(bad_cert);
+        }
+        let state = extract_current_state(&report);
+        assert!(!state.cert_details.contains_key(""));
+    }
+}

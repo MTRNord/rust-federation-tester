@@ -344,3 +344,116 @@ fn is_private_or_local(host: &str) -> bool {
 
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── String-based checks ───────────────────────────────────────────────────
+
+    #[test]
+    fn localhost_is_private() {
+        assert!(is_private_or_local("localhost"));
+    }
+
+    #[test]
+    fn dot_local_suffix_is_private() {
+        assert!(is_private_or_local("myhost.local"));
+    }
+
+    #[test]
+    fn dot_internal_suffix_is_private() {
+        assert!(is_private_or_local("api.internal"));
+    }
+
+    // ── IPv4 checks ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn ipv4_loopback_is_private() {
+        assert!(is_private_or_local("127.0.0.1"));
+    }
+
+    #[test]
+    fn ipv4_rfc1918_10_is_private() {
+        assert!(is_private_or_local("10.0.0.1"));
+    }
+
+    #[test]
+    fn ipv4_rfc1918_172_is_private() {
+        assert!(is_private_or_local("172.16.0.1"));
+    }
+
+    #[test]
+    fn ipv4_rfc1918_192_is_private() {
+        assert!(is_private_or_local("192.168.1.1"));
+    }
+
+    #[test]
+    fn ipv4_link_local_is_private() {
+        assert!(is_private_or_local("169.254.1.1"));
+    }
+
+    #[test]
+    fn ipv4_broadcast_is_private() {
+        assert!(is_private_or_local("255.255.255.255"));
+    }
+
+    #[test]
+    fn ipv4_unspecified_is_private() {
+        assert!(is_private_or_local("0.0.0.0"));
+    }
+
+    #[test]
+    fn ipv4_public_google_dns_is_not_private() {
+        assert!(!is_private_or_local("8.8.8.8"));
+    }
+
+    #[test]
+    fn ipv4_public_cloudflare_is_not_private() {
+        assert!(!is_private_or_local("1.1.1.1"));
+    }
+
+    // ── IPv6 checks ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn ipv6_loopback_is_private() {
+        assert!(is_private_or_local("::1"));
+    }
+
+    #[test]
+    fn ipv6_unspecified_is_private() {
+        assert!(is_private_or_local("::"));
+    }
+
+    #[test]
+    fn ipv6_unique_local_fc00_is_private() {
+        assert!(is_private_or_local("fc00::1"));
+    }
+
+    #[test]
+    fn ipv6_unique_local_fd00_is_private() {
+        assert!(is_private_or_local("fd00::1"));
+    }
+
+    #[test]
+    fn ipv6_link_local_is_private() {
+        assert!(is_private_or_local("fe80::1"));
+    }
+
+    #[test]
+    fn ipv6_public_google_is_not_private() {
+        assert!(!is_private_or_local("2001:4860:4860::8888"));
+    }
+
+    // ── Domain names ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn normal_domain_is_not_private() {
+        assert!(!is_private_or_local("example.com"));
+    }
+
+    #[test]
+    fn subdomain_is_not_private() {
+        assert!(!is_private_or_local("matrix.example.com"));
+    }
+}

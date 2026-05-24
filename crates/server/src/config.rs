@@ -649,4 +649,54 @@ mod tests {
         assert!("192.168.0.0/33".parse::<IpNet>().is_err());
         assert!("2001:db8::/129".parse::<IpNet>().is_err());
     }
+
+    #[test]
+    fn parse_rejects_missing_slash() {
+        assert!("192.168.0.0".parse::<IpNet>().is_err());
+    }
+
+    #[test]
+    fn parse_rejects_invalid_ip() {
+        assert!("not.an.ip/24".parse::<IpNet>().is_err());
+    }
+
+    #[test]
+    fn ipv4_slash32_single_host() {
+        let net: IpNet = "10.0.0.1/32".parse().unwrap();
+        assert!(net.contains(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!net.contains(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2))));
+    }
+
+    #[test]
+    fn ipv6_slash128_single_host() {
+        let net: IpNet = "2001:db8::1/128".parse().unwrap();
+        assert!(net.contains(&IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())));
+        assert!(!net.contains(&IpAddr::V6("2001:db8::2".parse::<Ipv6Addr>().unwrap())));
+    }
+
+    #[test]
+    fn cross_family_never_matches() {
+        // IPv4 net vs IPv6 address and vice versa
+        let v4_net: IpNet = "192.168.1.0/24".parse().unwrap();
+        assert!(!v4_net.contains(&IpAddr::V6("::1".parse::<Ipv6Addr>().unwrap())));
+
+        let v6_net: IpNet = "::1/128".parse().unwrap();
+        assert!(!v6_net.contains(&IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+    }
+
+    #[test]
+    fn ipv6_slash0_matches_all() {
+        let net: IpNet = "::/0".parse().unwrap();
+        assert!(net.contains(&IpAddr::V6("::1".parse::<Ipv6Addr>().unwrap())));
+        assert!(net.contains(&IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())));
+        assert!(net.contains(&IpAddr::V6("fe80::1".parse::<Ipv6Addr>().unwrap())));
+    }
+
+    #[test]
+    fn ipv6_partial_prefix_boundary() {
+        // /48 — matches first 48 bits (6 bytes)
+        let net: IpNet = "2001:db8:cafe::/48".parse().unwrap();
+        assert!(net.contains(&IpAddr::V6("2001:db8:cafe::1".parse::<Ipv6Addr>().unwrap())));
+        assert!(!net.contains(&IpAddr::V6("2001:db8:dead::1".parse::<Ipv6Addr>().unwrap())));
+    }
 }

@@ -56,6 +56,19 @@ impl EmailGuard {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn noop_always_grants_claim() {
+        let guard = EmailGuard::Noop;
+        assert!(guard.try_claim(1, "failure").await);
+        assert!(guard.try_claim(42, "recovery").await);
+        assert!(guard.try_claim(0, "reminder").await);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Redis/Valkey implementation
 // ---------------------------------------------------------------------------

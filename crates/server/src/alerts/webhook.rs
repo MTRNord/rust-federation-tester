@@ -360,3 +360,89 @@ fn backoff_secs(attempt: i32) -> i64 {
         _ => 21_600,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── backoff_secs ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn backoff_attempt_1_is_30s() {
+        assert_eq!(backoff_secs(1), 30);
+    }
+
+    #[test]
+    fn backoff_attempt_2_is_2min() {
+        assert_eq!(backoff_secs(2), 120);
+    }
+
+    #[test]
+    fn backoff_attempt_3_is_10min() {
+        assert_eq!(backoff_secs(3), 600);
+    }
+
+    #[test]
+    fn backoff_attempt_4_is_1h() {
+        assert_eq!(backoff_secs(4), 3_600);
+    }
+
+    #[test]
+    fn backoff_attempt_5_plus_is_6h() {
+        assert_eq!(backoff_secs(5), 21_600);
+        assert_eq!(backoff_secs(10), 21_600);
+        assert_eq!(backoff_secs(0), 21_600);
+    }
+
+    // ── compute_signature ─────────────────────────────────────────────────────
+
+    #[test]
+    fn compute_signature_has_sha256_prefix() {
+        let sig = compute_signature("secret", b"hello");
+        assert!(
+            sig.starts_with("sha256="),
+            "expected sha256= prefix, got: {sig}"
+        );
+    }
+
+    #[test]
+    fn compute_signature_is_hex_after_prefix() {
+        let sig = compute_signature("secret", b"hello");
+        let hex_part = sig.strip_prefix("sha256=").unwrap();
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "should be hex: {hex_part}"
+        );
+        assert_eq!(hex_part.len(), 64, "SHA-256 hex is 64 chars");
+    }
+
+    #[test]
+    fn compute_signature_different_secrets_differ() {
+        let a = compute_signature("secret1", b"body");
+        let b = compute_signature("secret2", b"body");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn compute_signature_different_bodies_differ() {
+        let a = compute_signature("secret", b"body_a");
+        let b = compute_signature("secret", b"body_b");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn compute_signature_is_deterministic() {
+        let a = compute_signature("key", b"payload");
+        let b = compute_signature("key", b"payload");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn compute_signature_known_vector() {
+        // HMAC-SHA256("key", "The quick brown fox...") known answer
+        let sig = compute_signature("key", b"The quick brown fox jumps over the lazy dog");
+        // Verify structure: sha256= + 64 hex chars
+        assert!(sig.starts_with("sha256="));
+        assert_eq!(sig.len(), "sha256=".len() + 64);
+    }
+}

@@ -402,4 +402,105 @@ mod tests {
             "raw HTML tags must not appear in output"
         );
     }
+
+    #[test]
+    fn renders_blockquote_with_style() {
+        let html = render_markdown_excerpt("> Important note here");
+        assert!(html.contains("blockquote"), "blockquote element expected");
+        assert!(
+            html.contains("border-left"),
+            "blockquote should have border-left style"
+        );
+    }
+
+    #[test]
+    fn renders_code_block() {
+        let html = render_markdown_excerpt("```\nsome code here\n```");
+        assert!(html.contains("some code here"));
+    }
+
+    #[test]
+    fn image_replaced_by_alt_text() {
+        let html = render_markdown_excerpt("![screenshot of fix](https://example.com/img.png)");
+        assert!(!html.contains("<img"), "img tags must not appear");
+        assert!(html.contains("screenshot of fix"), "alt text should appear");
+    }
+
+    #[test]
+    fn image_with_no_alt_text_dropped() {
+        let html = render_markdown_excerpt("![](https://example.com/img.png)");
+        assert!(!html.contains("<img"), "img tags must not appear");
+    }
+
+    #[test]
+    fn renders_ordered_list() {
+        let html = render_markdown_excerpt("1. First\n2. Second\n3. Third");
+        assert!(html.contains("<ol"), "ordered list element expected");
+        assert!(html.contains("First"));
+        assert!(html.contains("Second"));
+    }
+
+    #[test]
+    fn apply_email_styles_replaces_p_tag() {
+        let styled = apply_email_styles("<p>hello</p>");
+        assert!(
+            styled.contains("margin:0 0 8px"),
+            "p should get margin style"
+        );
+        assert!(styled.contains("hello"));
+        assert!(!styled.contains("<p>"), "bare <p> should be replaced");
+    }
+
+    #[test]
+    fn apply_email_styles_replaces_ul_and_li() {
+        let styled = apply_email_styles("<ul><li>item</li></ul>");
+        assert!(
+            styled.contains("padding-left:18px"),
+            "ul should get padding style"
+        );
+        assert!(
+            styled.contains("margin-bottom:2px"),
+            "li should get margin style"
+        );
+    }
+
+    #[test]
+    fn apply_email_styles_replaces_all_headings() {
+        for tag in ["h1", "h2", "h3", "h4", "h5", "h6"] {
+            let input = format!("<{tag}>Title</{tag}>");
+            let styled = apply_email_styles(&input);
+            assert!(
+                styled.contains("font-weight:700"),
+                "{tag} should get bold style"
+            );
+            assert!(
+                !styled.contains(&format!("<{tag}>")),
+                "bare {tag} should be replaced"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_email_styles_replaces_links() {
+        let styled = apply_email_styles("<a href=\"x\">link</a>");
+        assert!(
+            styled.contains("color:#133A60"),
+            "links should get color style"
+        );
+    }
+
+    #[test]
+    fn empty_body_renders_empty() {
+        let html = render_markdown_excerpt("");
+        assert!(
+            html.is_empty() || !html.contains("…"),
+            "empty body should not be truncated"
+        );
+    }
+
+    #[test]
+    fn renders_strikethrough() {
+        let html = render_markdown_excerpt("~~removed~~");
+        assert!(html.contains("removed"));
+    }
 }

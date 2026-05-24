@@ -140,3 +140,44 @@ pub fn redis_backed(
         )),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── redact_redis_url ──────────────────────────────────────────────────────
+
+    #[test]
+    fn redact_url_with_password() {
+        let url = "redis://:secret@localhost:6379/0";
+        let redacted = redact_redis_url(url);
+        assert!(!redacted.contains("secret"), "password should be redacted");
+        assert!(
+            redacted.contains("***"),
+            "password placeholder should be present"
+        );
+        assert!(redacted.contains("localhost"), "host should be preserved");
+    }
+
+    #[test]
+    fn redact_url_without_password_unchanged() {
+        let url = "redis://localhost:6379/0";
+        assert_eq!(redact_redis_url(url), url);
+    }
+
+    #[test]
+    fn redact_invalid_url_returns_original() {
+        let url = "not a url at all :::";
+        assert_eq!(redact_redis_url(url), url);
+    }
+
+    // ── in_memory ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn in_memory_returns_noop_variants() {
+        let (reg, lock, guard) = in_memory();
+        assert!(matches!(reg, Registry::InMemory(_)));
+        assert!(matches!(lock, Lock::Noop));
+        assert!(matches!(guard, EmailGuard::Noop));
+    }
+}

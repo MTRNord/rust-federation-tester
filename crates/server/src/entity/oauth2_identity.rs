@@ -100,3 +100,111 @@ impl Related<super::oauth2_user::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::Duration;
+
+    // ── IdentityProvider::Display ─────────────────────────────────────────────
+
+    #[test]
+    fn display_email() {
+        assert_eq!(IdentityProvider::Email.to_string(), "email");
+    }
+
+    #[test]
+    fn display_google() {
+        assert_eq!(IdentityProvider::Google.to_string(), "google");
+    }
+
+    #[test]
+    fn display_github() {
+        assert_eq!(IdentityProvider::GitHub.to_string(), "github");
+    }
+
+    #[test]
+    fn display_oidc() {
+        assert_eq!(
+            IdentityProvider::Oidc("keycloak".to_string()).to_string(),
+            "oidc:keycloak"
+        );
+    }
+
+    // ── IdentityProvider::from ────────────────────────────────────────────────
+
+    #[test]
+    fn from_str_email() {
+        assert_eq!(IdentityProvider::from("email"), IdentityProvider::Email);
+    }
+
+    #[test]
+    fn from_str_google() {
+        assert_eq!(IdentityProvider::from("google"), IdentityProvider::Google);
+    }
+
+    #[test]
+    fn from_str_github() {
+        assert_eq!(IdentityProvider::from("github"), IdentityProvider::GitHub);
+    }
+
+    #[test]
+    fn from_str_oidc_prefixed() {
+        assert_eq!(
+            IdentityProvider::from("oidc:keycloak"),
+            IdentityProvider::Oidc("keycloak".to_string())
+        );
+    }
+
+    #[test]
+    fn from_str_unknown_becomes_oidc() {
+        assert_eq!(
+            IdentityProvider::from("custom-provider"),
+            IdentityProvider::Oidc("custom-provider".to_string())
+        );
+    }
+
+    // ── Model::provider_type and is_token_expired ─────────────────────────────
+
+    fn make_model(provider: &str, token_expires_at: Option<OffsetDateTime>) -> Model {
+        Model {
+            id: "id-1".to_string(),
+            user_id: "user-1".to_string(),
+            provider: provider.to_string(),
+            subject: "subject-123".to_string(),
+            email: None,
+            name: None,
+            access_token: None,
+            refresh_token: None,
+            token_expires_at,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn provider_type_returns_correct_variant() {
+        let m = make_model("google", None);
+        assert_eq!(m.provider_type(), IdentityProvider::Google);
+    }
+
+    #[test]
+    fn is_token_expired_none_returns_false() {
+        let m = make_model("email", None);
+        assert!(!m.is_token_expired());
+    }
+
+    #[test]
+    fn is_token_expired_future_returns_false() {
+        let future = OffsetDateTime::now_utc() + Duration::hours(1);
+        let m = make_model("email", Some(future));
+        assert!(!m.is_token_expired());
+    }
+
+    #[test]
+    fn is_token_expired_past_returns_true() {
+        let past = OffsetDateTime::now_utc() - Duration::hours(1);
+        let m = make_model("email", Some(past));
+        assert!(m.is_token_expired());
+    }
+}
