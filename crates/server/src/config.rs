@@ -83,6 +83,12 @@ pub struct AppConfig {
     /// If not provided, defaults to common private & loopback ranges.
     #[serde(default = "default_debug_allowed_nets")]
     pub debug_allowed_nets: Vec<IpNet>,
+    /// CIDR networks of trusted reverse proxies. When the direct TCP connection comes from one of
+    /// these CIDRs, the rightmost `X-Forwarded-For` value is used as the client IP for
+    /// `debug_allowed_nets` checking. If empty (the default), `X-Forwarded-For` is ignored and
+    /// only the real connection IP is used.
+    #[serde(default)]
+    pub trusted_proxy_nets: Vec<IpNet>,
     #[serde(default)]
     pub statistics: StatisticsConfig,
     #[serde(default)]

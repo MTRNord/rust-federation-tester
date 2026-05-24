@@ -579,6 +579,7 @@ mod tests {
             frontend_url: "http://localhost".into(),
             magic_token_secret: "12345678901234567890123456789012".into(),
             debug_allowed_nets: vec![],
+            trusted_proxy_nets: vec![],
             statistics: StatisticsConfig {
                 enabled: stats_enabled,
                 prometheus_enabled: true,

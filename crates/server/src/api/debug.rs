@@ -41,15 +41,24 @@ pub fn router() -> OpenApiRouter {
 
 /// Check if the client IP is allowed to access debug endpoints.
 fn is_allowed(resources: &AppResources, addr: &SocketAddr, headers: &HeaderMap) -> bool {
-    // Get client IP from X-Forwarded-For or socket address
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-        .unwrap_or(addr.ip());
+    let direct_ip = addr.ip();
+    let client_ip = if resources
+        .config
+        .trusted_proxy_nets
+        .iter()
+        .any(|net| net.contains(&direct_ip))
+    {
+        // Direct connection is from a trusted proxy — use rightmost XFF value.
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next_back())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+            .unwrap_or(direct_ip)
+    } else {
+        direct_ip
+    };
 
-    // Check if the client IP is in the allowed networks
     resources
         .config
         .debug_allowed_nets

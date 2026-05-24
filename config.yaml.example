@@ -56,6 +56,15 @@ oauth2:
 ## Set DEBUG_MODE=true (or 1 or yes) in the environment to enable.
 # (env var: DEBUG_MODE)
 
+## CIDRs of trusted reverse proxies (e.g. an nginx or Caddy instance in front of the server).
+## When the direct TCP connection comes from one of these CIDRs, the rightmost
+## X-Forwarded-For header value is used as the real client IP for debug_allowed_nets checks.
+## If this list is empty (the default), X-Forwarded-For is ignored entirely and only the
+## real connection IP is used. Leave empty if you run no reverse proxy.
+#trusted_proxy_nets:
+#  - "127.0.0.1/32"
+#  - "::1/128"
+
 ## Federation check settings
 # Network timeout in seconds for each individual federation check (DNS, TLS, HTTP).
 # Default: 3 — suitable for the public internet.

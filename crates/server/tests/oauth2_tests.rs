@@ -71,6 +71,7 @@ fn create_test_config() -> AppConfig {
         frontend_url: "http://localhost:3000".into(),
         magic_token_secret: "12345678901234567890123456789012".into(),
         debug_allowed_nets: vec![],
+        trusted_proxy_nets: vec![],
         statistics: StatisticsConfig::default(),
         oauth2: OAuth2Config {
             enabled: true,
