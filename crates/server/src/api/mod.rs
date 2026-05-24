@@ -160,6 +160,7 @@ pub async fn start_webserver<P: ConnectionProvider>(
             },
             router.into_make_service_with_connect_info::<UdsConnectInfo>(),
         )
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?
     } else {
@@ -170,11 +171,38 @@ pub async fn start_webserver<P: ConnectionProvider>(
             },
             router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| color_eyre::Report::msg(format!("Failed to start server: {e}")))?
     };
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let sigterm = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let sigterm = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = sigterm => {},
+    }
+
+    tracing::info!("Shutdown signal received, draining connections");
 }
 
 #[derive(Clone, Debug)]
