@@ -145,11 +145,20 @@ pub struct Checks {
     pub server_version_parses: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum SignatureCheckError {
+    Mismatch,
+    NonCanonicalJson,
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct Ed25519Check {
     pub valid_ed25519: bool,
     pub matching_signature: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<SignatureCheckError>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

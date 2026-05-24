@@ -112,6 +112,7 @@ fn test_ed25519_check() {
     let check = Ed25519Check {
         valid_ed25519: true,
         matching_signature: false,
+        error: None,
     };
 
     let json = serde_json::to_string(&check).expect("serialization failed");

@@ -113,6 +113,27 @@ enum SigError {
     BadKeyPoint,
     /// Signature parsed fine but failed cryptographic verification.
     Mismatch,
+    /// JSON contains floats, -0, or integers outside [-(2^53)+1, (2^53)-1].
+    NonCanonicalNumbers,
+}
+
+fn validate_canonical_numbers(value: &serde_json::Value) -> Result<(), SigError> {
+    match value {
+        serde_json::Value::Number(n) => {
+            if n.is_f64() {
+                return Err(SigError::NonCanonicalNumbers);
+            }
+            const MIN: i64 = -(1i64 << 53) + 1;
+            const MAX: u64 = (1u64 << 53) - 1;
+            if n.as_i64().is_some_and(|i| i < MIN) || n.as_u64().is_some_and(|u| u > MAX) {
+                return Err(SigError::NonCanonicalNumbers);
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => map.values().try_for_each(validate_canonical_numbers),
+        serde_json::Value::Array(arr) => arr.iter().try_for_each(validate_canonical_numbers),
+        _ => Ok(()),
+    }
 }
 
 /// Pure-logic inner helper: no logging, all errors propagated via `?`.
@@ -139,6 +160,8 @@ fn verify_ed25519_inner(
         return Err(SigError::SigWrongLen(signature_bytes.len()));
     }
 
+    validate_canonical_numbers(&json_keys)?;
+
     let mut json_clone = json_keys.clone();
     if let Some(obj) = json_clone.as_object_mut() {
         obj.remove("unsigned");
@@ -154,68 +177,91 @@ fn verify_ed25519_inner(
         .map_err(|_| SigError::Mismatch)
 }
 
+/// Maps a `SigError` to a (tracing-event-name, human-message, is_non_canonical) tuple.
+/// `SigWrongLen` must be handled by the caller before calling this.
+fn sig_error_info(e: &SigError) -> (&'static str, &'static str, bool) {
+    match e {
+        SigError::JsonParse => (
+            "federation.keys.json_parse_failed",
+            "Failed to parse keys_string for signature verification",
+            false,
+        ),
+        SigError::SigDecode => (
+            "federation.keys.signature_decode_failed",
+            "Failed to base64-decode signature",
+            false,
+        ),
+        SigError::Canonicalize => (
+            "federation.keys.canonicalization_failed",
+            "Failed to serialize canonical JSON for signature verification",
+            false,
+        ),
+        SigError::SigParse => (
+            "federation.keys.signature_parse_failed",
+            "Failed to parse ed25519 Signature from bytes",
+            false,
+        ),
+        SigError::BadKeyPoint => (
+            "federation.keys.invalid_public_key_point",
+            "Public key bytes are not a valid ed25519 curve point",
+            false,
+        ),
+        SigError::Mismatch => (
+            "federation.keys.signature_verification_failed",
+            "Signature verification failed",
+            false,
+        ),
+        SigError::NonCanonicalNumbers => (
+            "federation.keys.non_canonical_numbers",
+            "Key response contains floats, -0, or out-of-range integers — not valid Matrix canonical JSON",
+            true,
+        ),
+        SigError::SigWrongLen(_) => unreachable!("handled before sig_error_info"),
+    }
+}
+
+fn log_sig_error(key_id: &str, err: SigError) -> crate::response::SignatureCheckError {
+    if let SigError::SigWrongLen(n) = err {
+        tracing::error!(
+            name = "federation.keys.signature_wrong_length",
+            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+            key_id = %key_id,
+            len = n,
+            message = "Signature bytes have wrong length (expected 64)"
+        );
+        return crate::response::SignatureCheckError::Mismatch;
+    }
+    let (event_name, msg, non_canonical) = sig_error_info(&err);
+    tracing::error!(
+        name = event_name,
+        target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+        key_id = %key_id,
+        message = msg
+    );
+    if non_canonical {
+        crate::response::SignatureCheckError::NonCanonicalJson
+    } else {
+        crate::response::SignatureCheckError::Mismatch
+    }
+}
+
 /// Verify one ed25519 signature, logging the specific failure reason on error.
 ///
-/// Returns `true` when the signature matches. All failure paths are handled
-/// gracefully — never panics.
+/// Returns `None` on success, `Some(error)` on any failure. All failure paths
+/// are handled gracefully — never panics.
 #[tracing::instrument(skip(keys_string))]
 fn verify_ed25519_signature(
     key_id: &str,
     public_key_bytes: &[u8],
     server_name: &str,
     keys_string: &str,
-) -> bool {
+) -> Option<crate::response::SignatureCheckError> {
     let Ok(key_array) = public_key_bytes.try_into() else {
-        return false;
+        return Some(crate::response::SignatureCheckError::Mismatch);
     };
     match verify_ed25519_inner(key_array, server_name, key_id, keys_string) {
-        Ok(()) => true,
-        Err(SigError::SigWrongLen(n)) => {
-            tracing::error!(
-                name = "federation.keys.signature_wrong_length",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                key_id = %key_id,
-                len = n,
-                message = "Signature bytes have wrong length (expected 64)"
-            );
-            false
-        }
-        Err(e) => {
-            let (event_name, msg) = match e {
-                SigError::JsonParse => (
-                    "federation.keys.json_parse_failed",
-                    "Failed to parse keys_string for signature verification",
-                ),
-                SigError::SigDecode => (
-                    "federation.keys.signature_decode_failed",
-                    "Failed to base64-decode signature",
-                ),
-                SigError::Canonicalize => (
-                    "federation.keys.canonicalization_failed",
-                    "Failed to serialize canonical JSON for signature verification",
-                ),
-                SigError::SigParse => (
-                    "federation.keys.signature_parse_failed",
-                    "Failed to parse ed25519 Signature from bytes",
-                ),
-                SigError::BadKeyPoint => (
-                    "federation.keys.invalid_public_key_point",
-                    "Public key bytes are not a valid ed25519 curve point",
-                ),
-                SigError::Mismatch => (
-                    "federation.keys.signature_verification_failed",
-                    "Signature verification failed",
-                ),
-                SigError::SigWrongLen(_) => unreachable!("handled above"),
-            };
-            tracing::error!(
-                name = event_name,
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                key_id = %key_id,
-                message = msg
-            );
-            false
-        }
+        Ok(()) => None,
+        Err(e) => Some(log_sig_error(key_id, e)),
     }
 }
 
@@ -262,13 +308,18 @@ fn process_ed25519_key(
         );
     }
 
-    let matching_signature =
-        valid_length && verify_ed25519_signature(key_id, &public_key, server_name, keys_string);
+    let sig_error = if valid_length {
+        verify_ed25519_signature(key_id, &public_key, server_name, keys_string)
+    } else {
+        None
+    };
+    let matching_signature = valid_length && sig_error.is_none();
 
     Some(Ed25519KeyResult {
         check: Ed25519Check {
             valid_ed25519: valid_length,
             matching_signature,
+            error: sig_error,
         },
         valid_key_value: matching_signature.then(|| key_data.key.clone()),
     })
