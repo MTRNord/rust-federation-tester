@@ -339,15 +339,11 @@ async fn main() -> color_eyre::eyre::Result<()> {
         {
             match distributed::redis_backed(&config.redis) {
                 Ok(triplet) => {
-                    tracing::info!(
-                        url = %config.redis.url,
-                        "Distributed coordination: Redis/Valkey connected"
-                    );
+                    tracing::info!("Distributed coordination: Redis/Valkey connected");
                     triplet
                 }
                 Err(e) => {
                     tracing::error!(
-                        url = %config.redis.url,
                         error = %e,
                         "Failed to create Redis/Valkey pool; falling back to in-memory single-instance mode"
                     );

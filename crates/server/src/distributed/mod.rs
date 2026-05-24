@@ -57,6 +57,19 @@ pub use registry::Registry;
 
 use crate::config::RedisConfig;
 
+/// Replaces the password in a Redis URL with `***` for safe logging.
+/// Returns the original URL unchanged if it cannot be parsed.
+fn redact_redis_url(url: &str) -> String {
+    if let Ok(mut parsed) = url::Url::parse(url) {
+        if parsed.password().is_some() {
+            let _ = parsed.set_password(Some("***"));
+        }
+        parsed.to_string()
+    } else {
+        url.to_string()
+    }
+}
+
 /// Returns the in-memory (single-instance) triplet.
 ///
 /// - [`Registry::InMemory`] — `Arc<Mutex<HashMap>>` confirmation registry
@@ -101,9 +114,10 @@ pub fn redis_backed(
     let pool = pool_cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     let instance_id = Uuid::new_v4().to_string();
 
+    let redacted_url = redact_redis_url(&config.url);
     tracing::info!(
         instance_id = %instance_id,
-        url = %config.url,
+        url = %redacted_url,
         pool_size = config.pool_size,
         key_prefix = %config.key_prefix,
         "Created Redis/Valkey connection pool for distributed coordination"
