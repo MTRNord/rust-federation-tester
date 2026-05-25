@@ -8,7 +8,7 @@ on:
       - "v*"
 
 jobs:
-  # Build each platform in parallel using matrix strategy
+  # Build each (platform × feature-set) combination in parallel
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -19,6 +19,23 @@ jobs:
         platform:
           - linux/amd64
           - linux/arm64
+        features:
+          # Default: otel + otlp + redis-backend  →  main / latest / vX.Y.Z / X.Y
+          - name: default
+            cargo_flags: ""
+            tag_suffix: ""
+          # No Redis: otel + otlp only  →  main-no-redis / latest-no-redis / …
+          - name: no-redis
+            cargo_flags: "--no-default-features --features otel,otlp"
+            tag_suffix: "-no-redis"
+          # No OTel: redis-backend only  →  main-no-otel / latest-no-otel / …
+          - name: no-otel
+            cargo_flags: "--no-default-features --features redis-backend"
+            tag_suffix: "-no-otel"
+          # Minimal: no optional deps  →  main-minimal / latest-minimal / …
+          - name: minimal
+            cargo_flags: "--no-default-features"
+            tag_suffix: "-minimal"
 
     steps:
       - name: Checkout code
@@ -48,6 +65,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/mtrnord/rust-federation-tester
+          flavor: |
+            suffix=${{ matrix.features.tag_suffix }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -60,9 +79,11 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: |
+            CARGO_FEATURES=${{ matrix.features.cargo_flags }}
           outputs: type=image,name=ghcr.io/mtrnord/rust-federation-tester,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ steps.platform.outputs.pair }}
-          cache-to: type=gha,mode=max,scope=${{ steps.platform.outputs.pair }}
+          cache-from: type=gha,scope=${{ steps.platform.outputs.pair }}-${{ matrix.features.name }}
+          cache-to: type=gha,mode=max,scope=${{ steps.platform.outputs.pair }}-${{ matrix.features.name }}
 
       - name: Export digest
         run: |
@@ -73,25 +94,36 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ steps.platform.outputs.pair }}
+          name: digests-${{ steps.platform.outputs.pair }}-${{ matrix.features.name }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # Merge all platform images into a single multi-arch manifest
+  # Merge platform digests into a multi-arch manifest — one per feature-set
   merge:
     runs-on: ubuntu-latest
     needs: build
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        features:
+          - name: default
+            tag_suffix: ""
+          - name: no-redis
+            tag_suffix: "-no-redis"
+          - name: no-otel
+            tag_suffix: "-no-otel"
+          - name: minimal
+            tag_suffix: "-minimal"
 
     steps:
-      - name: Download digests
+      - name: Download digests for this feature set
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digests-*
+          pattern: digests-*-${{ matrix.features.name }}
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -102,6 +134,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/mtrnord/rust-federation-tester
+          flavor: |
+            suffix=${{ matrix.features.tag_suffix }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
