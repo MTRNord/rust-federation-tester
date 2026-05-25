@@ -1,0 +1,73 @@
+name: Coverage Comment
+
+# Triggered after the Coverage workflow finishes. Runs in the base-repo context
+# (not the fork's), so GITHUB_TOKEN has pull-requests: write even for fork PRs.
+on:
+  workflow_run:
+    workflows: ["Coverage"]
+    types: [completed]
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    # Only comment when the coverage workflow ran for a PR and succeeded.
+    if: |
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      pull-requests: write
+      actions: read
+
+    steps:
+      - name: Download PR info artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-info
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: /tmp/pr-info
+
+      - name: Post coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const prNumber = parseInt(fs.readFileSync('/tmp/pr-info/pr_number.txt', 'utf8').trim());
+            const coverage  = fs.readFileSync('/tmp/pr-info/coverage.txt', 'utf8').trim();
+            const runId     = '${{ github.event.workflow_run.id }}';
+
+            const body = [
+              '## Coverage Report',
+              '',
+              `**Current Coverage: ${coverage}%**`,
+              '',
+              `📊 [View detailed HTML report](../../actions/runs/${runId})`,
+              '',
+              'Target: 60-80% coverage',
+            ].join('\n');
+
+            // Update an existing bot comment rather than adding a new one each push.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: prNumber,
+            });
+            const existing = comments.find(
+              c => c.user.type === 'Bot' && c.body.includes('## Coverage Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }

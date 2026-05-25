@@ -12,8 +12,6 @@ on:
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -59,23 +57,21 @@ jobs:
           name: coverage-lcov-${{ github.sha }}
           path: lcov.info
 
-      - name: Comment coverage on PR
+      # Save PR number + coverage for the comment workflow.
+      # The comment is posted by coverage-comment.yml (workflow_run trigger) which
+      # runs in the base repo context and therefore has pull-requests: write even
+      # for fork PRs. This job intentionally has no write permissions.
+      - name: Save PR info for comment workflow
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        run: |
+          mkdir -p /tmp/pr-info
+          echo "${{ github.event.pull_request.number }}" > /tmp/pr-info/pr_number.txt
+          echo "${{ steps.coverage.outputs.percentage }}"  > /tmp/pr-info/coverage.txt
+
+      - name: Upload PR info artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const coverage = '${{ steps.coverage.outputs.percentage }}';
-            const comment = `## Coverage Report
-
-            **Current Coverage: ${coverage}%**
-
-            📊 [View detailed HTML report](../../actions/runs/${{ github.run_id }})
-
-            Target: 60-80% coverage`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+          name: pr-info
+          path: /tmp/pr-info/
+          retention-days: 1
