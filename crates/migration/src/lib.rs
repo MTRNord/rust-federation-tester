@@ -26,6 +26,7 @@ mod m20260506_000000_add_missing_indexes;
 mod m20260513_000001_add_quiet_hours;
 mod m20260513_000002_add_email_timezone;
 mod m20260601_000000_add_webhook_support;
+mod m20260601_000001_fix_email_log_failure_count_nullable;
 
 pub struct Migrator;
 
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260513_000001_add_quiet_hours::Migration),
             Box::new(m20260513_000002_add_email_timezone::Migration),
             Box::new(m20260601_000000_add_webhook_support::Migration),
+            Box::new(m20260601_000001_fix_email_log_failure_count_nullable::Migration),
         ]
     }
 }
