@@ -48,7 +48,7 @@ COPY . .
 RUN case "$TARGETPLATFORM" in \
       "linux/amd64") TARGET_TRIPLE=x86_64-unknown-linux-gnu; \
         cargo build --release $CARGO_FEATURES --package rust-federation-tester --target $TARGET_TRIPLE && \
-        cargo build --release $CARGO_FEATURES --package migration --target $TARGET_TRIPLE ;; \
+        cargo build --release --package migration --target $TARGET_TRIPLE ;; \
       "linux/arm64") TARGET_TRIPLE=aarch64-unknown-linux-gnu; \
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
         CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
@@ -57,7 +57,7 @@ RUN case "$TARGETPLATFORM" in \
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
         CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
         CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
-        cargo build --release $CARGO_FEATURES --package migration --target $TARGET_TRIPLE ;; \
+        cargo build --release --package migration --target $TARGET_TRIPLE ;; \
       *) echo "Unsupported platform: $TARGETPLATFORM"; exit 1 ;; \
     esac
 
