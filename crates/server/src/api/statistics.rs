@@ -113,9 +113,6 @@ mod tests {
         let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
         Migrator::up(db.as_ref(), None).await.unwrap();
 
-        let mut stats_cfg = crate::config::StatisticsConfig::default();
-        stats_cfg.enabled = stats_enabled;
-
         let config = Arc::new(crate::config::AppConfig {
             database_url: "sqlite::memory:".to_string(),
             listen_addr: None,
@@ -124,7 +121,10 @@ mod tests {
             magic_token_secret: "s".to_string(),
             debug_allowed_nets: vec![],
             trusted_proxy_nets: vec![],
-            statistics: stats_cfg,
+            statistics: crate::config::StatisticsConfig {
+                enabled: stats_enabled,
+                ..Default::default()
+            },
             oauth2: Default::default(),
             federation_timeout_secs: 3,
             allow_private_targets: false,

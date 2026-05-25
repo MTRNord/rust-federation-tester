@@ -779,8 +779,10 @@ mod tests {
 
     #[test]
     fn smtp_config_debug_redacts_password() {
-        let mut cfg = SmtpConfig::default();
-        cfg.password = "secret123".to_string();
+        let cfg = SmtpConfig {
+            password: "secret123".to_string(),
+            ..Default::default()
+        };
         let debug_str = format!("{cfg:?}");
         assert!(
             !debug_str.contains("secret123"),
@@ -802,8 +804,10 @@ mod tests {
 
     #[test]
     fn oauth2_config_debug_redacts_secret() {
-        let mut cfg = OAuth2Config::default();
-        cfg.account_client_secret = "topsecret".to_string();
+        let cfg = OAuth2Config {
+            account_client_secret: "topsecret".to_string(),
+            ..Default::default()
+        };
         let debug_str = format!("{cfg:?}");
         assert!(
             !debug_str.contains("topsecret"),
@@ -836,8 +840,10 @@ mod tests {
 
     #[test]
     fn redis_config_debug_redacts_url() {
-        let mut cfg = RedisConfig::default();
-        cfg.url = "redis://:password@localhost:6379".to_string();
+        let cfg = RedisConfig {
+            url: "redis://:password@localhost:6379".to_string(),
+            ..Default::default()
+        };
         let debug_str = format!("{cfg:?}");
         assert!(
             !debug_str.contains("password"),

@@ -44,6 +44,22 @@ pub async fn prune_old_email_log_entries(resources: &AppResources) {
     }
 }
 
+/// Spawn a background task that prunes old email log entries every 24 hours.
+#[tracing::instrument(skip(resources))]
+pub fn spawn_email_log_retention_task(resources: std::sync::Arc<AppResources>) {
+    let days = resources.config.email_log_retention_days;
+    if days == 0 {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_hours(24));
+        loop {
+            interval.tick().await;
+            prune_old_email_log_entries(&resources).await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,20 +172,4 @@ mod tests {
         // days=0 → early return, no spawn, no panic
         spawn_email_log_retention_task(resources);
     }
-}
-
-/// Spawn a background task that prunes old email log entries every 24 hours.
-#[tracing::instrument(skip(resources))]
-pub fn spawn_email_log_retention_task(resources: std::sync::Arc<AppResources>) {
-    let days = resources.config.email_log_retention_days;
-    if days == 0 {
-        return;
-    }
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_hours(24));
-        loop {
-            interval.tick().await;
-            prune_old_email_log_entries(&resources).await;
-        }
-    });
 }
