@@ -656,4 +656,93 @@ mod tests {
         assert_eq!(requeued, 0);
         assert_eq!(skipped, 0);
     }
+
+    // ── mark_sent ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn mark_sent_sets_status_and_sent_at() {
+        let db = create_test_db().await;
+        enqueue(&db, "a@example.com", "s", None, "t".into(), None)
+            .await
+            .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let now = OffsetDateTime::now_utc();
+        mark_sent(&db, item, now).await;
+
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_SENT);
+        assert!(updated.sent_at.is_some());
+    }
+
+    // ── mark_failed ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn mark_failed_sets_status_and_error() {
+        let db = create_test_db().await;
+        enqueue(&db, "a@example.com", "s", None, "t".into(), None)
+            .await
+            .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let now = OffsetDateTime::now_utc();
+        mark_failed(&db, item, now, "smtp error".to_string()).await;
+
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.last_error.as_deref(), Some("smtp error"));
+    }
+
+    // ── schedule_retry_or_fail ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn schedule_retry_schedules_next_attempt_under_max() {
+        let db = create_test_db().await;
+        enqueue(&db, "a@example.com", "s", None, "t".into(), None)
+            .await
+            .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(item.attempts, 0);
+        let now = OffsetDateTime::now_utc();
+
+        schedule_retry_or_fail(&db, item, now, "timeout".to_string()).await;
+
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        // attempts goes 0→1, max_attempts=5 so still pending
+        assert_eq!(updated.attempts, 1);
+        assert_eq!(updated.status, STATUS_PENDING);
+        assert!(updated.next_attempt_at > now);
+        assert_eq!(updated.last_error.as_deref(), Some("timeout"));
+    }
+
+    #[tokio::test]
+    async fn schedule_retry_marks_failed_at_max_attempts() {
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        let db = create_test_db().await;
+        // Insert with attempts already at max_attempts - 1 so one more push hits the limit
+        let row = email_outbox::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            to_email: Set("a@example.com".into()),
+            subject: Set("s".into()),
+            html_body: Set(None),
+            text_body: Set("t".into()),
+            status: Set(STATUS_PENDING.to_string()),
+            attempts: Set(4), // next increment → 5 == max_attempts
+            max_attempts: Set(5),
+            next_attempt_at: Set(OffsetDateTime::now_utc()),
+            expires_at: Set(None),
+            last_error: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+            sent_at: Set(None),
+        };
+        row.insert(&db).await.unwrap();
+
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let now = OffsetDateTime::now_utc();
+        schedule_retry_or_fail(&db, item, now, "final error".to_string()).await;
+
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(updated.attempts, 5);
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.last_error.as_deref(), Some("final error"));
+    }
 }

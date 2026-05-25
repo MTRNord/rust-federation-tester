@@ -21,13 +21,13 @@ use sea_orm::{
     ActiveValue::{NotSet, Set},
     ColumnTrait, EntityTrait, QueryFilter,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Form data for registration submission.
-#[derive(Clone, Debug, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct RegisterForm {
     // OAuth2 flow parameters
     pub response_type: String,
@@ -746,6 +746,315 @@ mod tests {
         let resp =
             redirect_to_register_with_message(&base_form(), "ok", "https://custom.example.com");
         assert!(location(&resp).starts_with("https://custom.example.com/alerts/register?"));
+    }
+
+    // ── register_submit handler ───────────────────────────────────────────────
+
+    fn make_register_server(
+        state: OAuth2State,
+        db: Arc<sea_orm::DatabaseConnection>,
+    ) -> TestServer {
+        let config = Arc::new(crate::config::AppConfig {
+            database_url: "sqlite::memory:".to_string(),
+            listen_addr: None,
+            smtp: Default::default(),
+            frontend_url: "https://app.example.com".to_string(),
+            magic_token_secret: "s".to_string(),
+            debug_allowed_nets: vec![],
+            trusted_proxy_nets: vec![],
+            statistics: Default::default(),
+            oauth2: Default::default(),
+            federation_timeout_secs: 3,
+            allow_private_targets: false,
+            redis: Default::default(),
+            environment_name: None,
+            github_sponsors_url: None,
+            liberapay_url: None,
+            email_log_retention_days: 7,
+            release_sources: Default::default(),
+            max_webhooks_per_alert: None,
+        });
+        let resources = crate::AppResources {
+            db,
+            mailer: None,
+            config,
+            email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
+            http_client: Arc::new(reqwest::Client::new()),
+        };
+        let app = axum::Router::new()
+            .route("/register", axum::routing::post(register_submit))
+            .with_state(state)
+            .layer(axum::Extension(resources));
+        TestServer::new(app)
+    }
+
+    async fn post_form(server: &TestServer, fields: &[(&str, &str)]) -> axum_test::TestResponse {
+        server.post("/register").form(fields).await
+    }
+
+    fn base_fields() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("response_type", "code"),
+            ("client_id", "my-client"),
+            ("redirect_uri", "https://app.example.com/cb"),
+            ("scope", "openid"),
+            ("state", "state-xyz"),
+            ("email", "user@example.com"),
+            ("password", "Password1!"),
+            ("password_confirm", "Password1!"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn register_invalid_email_redirects_with_error() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let server = make_register_server(state, db);
+        let mut fields = base_fields();
+        fields.retain(|(k, _)| *k != "email");
+        fields.push(("email", "not-an-email"));
+        let resp = post_form(&server, &fields).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        assert!(
+            server_location(&resp).contains("error="),
+            "loc: {}",
+            server_location(&resp)
+        );
+    }
+
+    #[tokio::test]
+    async fn register_weak_password_redirects_with_error() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let server = make_register_server(state, db);
+        let mut fields = base_fields();
+        fields.retain(|(k, _)| *k != "password" && *k != "password_confirm");
+        fields.push(("password", "weak"));
+        fields.push(("password_confirm", "weak"));
+        let resp = post_form(&server, &fields).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        assert!(
+            server_location(&resp).contains("error="),
+            "loc: {}",
+            server_location(&resp)
+        );
+    }
+
+    #[tokio::test]
+    async fn register_password_mismatch_redirects_with_error() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let server = make_register_server(state, db);
+        let mut fields = base_fields();
+        fields.retain(|(k, _)| *k != "password_confirm");
+        fields.push(("password_confirm", "DifferentPass1!"));
+        let resp = post_form(&server, &fields).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        assert!(loc.contains("error="), "loc: {loc}");
+    }
+
+    #[tokio::test]
+    async fn register_new_user_creates_user_and_enqueues_email() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let server = make_register_server(state, db.clone());
+        let resp = post_form(&server, &base_fields()).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        assert!(loc.contains("message="), "expected message, got: {loc}");
+
+        let user = crate::entity::oauth2_user::Entity::find()
+            .filter(crate::entity::oauth2_user::Column::Email.eq("user@example.com"))
+            .one(db.as_ref())
+            .await
+            .unwrap();
+        assert!(user.is_some(), "user should have been created");
+        let user = user.unwrap();
+        assert!(!user.email_verified);
+        assert!(user.email_verification_token.is_some());
+
+        let outbox = crate::entity::email_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(outbox.len(), 1, "verification email should be enqueued");
+    }
+
+    #[tokio::test]
+    async fn register_existing_magic_link_user_upgrades_to_password() {
+        // A verified user with NO password (magic-link only) → upgrade path
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let now = OffsetDateTime::now_utc();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            email: Set("user@example.com".to_string()),
+            email_verified: Set(true),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(None), // no password → magic-link account
+            email_verification_token: Set(None),
+            email_verification_expires_at: Set(None),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_register_server(state, db.clone());
+        let resp = post_form(&server, &base_fields()).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        // Should redirect to login with success message
+        assert!(
+            loc.contains("/alerts/login") || loc.contains("message="),
+            "expected login redirect, got: {loc}"
+        );
+        // Password should now be set in DB
+        let user = crate::entity::oauth2_user::Entity::find()
+            .filter(crate::entity::oauth2_user::Column::Email.eq("user@example.com"))
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            user.password_hash.is_some(),
+            "password should be set after upgrade"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_unverified_user_with_pending_token_resends_email() {
+        // User exists but not verified and token is still valid → resend email
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let now = OffsetDateTime::now_utc();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            email: Set("user@example.com".to_string()),
+            email_verified: Set(false),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(Some("oldhash".to_string())),
+            email_verification_token: Set(Some("pending-token".to_string())),
+            email_verification_expires_at: Set(Some(now + time::Duration::hours(24))),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_register_server(state, db.clone());
+        let resp = post_form(&server, &base_fields()).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        assert!(
+            loc.contains("message="),
+            "expected resend message, got: {loc}"
+        );
+        // Email outbox should have one entry
+        let outbox = crate::entity::email_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(outbox.len(), 1, "verification resend should be enqueued");
+    }
+
+    #[tokio::test]
+    async fn register_unverified_user_with_expired_token_updates_and_resends() {
+        // User exists, not verified, token expired → update user and resend
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let now = OffsetDateTime::now_utc();
+        let user_id = uuid::Uuid::new_v4().to_string();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(user_id.clone()),
+            email: Set("user@example.com".to_string()),
+            email_verified: Set(false),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(Some("oldhash".to_string())),
+            email_verification_token: Set(Some("old-expired-token".to_string())),
+            email_verification_expires_at: Set(Some(now - time::Duration::hours(1))), // expired
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_register_server(state, db.clone());
+        let resp = post_form(&server, &base_fields()).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        let loc = server_location(&resp);
+        assert!(
+            loc.contains("message="),
+            "expected success message, got: {loc}"
+        );
+        // Token should be updated in DB
+        let user = crate::entity::oauth2_user::Entity::find_by_id(&user_id)
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            user.email_verification_token.as_deref(),
+            Some("old-expired-token"),
+            "token should be refreshed"
+        );
+        // Email outbox should have one entry
+        let outbox = crate::entity::email_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(outbox.len(), 1, "new verification email should be enqueued");
+    }
+
+    #[tokio::test]
+    async fn register_existing_verified_user_redirects_with_error() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+        let now = OffsetDateTime::now_utc();
+        crate::entity::oauth2_user::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            email: Set("user@example.com".to_string()),
+            email_verified: Set(true),
+            name: Set(None),
+            receives_alerts: Set(true),
+            created_at: Set(now),
+            last_login_at: Set(None),
+            password_hash: Set(Some("somehash".to_string())),
+            email_verification_token: Set(None),
+            email_verification_expires_at: Set(None),
+            password_reset_token: NotSet,
+            password_reset_expires_at: NotSet,
+            timezone: Set("UTC".to_string()),
+        }
+        .insert(db.as_ref())
+        .await
+        .unwrap();
+
+        let server = make_register_server(state, db);
+        let resp = post_form(&server, &base_fields()).await;
+        assert_eq!(resp.status_code(), StatusCode::SEE_OTHER);
+        assert!(
+            server_location(&resp).contains("error="),
+            "loc: {}",
+            server_location(&resp)
+        );
     }
 
     // ── verify_email handler ───────────────────────────────────────────────────

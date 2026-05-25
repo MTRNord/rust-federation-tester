@@ -503,4 +503,62 @@ mod tests {
         let html = render_markdown_excerpt("~~removed~~");
         assert!(html.contains("removed"));
     }
+
+    // ── is_top_level_block ────────────────────────────────────────────────────
+
+    #[test]
+    fn is_top_level_block_matches_all_block_types() {
+        use pulldown_cmark::{CodeBlockKind, Tag};
+        assert!(is_top_level_block(&Tag::Paragraph));
+        assert!(is_top_level_block(&Tag::List(None)));
+        assert!(is_top_level_block(&Tag::CodeBlock(CodeBlockKind::Fenced(
+            "rust".into()
+        ))));
+        assert!(is_top_level_block(&Tag::BlockQuote(None)));
+    }
+
+    #[test]
+    fn is_top_level_block_rejects_inline_tags() {
+        use pulldown_cmark::Tag;
+        assert!(!is_top_level_block(&Tag::Emphasis));
+        assert!(!is_top_level_block(&Tag::Strong));
+    }
+
+    // ── is_top_level_block_end ────────────────────────────────────────────────
+
+    #[test]
+    fn is_top_level_block_end_matches_all_end_types() {
+        use pulldown_cmark::{HeadingLevel, TagEnd};
+        assert!(is_top_level_block_end(&TagEnd::Paragraph));
+        assert!(is_top_level_block_end(&TagEnd::List(true)));
+        assert!(is_top_level_block_end(&TagEnd::CodeBlock));
+        assert!(is_top_level_block_end(&TagEnd::BlockQuote(None)));
+        assert!(is_top_level_block_end(&TagEnd::Table));
+        assert!(is_top_level_block_end(&TagEnd::Heading(HeadingLevel::H2)));
+    }
+
+    #[test]
+    fn is_top_level_block_end_rejects_inline_ends() {
+        use pulldown_cmark::TagEnd;
+        assert!(!is_top_level_block_end(&TagEnd::Emphasis));
+        assert!(!is_top_level_block_end(&TagEnd::Strong));
+    }
+
+    // ── build_client ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn build_client_returns_some() {
+        assert!(build_client().is_some());
+    }
+
+    // ── collect_first_blocks image branches ──────────────────────────────────
+
+    #[test]
+    fn image_in_image_non_text_events_are_dropped() {
+        // An image followed by bold text inside alt — the bold markers should be dropped
+        let html = render_markdown_excerpt("![**bold** alt](https://example.com/img.png)");
+        assert!(!html.contains("<img"), "img must not appear");
+        // The text content of the alt should appear
+        assert!(html.contains("bold"), "alt text should appear");
+    }
 }

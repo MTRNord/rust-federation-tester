@@ -99,3 +99,72 @@ pub async fn daily_stats(
 
     Ok(Json(DailyStatsResponse { days }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum_test::TestServer;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::Database;
+    use std::sync::Arc;
+
+    async fn make_server(stats_enabled: bool) -> TestServer {
+        let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+        Migrator::up(db.as_ref(), None).await.unwrap();
+
+        let mut stats_cfg = crate::config::StatisticsConfig::default();
+        stats_cfg.enabled = stats_enabled;
+
+        let config = Arc::new(crate::config::AppConfig {
+            database_url: "sqlite::memory:".to_string(),
+            listen_addr: None,
+            smtp: Default::default(),
+            frontend_url: "https://app.example.com".to_string(),
+            magic_token_secret: "s".to_string(),
+            debug_allowed_nets: vec![],
+            trusted_proxy_nets: vec![],
+            statistics: stats_cfg,
+            oauth2: Default::default(),
+            federation_timeout_secs: 3,
+            allow_private_targets: false,
+            redis: Default::default(),
+            environment_name: None,
+            github_sponsors_url: None,
+            liberapay_url: None,
+            email_log_retention_days: 7,
+            release_sources: Default::default(),
+            max_webhooks_per_alert: None,
+        });
+
+        let resources = crate::AppResources {
+            db,
+            mailer: None,
+            config,
+            email_guard: crate::distributed::EmailGuard::Noop,
+            release_cache: Arc::new(dashmap::DashMap::new()),
+            http_client: Arc::new(reqwest::Client::new()),
+        };
+
+        let app = axum::Router::new()
+            .route("/api/statistics/daily", get(daily_stats))
+            .layer(axum::Extension(resources));
+        TestServer::new(app)
+    }
+
+    #[tokio::test]
+    async fn daily_stats_returns_404_when_disabled() {
+        let server = make_server(false).await;
+        let resp = server.get("/api/statistics/daily").await;
+        assert_eq!(resp.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn daily_stats_returns_200_with_empty_days_when_enabled() {
+        let server = make_server(true).await;
+        let resp = server.get("/api/statistics/daily").await;
+        assert_eq!(resp.status_code(), StatusCode::OK);
+        let body: serde_json::Value = resp.json();
+        assert!(body["days"].as_array().unwrap().is_empty());
+    }
+}

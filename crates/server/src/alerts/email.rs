@@ -409,7 +409,7 @@ pub async fn send_recovery_email(
         server_name: ActiveValue::Set(server_name.to_string()),
         email_type: ActiveValue::Set("recovery".to_string()),
         sent_at: ActiveValue::Set(OffsetDateTime::now_utc()),
-        failure_count: ActiveValue::NotSet,
+        failure_count: ActiveValue::Set(None),
     };
 
     if let Err(e) = email_log_entry.insert(db.as_ref()).await {
@@ -900,7 +900,7 @@ where
         server_name: ActiveValue::Set(server_name.to_string()),
         email_type: ActiveValue::Set(template.email_type().to_string()),
         sent_at: ActiveValue::Set(time::OffsetDateTime::now_utc()),
-        failure_count: ActiveValue::NotSet,
+        failure_count: ActiveValue::Set(None),
     };
     if let Err(e) = email_log_entry.insert(db.as_ref()).await {
         tracing::error!(

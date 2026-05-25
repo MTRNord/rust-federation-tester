@@ -258,7 +258,7 @@ async fn cache_stats<P: ConnectionProvider>(
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> impl IntoResponse {
     use serde::Serialize;
-    if !is_allowed_ip(&addr, &resources.config.debug_allowed_nets) {
+    if !crate::net::nets_contain(&resources.config.debug_allowed_nets, addr.ip()) {
         return (
             hyper::StatusCode::FORBIDDEN,
             axum::Json(serde_json::json!({"error": "forbidden"})),
@@ -275,10 +275,4 @@ async fn cache_stats<P: ConnectionProvider>(
     let value = serde_json::to_value(body)
         .unwrap_or_else(|_| serde_json::json!({"error": "serialization failure"}));
     (hyper::StatusCode::OK, axum::Json(value))
-}
-
-#[tracing::instrument()]
-fn is_allowed_ip(addr: &std::net::SocketAddr, nets: &[crate::config::IpNet]) -> bool {
-    let ip = addr.ip();
-    nets.iter().any(|net| net.contains(&ip))
 }

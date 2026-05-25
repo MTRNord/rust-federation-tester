@@ -279,4 +279,75 @@ mod tests {
             .unwrap();
         assert!(updated.last_login_at.is_some());
     }
+
+    // ── from_config ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn from_config_copies_fields() {
+        let db = make_db().await;
+        let oauth2_cfg = crate::config::OAuth2Config {
+            enabled: true,
+            issuer_url: "https://issuer.example.com".to_string(),
+            access_token_lifetime: 1800,
+            refresh_token_lifetime: 259200,
+            magic_links_enabled: false,
+            account_client_secret: "s".to_string(),
+        };
+        let app_cfg = crate::config::AppConfig {
+            database_url: "sqlite::memory:".to_string(),
+            listen_addr: None,
+            smtp: Default::default(),
+            frontend_url: "https://front.example.com".to_string(),
+            magic_token_secret: "s".to_string(),
+            debug_allowed_nets: vec![],
+            trusted_proxy_nets: vec![],
+            statistics: Default::default(),
+            oauth2: oauth2_cfg.clone(),
+            federation_timeout_secs: 3,
+            allow_private_targets: false,
+            redis: Default::default(),
+            environment_name: None,
+            github_sponsors_url: Some("https://github.com/sponsors/test".to_string()),
+            liberapay_url: Some("https://liberapay.com/test".to_string()),
+            email_log_retention_days: 7,
+            release_sources: Default::default(),
+            max_webhooks_per_alert: Some(5),
+        };
+        let state = OAuth2State::from_config(db, &oauth2_cfg, &app_cfg);
+        assert_eq!(state.issuer_url, "https://issuer.example.com");
+        assert_eq!(state.frontend_url, "https://front.example.com");
+        assert_eq!(state.access_token_lifetime, 1800);
+        assert_eq!(state.refresh_token_lifetime, 259200);
+        assert_eq!(
+            state.github_sponsors_url.as_deref(),
+            Some("https://github.com/sponsors/test")
+        );
+        assert_eq!(
+            state.liberapay_url.as_deref(),
+            Some("https://liberapay.com/test")
+        );
+    }
+
+    // ── upsert_internal_account_client ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn upsert_internal_account_client_updates_existing() {
+        let db = make_db().await;
+        let state = make_state(db.clone());
+
+        // The migration creates the account-internal client; just call upsert and verify it works
+        let result = state
+            .upsert_internal_account_client("new-secret-value")
+            .await;
+        assert!(result.is_ok());
+
+        // Verify the client secret was updated
+        let client = oauth2_client::Entity::find_by_id("account-internal")
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(client.secret.as_deref(), Some("new-secret-value"));
+        assert!(!client.is_public);
+    }
 }

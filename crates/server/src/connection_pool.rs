@@ -398,3 +398,116 @@ pub struct ConnectionPoolStats {
     pub total_connections: usize,
     pub max_connections_per_key: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pool(max_per_key: usize, max_per_client: usize) -> ConnectionPool {
+        ConnectionPool::new_with_limits(max_per_key, max_per_client, 5)
+    }
+
+    // ── constructors ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_sets_expected_limits() {
+        let pool = ConnectionPool::new(4, 5);
+        assert_eq!(pool.max_connections_per_key, 4);
+        assert_eq!(pool.max_connections_per_client, 8); // 4 * 2
+        assert_eq!(pool.max_total_connections, 80); // 4 * 20
+    }
+
+    #[test]
+    fn new_for_background_checks_disables_client_limit() {
+        let pool = ConnectionPool::new_for_background_checks(3, 5);
+        assert_eq!(pool.max_connections_per_client, usize::MAX);
+    }
+
+    #[test]
+    fn default_creates_pool_with_5_per_key() {
+        let pool = ConnectionPool::default();
+        assert_eq!(pool.max_connections_per_key, 5);
+    }
+
+    // ── pool_count / total_connections ────────────────────────────────────────
+
+    #[test]
+    fn pool_count_starts_at_zero() {
+        let pool = ConnectionPool::default();
+        assert_eq!(pool.pool_count(), 0);
+    }
+
+    #[test]
+    fn total_connections_starts_at_zero() {
+        let pool = ConnectionPool::default();
+        assert_eq!(pool.total_connections(), 0);
+    }
+
+    #[test]
+    fn can_create_connection_true_when_empty() {
+        let pool = ConnectionPool::default();
+        assert!(pool.can_create_connection());
+    }
+
+    // ── client usage tracking ─────────────────────────────────────────────────
+
+    #[test]
+    fn client_within_limit_true_for_new_client() {
+        let pool = make_pool(5, 3);
+        assert!(pool.client_within_limit("new-client"));
+    }
+
+    #[test]
+    fn client_within_limit_false_when_limit_reached() {
+        let pool = make_pool(5, 2);
+        pool.increment_client_usage("client-a");
+        pool.increment_client_usage("client-a");
+        assert!(!pool.client_within_limit("client-a"));
+    }
+
+    #[test]
+    fn increment_and_decrement_client_usage() {
+        let pool = make_pool(5, 10);
+        pool.increment_client_usage("c");
+        pool.increment_client_usage("c");
+        // 2 live connections — within limit of 10
+        assert!(pool.client_within_limit("c"));
+        pool.decrement_client_usage("c");
+        pool.decrement_client_usage("c");
+        // back to 0
+        assert!(pool.client_within_limit("c"));
+    }
+
+    #[test]
+    fn decrement_nonexistent_client_is_noop() {
+        let pool = ConnectionPool::default();
+        pool.decrement_client_usage("ghost"); // should not panic
+    }
+
+    // ── stats ─────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn stats_returns_zero_counts_for_empty_pool() {
+        let pool = ConnectionPool::default();
+        let stats = pool.stats().await;
+        assert_eq!(stats.pools_count, 0);
+        assert_eq!(stats.total_connections, 0);
+        assert_eq!(stats.max_connections_per_key, pool.max_connections_per_key);
+    }
+
+    // ── enforce_memory_limits no-op on empty pool ─────────────────────────────
+
+    #[tokio::test]
+    async fn enforce_memory_limits_noop_when_under_limit() {
+        let pool = ConnectionPool::default();
+        pool.enforce_memory_limits().await; // should not panic
+    }
+
+    // ── cleanup_dead_connections on empty pool ────────────────────────────────
+
+    #[tokio::test]
+    async fn cleanup_dead_connections_noop_when_empty() {
+        let pool = ConnectionPool::default();
+        pool.cleanup_dead_connections().await; // should not panic
+    }
+}

@@ -191,4 +191,69 @@ mod tests {
         let result = secure_parse_json_slice(json.as_bytes());
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_array_too_large() {
+        let parser = SecureJsonParser {
+            max_array_length: 3,
+            ..SecureJsonParser::default()
+        };
+        let json = serde_json::to_string(&serde_json::json!([1, 2, 3, 4])).unwrap();
+        let result = parser.parse_from_slice(json.as_bytes());
+        assert!(matches!(
+            result,
+            Err(JsonSecurityError::ArrayTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn test_too_many_keys() {
+        let parser = SecureJsonParser {
+            max_object_keys: 2,
+            ..SecureJsonParser::default()
+        };
+        let json = serde_json::json!({"a": 1, "b": 2, "c": 3});
+        let json_str = serde_json::to_string(&json).unwrap();
+        let result = parser.parse_from_slice(json_str.as_bytes());
+        assert!(matches!(result, Err(JsonSecurityError::TooManyKeys { .. })));
+    }
+
+    #[test]
+    fn test_object_key_too_long() {
+        let parser = SecureJsonParser {
+            max_string_length: 4,
+            ..SecureJsonParser::default()
+        };
+        let key = "toolong";
+        let json = format!("{{\"{key}\": 1}}");
+        let result = parser.parse_from_slice(json.as_bytes());
+        assert!(matches!(
+            result,
+            Err(JsonSecurityError::StringTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_from_reader_valid_json() {
+        let json = r#"{"key": "value"}"#;
+        let result = secure_parse_json_reader(json.as_bytes());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_from_reader_too_large() {
+        let parser = SecureJsonParser {
+            max_size: 10,
+            ..SecureJsonParser::default()
+        };
+        let json = r#"{"key": "this is longer than 10 bytes"}"#;
+        let result = parser.parse_from_reader(json.as_bytes());
+        assert!(matches!(result, Err(JsonSecurityError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn parse_from_reader_invalid_json() {
+        let result = secure_parse_json_reader("not json".as_bytes());
+        assert!(matches!(result, Err(JsonSecurityError::ParseError(_))));
+    }
 }

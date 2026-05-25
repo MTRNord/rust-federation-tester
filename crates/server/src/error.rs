@@ -255,4 +255,70 @@ mod tests {
         let e = FederationError::Fetch(FetchError::Json("bad json".into()));
         assert!(!e.is_retryable());
     }
+
+    // ── From<FetchError> for ApiError ─────────────────────────────────────────
+
+    #[test]
+    fn fetch_timeout_maps_to_timeout_error_code() {
+        let e = FetchError::Timeout(Duration::from_secs(5));
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::Timeout));
+    }
+
+    #[test]
+    fn fetch_network_maps_to_unknown_error_code() {
+        let e = FetchError::Network("connection refused".into());
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::Unknown));
+    }
+
+    #[test]
+    fn fetch_tls_maps_to_unexpected_content_type_tls() {
+        let e = FetchError::Tls("bad cert".into());
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::UnexpectedContentType(ref s) if s == "tls"));
+    }
+
+    #[test]
+    fn fetch_http_maps_to_not_ok() {
+        let e = FetchError::Http {
+            status: hyper::StatusCode::FORBIDDEN,
+            context: "403".into(),
+        };
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::NotOk(_)));
+    }
+
+    #[test]
+    fn fetch_json_maps_to_invalid_json() {
+        let e = FetchError::Json("unexpected token".into());
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::InvalidJson(_)));
+    }
+
+    #[test]
+    fn fetch_invalid_domain_maps_to_invalid_server_name() {
+        let e = FetchError::InvalidDomain("not.valid".into());
+        let api: ApiError = e.into();
+        assert!(matches!(
+            api.error_code,
+            ErrorCode::InvalidServerName(crate::response::InvalidServerNameErrorCode::NotValidDNS)
+        ));
+    }
+
+    #[test]
+    fn fetch_unexpected_content_type_maps_to_unexpected_content_type() {
+        let e = FetchError::UnexpectedContentType("text/html".into());
+        let api: ApiError = e.into();
+        assert!(
+            matches!(api.error_code, ErrorCode::UnexpectedContentType(ref s) if s == "text/html")
+        );
+    }
+
+    #[test]
+    fn fetch_well_known_maps_to_unknown() {
+        let e = FetchError::WellKnown(WellKnownError::NoAddresses);
+        let api: ApiError = e.into();
+        assert!(matches!(api.error_code, ErrorCode::Unknown));
+    }
 }

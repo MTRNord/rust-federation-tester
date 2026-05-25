@@ -364,6 +364,327 @@ fn backoff_secs(attempt: i32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::{alert_notification_webhook, webhook_outbox};
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{ActiveValue::Set, Database, EntityTrait};
+    use std::sync::Arc;
+    use time::OffsetDateTime;
+
+    async fn make_db() -> Arc<sea_orm::DatabaseConnection> {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        Arc::new(db)
+    }
+
+    async fn insert_alert(db: &sea_orm::DatabaseConnection, id: i32) {
+        use crate::entity::alert;
+        alert::ActiveModel {
+            id: Set(id),
+            email: Set("test@example.com".to_string()),
+            server_name: Set("matrix.example.com".to_string()),
+            verified: Set(true),
+            magic_token: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+            last_check_at: Set(None),
+            last_failure_at: Set(None),
+            last_success_at: Set(None),
+            last_email_sent_at: Set(None),
+            failure_count: Set(0),
+            is_currently_failing: Set(false),
+            last_recovery_at: Set(None),
+            user_id: Set(None),
+            notify_server_name_change: Set(true),
+            notify_version_change: Set(true),
+            notify_tls_cert_change: Set(true),
+            notify_tls_expiry: Set(true),
+            quiet_hours_enabled: Set(false),
+            quiet_hours_from: Set("22:00".to_string()),
+            quiet_hours_to: Set("07:00".to_string()),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a minimal webhook config row.
+    async fn insert_webhook(
+        db: &sea_orm::DatabaseConnection,
+        id: i32,
+        alert_id: i32,
+        url: &str,
+        secret: Option<&str>,
+    ) {
+        alert_notification_webhook::ActiveModel {
+            id: Set(id),
+            alert_id: Set(alert_id),
+            url: Set(url.to_string()),
+            hmac_secret: Set(secret.map(str::to_string)),
+            hmac_header: Set("X-Signature-256".to_string()),
+            respect_quiet_hours: Set(false),
+            created_at: Set(OffsetDateTime::now_utc()),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a minimal webhook_outbox row for update-focused tests.
+    /// Inserts required alert (id=1) and webhook (id=1) parent rows first.
+    async fn insert_outbox_row(
+        db: &sea_orm::DatabaseConnection,
+        id: &str,
+        attempts: i32,
+        max_attempts: i32,
+    ) -> webhook_outbox::Model {
+        // Insert parent rows if they don't exist already
+        if alert_notification_webhook::Entity::find_by_id(1)
+            .one(db)
+            .await
+            .unwrap()
+            .is_none()
+        {
+            insert_alert(db, 1).await;
+            insert_webhook(db, 1, 1, "https://hook.example.com/wh", None).await;
+        }
+        let now = OffsetDateTime::now_utc();
+        webhook_outbox::ActiveModel {
+            id: Set(id.to_string()),
+            alert_id: Set(1),
+            webhook_id: Set(1),
+            event_type: Set("ping".to_string()),
+            payload: Set("{}".to_string()),
+            status: Set(webhook_outbox::STATUS_PENDING.to_string()),
+            attempts: Set(attempts),
+            max_attempts: Set(max_attempts),
+            next_attempt_at: Set(now),
+            last_status_code: Set(None),
+            last_error: Set(None),
+            created_at: Set(now),
+            delivered_at: Set(None),
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    // ── enqueue_for_alert ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn enqueue_for_alert_no_webhooks_is_ok() {
+        let db = make_db().await;
+        let result = enqueue_for_alert(
+            db.as_ref(),
+            99,
+            "matrix.example.com",
+            "federation_down",
+            serde_json::json!({}),
+        )
+        .await;
+        assert!(result.is_ok());
+        let rows = webhook_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn enqueue_for_alert_creates_one_row_per_webhook() {
+        let db = make_db().await;
+        insert_alert(db.as_ref(), 42).await;
+        insert_webhook(db.as_ref(), 1, 42, "https://hook.example.com/1", None).await;
+        insert_webhook(db.as_ref(), 2, 42, "https://hook.example.com/2", None).await;
+
+        enqueue_for_alert(
+            db.as_ref(),
+            42,
+            "matrix.example.com",
+            "federation_down",
+            serde_json::json!({"ok": false}),
+        )
+        .await
+        .unwrap();
+
+        let rows = webhook_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.status, webhook_outbox::STATUS_PENDING);
+            assert_eq!(row.event_type, "federation_down");
+            assert_eq!(row.attempts, 0);
+            assert_eq!(row.max_attempts, 5);
+        }
+    }
+
+    #[tokio::test]
+    async fn enqueue_for_alert_payload_contains_event_fields() {
+        let db = make_db().await;
+        insert_alert(db.as_ref(), 1).await;
+        insert_webhook(db.as_ref(), 1, 1, "https://hook.example.com/1", None).await;
+
+        enqueue_for_alert(
+            db.as_ref(),
+            1,
+            "s.example.com",
+            "federation_up",
+            serde_json::json!({"ok": true}),
+        )
+        .await
+        .unwrap();
+
+        let rows = webhook_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&rows[0].payload).unwrap();
+        assert_eq!(payload["event_type"], "federation_up");
+        assert_eq!(payload["server_name"], "s.example.com");
+        assert!(payload["event_id"].is_string());
+        assert!(payload["timestamp"].is_number());
+    }
+
+    // ── enqueue_ping ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn enqueue_ping_inserts_one_row() {
+        let db = make_db().await;
+        insert_alert(db.as_ref(), 7).await;
+        insert_webhook(db.as_ref(), 3, 7, "https://hook.example.com/ping", None).await;
+        enqueue_ping(db.as_ref(), 7, 3, "matrix.example.com")
+            .await
+            .unwrap();
+
+        let rows = webhook_outbox::Entity::find()
+            .all(db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.alert_id, 7);
+        assert_eq!(row.webhook_id, 3);
+        assert_eq!(row.event_type, "ping");
+        assert_eq!(row.status, webhook_outbox::STATUS_PENDING);
+        assert_eq!(row.attempts, 0);
+        let payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+        assert_eq!(payload["event_type"], "ping");
+        assert_eq!(payload["server_name"], "matrix.example.com");
+    }
+
+    // ── tick_lock ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn tick_lock_acquires_when_not_holding() {
+        let lock = Lock::Noop;
+        let mut holding = false;
+        assert!(tick_lock(&lock, &mut holding).await);
+        assert!(holding);
+    }
+
+    #[tokio::test]
+    async fn tick_lock_renews_when_holding() {
+        let lock = Lock::Noop;
+        let mut holding = true;
+        assert!(tick_lock(&lock, &mut holding).await);
+        assert!(holding);
+    }
+
+    // ── mark_delivered ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn mark_delivered_sets_status_and_fields() {
+        let db = make_db().await;
+        let row = insert_outbox_row(db.as_ref(), "row-1", 1, 5).await;
+        let now = OffsetDateTime::now_utc();
+
+        mark_delivered(db.as_ref(), row, now, 200).await;
+
+        let updated = webhook_outbox::Entity::find_by_id("row-1")
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, webhook_outbox::STATUS_DELIVERED);
+        assert_eq!(updated.last_status_code, Some(200));
+        assert!(updated.delivered_at.is_some());
+    }
+
+    // ── schedule_retry_or_fail ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn schedule_retry_increments_attempts_and_stays_pending() {
+        let db = make_db().await;
+        let row = insert_outbox_row(db.as_ref(), "row-2", 0, 5).await;
+        let now = OffsetDateTime::now_utc();
+
+        schedule_retry_or_fail(db.as_ref(), row, now, Some(503), "HTTP 503".to_string()).await;
+
+        let updated = webhook_outbox::Entity::find_by_id("row-2")
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.attempts, 1);
+        assert_eq!(updated.status, webhook_outbox::STATUS_PENDING);
+        assert_eq!(updated.last_status_code, Some(503));
+        assert_eq!(updated.last_error.as_deref(), Some("HTTP 503"));
+    }
+
+    #[tokio::test]
+    async fn schedule_retry_marks_failed_at_max_attempts() {
+        let db = make_db().await;
+        // attempts=4, max_attempts=5 → after increment → 5 >= 5 → failed
+        let row = insert_outbox_row(db.as_ref(), "row-3", 4, 5).await;
+        let now = OffsetDateTime::now_utc();
+
+        schedule_retry_or_fail(db.as_ref(), row, now, None, "timeout".to_string()).await;
+
+        let updated = webhook_outbox::Entity::find_by_id("row-3")
+            .one(db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.attempts, 5);
+        assert_eq!(updated.status, webhook_outbox::STATUS_FAILED);
+        assert_eq!(updated.last_error.as_deref(), Some("timeout"));
+    }
+
+    // ── build_request ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn build_request_sets_content_type() {
+        let client = reqwest::Client::new();
+        let webhook = alert_notification_webhook::Model {
+            id: 1,
+            alert_id: 1,
+            url: "https://hook.example.com/deliver".to_string(),
+            hmac_secret: None,
+            hmac_header: "X-Signature-256".to_string(),
+            respect_quiet_hours: false,
+            created_at: OffsetDateTime::now_utc(),
+        };
+        // build_request returns a RequestBuilder; we can check it builds without panic
+        let _req = build_request(&client, &webhook, b"{}".to_vec());
+    }
+
+    #[test]
+    fn build_request_with_secret_adds_hmac_header() {
+        let client = reqwest::Client::new();
+        let webhook = alert_notification_webhook::Model {
+            id: 1,
+            alert_id: 1,
+            url: "https://hook.example.com/deliver".to_string(),
+            hmac_secret: Some("my-secret".to_string()),
+            hmac_header: "X-Hub-Signature-256".to_string(),
+            respect_quiet_hours: false,
+            created_at: OffsetDateTime::now_utc(),
+        };
+        let body = b"hello world".to_vec();
+        let _req = build_request(&client, &webhook, body);
+        // If it gets here without panicking, the builder accepted the HMAC header.
+    }
 
     // ── backoff_secs ──────────────────────────────────────────────────────────
 

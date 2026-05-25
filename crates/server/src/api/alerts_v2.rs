@@ -16,6 +16,7 @@ use crate::entity::{
     alert, alert_notification_email, alert_notification_webhook, alert_status_history, oauth2_user,
     user_email, webhook_outbox,
 };
+use crate::net::is_private_ip;
 use crate::oauth2::IdentityService;
 use axum::{Extension, Json, extract::Path};
 use hyper::StatusCode;
@@ -370,19 +371,6 @@ async fn validate_webhook_url(raw: &str) -> Result<(), AuthError> {
     }
 
     Ok(())
-}
-
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-        }
-        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
-    }
 }
 
 /// Collect the set of verified email addresses owned by a user.
@@ -1582,63 +1570,6 @@ mod tests {
     use crate::entity::alert_status_history;
     use migration::{Migrator, MigratorTrait};
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
-
-    // ── is_private_ip ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn private_ip_v4_loopback() {
-        assert!(is_private_ip("127.0.0.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_rfc1918_10() {
-        assert!(is_private_ip("10.0.0.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_rfc1918_172() {
-        assert!(is_private_ip("172.16.0.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_rfc1918_192() {
-        assert!(is_private_ip("192.168.1.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_link_local() {
-        assert!(is_private_ip("169.254.1.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_broadcast() {
-        assert!(is_private_ip("255.255.255.255".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_unspecified() {
-        assert!(is_private_ip("0.0.0.0".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v4_public_is_false() {
-        assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v6_loopback() {
-        assert!(is_private_ip("::1".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v6_unspecified() {
-        assert!(is_private_ip("::".parse().unwrap()));
-    }
-
-    #[test]
-    fn private_ip_v6_public_is_false() {
-        assert!(!is_private_ip("2001:4860:4860::8888".parse().unwrap()));
-    }
 
     // ── event_to_display ─────────────────────────────────────────────────────
 

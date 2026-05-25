@@ -699,4 +699,150 @@ mod tests {
         assert!(net.contains(&IpAddr::V6("2001:db8:cafe::1".parse::<Ipv6Addr>().unwrap())));
         assert!(!net.contains(&IpAddr::V6("2001:db8:dead::1".parse::<Ipv6Addr>().unwrap())));
     }
+
+    // ── default_debug_allowed_nets ────────────────────────────────────────────
+
+    #[test]
+    fn default_debug_allowed_nets_includes_loopback() {
+        let nets = default_debug_allowed_nets();
+        let loopback_v4 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let loopback_v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        assert!(nets.iter().any(|n| n.contains(&loopback_v4)));
+        assert!(nets.iter().any(|n| n.contains(&loopback_v6)));
+    }
+
+    #[test]
+    fn default_debug_allowed_nets_includes_rfc1918() {
+        let nets = default_debug_allowed_nets();
+        let private_10 = IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3));
+        let private_172 = IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1));
+        let private_192 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        assert!(nets.iter().any(|n| n.contains(&private_10)));
+        assert!(nets.iter().any(|n| n.contains(&private_172)));
+        assert!(nets.iter().any(|n| n.contains(&private_192)));
+    }
+
+    #[test]
+    fn default_debug_allowed_nets_excludes_public_internet() {
+        let nets = default_debug_allowed_nets();
+        let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        assert!(!nets.iter().any(|n| n.contains(&public)));
+    }
+
+    // ── AppConfig Debug ───────────────────────────────────────────────────────
+
+    #[test]
+    fn app_config_debug_redacts_database_url_and_magic_token() {
+        let cfg = crate::config::AppConfig {
+            database_url: "postgres://user:secret@localhost/db".to_string(),
+            listen_addr: None,
+            smtp: SmtpConfig::default(),
+            frontend_url: "https://app.example.com".to_string(),
+            magic_token_secret: "my-super-secret-token-value".to_string(),
+            debug_allowed_nets: vec![],
+            trusted_proxy_nets: vec![],
+            statistics: StatisticsConfig::default(),
+            oauth2: OAuth2Config::default(),
+            federation_timeout_secs: 3,
+            allow_private_targets: false,
+            redis: RedisConfig::default(),
+            environment_name: None,
+            github_sponsors_url: None,
+            liberapay_url: None,
+            email_log_retention_days: 7,
+            release_sources: Default::default(),
+            max_webhooks_per_alert: None,
+        };
+        let debug_str = format!("{cfg:?}");
+        assert!(
+            !debug_str.contains("postgres://"),
+            "database URL should be redacted: {debug_str}"
+        );
+        assert!(
+            !debug_str.contains("my-super-secret"),
+            "magic token should be redacted: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("[REDACTED]"),
+            "should have redacted placeholder: {debug_str}"
+        );
+    }
+
+    // ── SmtpConfig ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn smtp_config_default_is_disabled() {
+        let cfg = SmtpConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.timeout_secs, 10);
+    }
+
+    #[test]
+    fn smtp_config_debug_redacts_password() {
+        let mut cfg = SmtpConfig::default();
+        cfg.password = "secret123".to_string();
+        let debug_str = format!("{cfg:?}");
+        assert!(
+            !debug_str.contains("secret123"),
+            "password should not appear in debug: {debug_str}"
+        );
+        assert!(debug_str.contains("[REDACTED]"), "debug: {debug_str}");
+    }
+
+    // ── OAuth2Config ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn oauth2_config_default_values() {
+        let cfg = OAuth2Config::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.access_token_lifetime, 3600);
+        assert_eq!(cfg.refresh_token_lifetime, 604800);
+        assert!(cfg.magic_links_enabled);
+    }
+
+    #[test]
+    fn oauth2_config_debug_redacts_secret() {
+        let mut cfg = OAuth2Config::default();
+        cfg.account_client_secret = "topsecret".to_string();
+        let debug_str = format!("{cfg:?}");
+        assert!(
+            !debug_str.contains("topsecret"),
+            "secret should not appear: {debug_str}"
+        );
+        assert!(debug_str.contains("[REDACTED]"), "debug: {debug_str}");
+    }
+
+    // ── StatisticsConfig ──────────────────────────────────────────────────────
+
+    #[test]
+    fn statistics_config_default_values() {
+        let cfg = StatisticsConfig::default();
+        assert!(!cfg.enabled);
+        assert!(cfg.prometheus_enabled);
+        assert_eq!(cfg.raw_retention_days, 30);
+    }
+
+    // ── RedisConfig ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn redis_config_default_values() {
+        let cfg = RedisConfig::default();
+        assert_eq!(cfg.pool_size, 4);
+        assert_eq!(cfg.key_prefix, "federation-tester");
+        assert_eq!(cfg.healthy_lock_ttl_secs, 360);
+        assert_eq!(cfg.active_lock_ttl_secs, 90);
+        assert_eq!(cfg.email_bucket_secs, 3600);
+    }
+
+    #[test]
+    fn redis_config_debug_redacts_url() {
+        let mut cfg = RedisConfig::default();
+        cfg.url = "redis://:password@localhost:6379".to_string();
+        let debug_str = format!("{cfg:?}");
+        assert!(
+            !debug_str.contains("password"),
+            "url should not appear: {debug_str}"
+        );
+        assert!(debug_str.contains("[REDACTED]"), "debug: {debug_str}");
+    }
 }

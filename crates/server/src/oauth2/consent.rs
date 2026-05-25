@@ -453,6 +453,204 @@ fn render_error(message: &str) -> Response {
     Html(html).into_response()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::OffsetDateTime;
+
+    fn make_user() -> crate::entity::oauth2_user::Model {
+        crate::entity::oauth2_user::Model {
+            id: "user-1".to_string(),
+            email: "alice@example.com".to_string(),
+            email_verified: true,
+            name: None,
+            receives_alerts: true,
+            created_at: OffsetDateTime::now_utc(),
+            last_login_at: None,
+            password_hash: None,
+            email_verification_token: None,
+            email_verification_expires_at: None,
+            password_reset_token: None,
+            password_reset_expires_at: None,
+            timezone: "UTC".to_string(),
+        }
+    }
+
+    // ── get_scope_info ────────────────────────────────────────────────────────
+
+    #[test]
+    fn scope_info_openid() {
+        let info = get_scope_info("openid");
+        assert_eq!(info.scope_key, "openid");
+        assert!(info.name.contains("identity") || info.name.to_lowercase().contains("verify"));
+    }
+
+    #[test]
+    fn scope_info_email() {
+        let info = get_scope_info("email");
+        assert_eq!(info.scope_key, "email");
+        assert!(info.name.to_lowercase().contains("email"));
+    }
+
+    #[test]
+    fn scope_info_profile() {
+        let info = get_scope_info("profile");
+        assert_eq!(info.scope_key, "profile");
+        assert!(info.name.to_lowercase().contains("profile"));
+    }
+
+    #[test]
+    fn scope_info_alerts_read() {
+        let info = get_scope_info("alerts:read");
+        assert_eq!(info.scope_key, "alerts:read");
+        assert!(
+            info.name.to_lowercase().contains("read") || info.name.to_lowercase().contains("alert")
+        );
+    }
+
+    #[test]
+    fn scope_info_alerts_write() {
+        let info = get_scope_info("alerts:write");
+        assert_eq!(info.scope_key, "alerts:write");
+        assert!(
+            info.name.to_lowercase().contains("manage")
+                || info.name.to_lowercase().contains("write")
+                || info.name.to_lowercase().contains("alert")
+        );
+    }
+
+    #[test]
+    fn scope_info_unknown_falls_back_to_scope_as_name() {
+        let info = get_scope_info("custom:scope");
+        assert_eq!(info.scope_key, "custom:scope");
+        assert_eq!(info.name, "custom:scope");
+        assert_eq!(info.description, "Access to this resource.");
+    }
+
+    // ── ConsentData encode/decode ─────────────────────────────────────────────
+
+    #[test]
+    fn consent_data_encode_decode_roundtrip() {
+        let data = ConsentData {
+            user_id: "uid-123".to_string(),
+            user_email: "bob@example.com".to_string(),
+            client_id: "my-client".to_string(),
+            redirect_uri: "https://app.example.com/cb".to_string(),
+            scope: "openid profile".to_string(),
+            state: "xyz".to_string(),
+            nonce: Some("nonce-val".to_string()),
+            code_challenge: None,
+            code_challenge_method: None,
+            expires_at: 9999999999,
+        };
+        let token = data.encode();
+        assert!(!token.is_empty());
+        let decoded = ConsentData::decode(&token).expect("decode should succeed");
+        assert_eq!(decoded.user_id, "uid-123");
+        assert_eq!(decoded.user_email, "bob@example.com");
+        assert_eq!(decoded.client_id, "my-client");
+        assert_eq!(decoded.redirect_uri, "https://app.example.com/cb");
+        assert_eq!(decoded.scope, "openid profile");
+        assert_eq!(decoded.state, "xyz");
+        assert_eq!(decoded.nonce, Some("nonce-val".to_string()));
+        assert_eq!(decoded.code_challenge, None);
+        assert_eq!(decoded.expires_at, 9999999999);
+    }
+
+    #[test]
+    fn consent_data_decode_invalid_base64_returns_none() {
+        assert!(ConsentData::decode("!!!not-base64!!!").is_none());
+    }
+
+    #[test]
+    fn consent_data_decode_invalid_json_returns_none() {
+        use base64::Engine;
+        let bad = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"not json at all");
+        assert!(ConsentData::decode(&bad).is_none());
+    }
+
+    // ── ConsentData is_expired ────────────────────────────────────────────────
+
+    #[test]
+    fn consent_data_not_expired_when_far_future() {
+        let data = ConsentData {
+            user_id: "u".to_string(),
+            user_email: "u@example.com".to_string(),
+            client_id: "c".to_string(),
+            redirect_uri: "https://example.com/cb".to_string(),
+            scope: "openid".to_string(),
+            state: "s".to_string(),
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            expires_at: i64::MAX,
+        };
+        assert!(!data.is_expired());
+    }
+
+    #[test]
+    fn consent_data_expired_when_in_past() {
+        let data = ConsentData {
+            user_id: "u".to_string(),
+            user_email: "u@example.com".to_string(),
+            client_id: "c".to_string(),
+            redirect_uri: "https://example.com/cb".to_string(),
+            scope: "openid".to_string(),
+            state: "s".to_string(),
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            expires_at: 0, // Unix epoch — definitely in the past
+        };
+        assert!(data.is_expired());
+    }
+
+    // ── create_consent_redirect ───────────────────────────────────────────────
+
+    #[test]
+    fn create_consent_redirect_returns_consent_path() {
+        let user = make_user();
+        let url = create_consent_redirect(ConsentRedirectParams {
+            user: &user,
+            client_id: "my-client",
+            redirect_uri: "https://app.example.com/cb",
+            scope: "openid",
+            state: "abc",
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+        });
+        assert!(url.starts_with("/oauth2/consent?token="), "url was: {url}");
+    }
+
+    #[test]
+    fn create_consent_redirect_token_decodes_correctly() {
+        let user = make_user();
+        let url = create_consent_redirect(ConsentRedirectParams {
+            user: &user,
+            client_id: "test-client",
+            redirect_uri: "https://app.example.com/callback",
+            scope: "openid email",
+            state: "state-val",
+            nonce: Some("nonce-val"),
+            code_challenge: Some("challenge"),
+            code_challenge_method: Some("S256"),
+        });
+        let token = url.trim_start_matches("/oauth2/consent?token=");
+        let data = ConsentData::decode(token).expect("token should decode");
+        assert_eq!(data.user_id, "user-1");
+        assert_eq!(data.user_email, "alice@example.com");
+        assert_eq!(data.client_id, "test-client");
+        assert_eq!(data.redirect_uri, "https://app.example.com/callback");
+        assert_eq!(data.scope, "openid email");
+        assert_eq!(data.state, "state-val");
+        assert_eq!(data.nonce, Some("nonce-val".to_string()));
+        assert_eq!(data.code_challenge, Some("challenge".to_string()));
+        assert_eq!(data.code_challenge_method, Some("S256".to_string()));
+        assert!(!data.is_expired());
+    }
+}
+
 /// Parameters for creating a consent redirect.
 pub struct ConsentRedirectParams<'a> {
     pub user: &'a oauth2_user::Model,
