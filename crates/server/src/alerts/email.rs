@@ -3,6 +3,7 @@
 //! Handles sending failure and recovery notification emails.
 
 use crate::api::alerts::MagicClaims;
+use crate::backends::{EmailSender, OutgoingEmail};
 use crate::email_templates::{
     FailureEmailTemplate, RecoveryEmailTemplate, ServerNameChangeEmailTemplate,
     TlsCertChangeEmailTemplate, TlsExpiryEmailTemplate, VersionChangeEmailTemplate, env_subject,
@@ -10,9 +11,7 @@ use crate::email_templates::{
 use crate::entity::email_log;
 use crate::release_notes::{ReleaseCache, get_release_info};
 use jsonwebtoken::{EncodingKey, Header as JwtHeader, encode};
-use lettre::AsyncTransport;
 use lettre::message::header::{Header, HeaderName, HeaderValue};
-use lettre::message::{MultiPart, SinglePart};
 use sea_orm::{ActiveModelTrait, ActiveValue};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -60,21 +59,17 @@ fn format_downtime(minutes: u64) -> String {
 /// Error type for email sending operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EmailError {
-    #[error("Invalid email address '{address}': {detail}")]
-    InvalidAddress { address: String, detail: String },
     #[error("Failed to render email template: {0}")]
     TemplateFailed(String),
-    #[error("Failed to build email message: {0}")]
-    BuildFailed(#[from] lettre::error::Error),
-    #[error("SMTP transport error: {0}")]
-    SendFailed(#[from] lettre::transport::smtp::Error),
+    #[error("Email delivery failed: {0}")]
+    SendFailed(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Send a failure notification email.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
 pub async fn send_failure_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -167,66 +162,27 @@ pub async fn send_failure_email(
     };
     let text_body = template.render_text();
 
-    let from_mailbox: lettre::message::Mailbox = config.smtp.from.parse().map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_failure_email.invalid_from_address",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            address = %config.smtp.from,
-            message = "Invalid SMTP from address in configuration"
-        );
-        EmailError::InvalidAddress {
-            address: config.smtp.from.clone(),
-            detail: format!("{e}"),
-        }
-    })?;
-
-    let to_mailbox: lettre::message::Mailbox = email.parse().map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_failure_email.invalid_to_address",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            alert_id = alert_id,
-            message = "Invalid recipient email address"
-        );
-        EmailError::InvalidAddress {
-            address: email.to_string(),
-            detail: format!("{e}"),
-        }
-    })?;
-
-    // Create multipart email with both HTML and plain text
-    let email_msg = lettre::Message::builder()
-        .from(from_mailbox)
-        .to(to_mailbox)
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .header(UnsubscribeHeader::from(unsubscribe_url))
-        .message_id(None)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .map_err(EmailError::BuildFailed)?;
-
-    mailer.send(email_msg).await.map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_failure_email.email_send_failed",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = %e,
-            server_name = %server_name,
-            alert_id = alert_id,
-            message = "Failed to send failure alert email"
-        );
-        EmailError::SendFailed(e)
-    })?;
+    mailer
+        .send(OutgoingEmail {
+            from: config.smtp.from.clone(),
+            to: email.to_string(),
+            subject,
+            text_body,
+            html_body: Some(html_body),
+            list_unsubscribe: Some(unsubscribe_url),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                name = "alerts.send_failure_email.email_send_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to send failure alert email"
+            );
+            EmailError::SendFailed(e)
+        })?;
 
     info!(
         target: "rust-federation-tester",
@@ -263,7 +219,7 @@ pub async fn send_failure_email(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
 pub async fn send_recovery_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -335,66 +291,27 @@ pub async fn send_recovery_email(
     };
     let text_body = template.render_text();
 
-    let from_mailbox: lettre::message::Mailbox = config.smtp.from.parse().map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_recovery_email.invalid_from_address",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            address = %config.smtp.from,
-            message = "Invalid SMTP from address in configuration"
-        );
-        EmailError::InvalidAddress {
-            address: config.smtp.from.clone(),
-            detail: format!("{e}"),
-        }
-    })?;
-
-    let to_mailbox: lettre::message::Mailbox = email.parse().map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_recovery_email.invalid_to_address",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            alert_id = alert_id,
-            message = "Invalid recipient email address"
-        );
-        EmailError::InvalidAddress {
-            address: email.to_string(),
-            detail: format!("{e}"),
-        }
-    })?;
-
-    // Create multipart email with both HTML and plain text
-    let email_msg = lettre::Message::builder()
-        .from(from_mailbox)
-        .to(to_mailbox)
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .header(UnsubscribeHeader::from(unsubscribe_url))
-        .message_id(None)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .map_err(EmailError::BuildFailed)?;
-
-    mailer.send(email_msg).await.map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_recovery_email.email_send_failed",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = %e,
-            server_name = %server_name,
-            alert_id = alert_id,
-            message = "Failed to send recovery email"
-        );
-        EmailError::SendFailed(e)
-    })?;
+    mailer
+        .send(OutgoingEmail {
+            from: config.smtp.from.clone(),
+            to: email.to_string(),
+            subject,
+            text_body,
+            html_body: Some(html_body),
+            list_unsubscribe: Some(unsubscribe_url),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                name = "alerts.send_recovery_email.email_send_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                server_name = %server_name,
+                alert_id = alert_id,
+                message = "Failed to send recovery email"
+            );
+            EmailError::SendFailed(e)
+        })?;
 
     info!(
         "Sent recovery email to {} for server {}",
@@ -430,7 +347,7 @@ pub async fn send_recovery_email(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email))]
 pub async fn send_server_name_change_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -503,7 +420,7 @@ pub async fn send_server_name_change_email(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email, release_cache))]
 pub async fn send_version_change_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     release_cache: &ReleaseCache,
@@ -589,7 +506,7 @@ pub async fn send_version_change_email(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email, new_cert))]
 pub async fn send_tls_cert_change_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -701,7 +618,7 @@ pub async fn send_tls_cert_change_email(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(mailer, config, db, email, cert_info))]
 pub async fn send_tls_expiry_email(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -806,7 +723,7 @@ pub async fn send_tls_expiry_email(
 /// is derived from the template's `email_type()` method.
 #[allow(clippy::too_many_arguments)]
 async fn send_change_email<T>(
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn EmailSender>,
     config: &Arc<crate::config::AppConfig>,
     db: &Arc<sea_orm::DatabaseConnection>,
     email: &str,
@@ -818,8 +735,6 @@ async fn send_change_email<T>(
 where
     T: ChangeEmailTemplate,
 {
-    use lettre::message::{MultiPart, SinglePart};
-
     let html_body = template.render_html_change().map_err(|e| {
         tracing::error!(
             name = "alerts.send_change_email.template_render_failed",
@@ -835,55 +750,28 @@ where
     let text_body = template.render_text_change();
     let unsubscribe_url = template.unsubscribe_url();
 
-    let from_mailbox: lettre::message::Mailbox =
-        config
-            .smtp
-            .from
-            .parse()
-            .map_err(|e| EmailError::InvalidAddress {
-                address: config.smtp.from.clone(),
-                detail: format!("{e}"),
-            })?;
-    let to_mailbox: lettre::message::Mailbox =
-        email.parse().map_err(|e| EmailError::InvalidAddress {
-            address: email.to_string(),
-            detail: format!("{e}"),
+    mailer
+        .send(OutgoingEmail {
+            from: config.smtp.from.clone(),
+            to: email.to_string(),
+            subject,
+            text_body,
+            html_body: Some(html_body),
+            list_unsubscribe: Some(unsubscribe_url),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                name = "alerts.send_change_email.send_failed",
+                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
+                error = %e,
+                server_name = %server_name,
+                alert_id = alert_id,
+                email_type = template.email_type(),
+                message = "Failed to send change alert email"
+            );
+            EmailError::SendFailed(e)
         })?;
-
-    let email_msg = lettre::Message::builder()
-        .from(from_mailbox)
-        .to(to_mailbox)
-        .subject(subject)
-        .header(lettre::message::header::MIME_VERSION_1_0)
-        .header(UnsubscribeHeader::from(unsubscribe_url))
-        .message_id(None)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                        .body(text_body),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(lettre::message::header::ContentType::TEXT_HTML)
-                        .body(html_body),
-                ),
-        )
-        .map_err(EmailError::BuildFailed)?;
-
-    mailer.send(email_msg).await.map_err(|e| {
-        tracing::error!(
-            name = "alerts.send_change_email.send_failed",
-            target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-            error = %e,
-            server_name = %server_name,
-            alert_id = alert_id,
-            email_type = template.email_type(),
-            message = "Failed to send change alert email"
-        );
-        EmailError::SendFailed(e)
-    })?;
 
     tracing::info!(
         target: "rust-federation-tester",

@@ -647,10 +647,13 @@ mod tests {
     async fn test_record_event_inserts_when_enabled() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(true, "salt123"));
-        let mailer = Some(Arc::new(
-            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+        let mailer: Option<Arc<dyn crate::EmailSender>> =
+            Some(Arc::new(crate::backends::LettreSmtpSender::new(Arc::new(
+                lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(
+                    "localhost",
+                )
                 .build(),
-        ));
+            ))));
         let resources = AppResources {
             db: Arc::new(db),
             mailer,
@@ -680,10 +683,13 @@ mod tests {
     async fn test_record_event_no_insert_when_disabled() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(false, "salt123"));
-        let mailer = Some(Arc::new(
-            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+        let mailer: Option<Arc<dyn crate::EmailSender>> =
+            Some(Arc::new(crate::backends::LettreSmtpSender::new(Arc::new(
+                lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(
+                    "localhost",
+                )
                 .build(),
-        ));
+            ))));
         let resources = AppResources {
             db: Arc::new(db.clone()),
             mailer,
@@ -716,10 +722,13 @@ mod tests {
     async fn test_metrics_caching() {
         let db = setup_db().await;
         let config = Arc::new(dummy_config(true, "salt123"));
-        let mailer = Some(Arc::new(
-            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+        let mailer: Option<Arc<dyn crate::EmailSender>> =
+            Some(Arc::new(crate::backends::LettreSmtpSender::new(Arc::new(
+                lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(
+                    "localhost",
+                )
                 .build(),
-        ));
+            ))));
         let resources = AppResources {
             db: Arc::new(db.clone()),
             mailer,
@@ -784,9 +793,10 @@ mod tests {
         db.execute(Statement::from_string(DbBackend::Sqlite, "INSERT INTO federation_stat_aggregate (server_name, first_seen_at, last_seen_at, req_count, success_count, failure_count) VALUES ('old.example', datetime('now','-40 days'), datetime('now','-40 days'), 5, 5, 0)" )).await.unwrap();
         db.execute(Statement::from_string(DbBackend::Sqlite, "INSERT INTO federation_stat_aggregate (server_name, first_seen_at, last_seen_at, req_count, success_count, failure_count) VALUES ('new.example', datetime('now','-1 days'), datetime('now','-1 days'), 3, 3, 0)" )).await.unwrap();
         let config = dummy_config(true, "salt");
-        let dummy_mailer =
+        let dummy_mailer = crate::backends::LettreSmtpSender::new(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-                .build();
+                .build(),
+        ));
         let resources = AppResources {
             db: Arc::new(db),
             mailer: Some(Arc::new(dummy_mailer)),
@@ -809,9 +819,10 @@ mod tests {
     async fn test_metrics_after_record_event() {
         let db = setup_db().await;
         let config = dummy_config(true, "salt");
-        let dummy_mailer =
+        let dummy_mailer = crate::backends::LettreSmtpSender::new(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-                .build();
+                .build(),
+        ));
         let resources = AppResources {
             db: Arc::new(db),
             mailer: Some(Arc::new(dummy_mailer)),
@@ -843,9 +854,10 @@ mod tests {
     async fn test_unstable_features_tracking() {
         let db = setup_db().await;
         let config = dummy_config(true, "salt");
-        let dummy_mailer =
+        let dummy_mailer = crate::backends::LettreSmtpSender::new(Arc::new(
             lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-                .build();
+                .build(),
+        ));
         let resources = AppResources {
             db: Arc::new(db),
             mailer: Some(Arc::new(dummy_mailer)),

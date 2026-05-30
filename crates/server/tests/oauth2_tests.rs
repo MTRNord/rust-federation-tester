@@ -96,9 +96,11 @@ fn create_test_config() -> AppConfig {
 async fn create_test_resources() -> (AppResources, OAuth2State) {
     let db = create_oauth2_test_db().await;
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
 
     let resources = AppResources {
@@ -1331,9 +1333,11 @@ async fn test_password_reset_confirm_get_valid_token() {
     insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
 
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),
@@ -1367,9 +1371,11 @@ async fn test_password_reset_confirm_post_password_mismatch() {
     insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
 
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),
@@ -1408,9 +1414,11 @@ async fn test_password_reset_confirm_post_weak_password() {
     insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
 
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),
@@ -1474,9 +1482,11 @@ async fn test_password_reset_confirm_post_success() {
     insert_password_reset_token(db.as_ref(), "user-123", token, false).await;
 
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),
@@ -1532,9 +1542,11 @@ async fn test_password_reset_confirm_post_expired_token() {
     insert_password_reset_token(db.as_ref(), "user-123", token, true).await; // expired
 
     let config = Arc::new(create_test_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),

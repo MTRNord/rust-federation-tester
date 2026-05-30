@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use lettre::{AsyncSmtpTransport, Tokio1Executor};
 use reqwest::Client as HttpClient;
 use sea_orm::DatabaseConnection;
 
@@ -20,6 +19,7 @@ pub use matrix_federation_tester::{
 
 pub mod alerts;
 pub mod api;
+pub mod backends;
 pub mod client;
 pub mod config;
 pub mod distributed;
@@ -31,11 +31,13 @@ pub mod oauth2;
 pub mod release_notes;
 pub mod stats;
 
+pub use backends::EmailSender;
+
 #[derive(Clone, Debug)]
 pub struct AppResources {
     pub db: Arc<DatabaseConnection>,
-    /// None when `smtp.enabled = false` in config.
-    pub mailer: Option<Arc<AsyncSmtpTransport<Tokio1Executor>>>,
+    /// `None` when `smtp.enabled = false` in config — email delivery is disabled.
+    pub mailer: Option<Arc<dyn EmailSender>>,
     pub config: Arc<AppConfig>,
     /// Email idempotency guard — prevents duplicate alert emails when running
     /// multiple instances. Uses Redis/Valkey when configured, no-op otherwise.

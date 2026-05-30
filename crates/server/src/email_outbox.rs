@@ -36,8 +36,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lettre::AsyncTransport;
-use lettre::message::{MultiPart, SinglePart, header};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect, sea_query::Expr,
@@ -287,28 +285,21 @@ async fn process_batch(resources: &AppResources) -> Result<(), sea_orm::DbErr> {
 #[allow(clippy::cognitive_complexity)]
 async fn deliver_item(
     db: &DatabaseConnection,
-    mailer: &Arc<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    mailer: &Arc<dyn crate::backends::EmailSender>,
     from: &str,
     item: email_outbox::Model,
     now: OffsetDateTime,
 ) {
-    let msg = match build_message(from, &item) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!(
-                name = "email_outbox.worker.build_failed",
-                target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                id = %item.id,
-                to = %item.to_email,
-                error = %e,
-                message = "Email outbox: could not build message; marking failed"
-            );
-            mark_failed(db, item, now, e.to_string()).await;
-            return;
-        }
+    let outgoing = crate::backends::OutgoingEmail {
+        from: from.to_string(),
+        to: item.to_email.clone(),
+        subject: item.subject.clone(),
+        text_body: item.text_body.clone(),
+        html_body: item.html_body.clone(),
+        list_unsubscribe: None,
     };
 
-    match mailer.send(msg).await {
+    match mailer.send(outgoing).await {
         Ok(_) => {
             tracing::info!(
                 name = "email_outbox.worker.delivered",
@@ -342,18 +333,6 @@ async fn mark_sent(db: &DatabaseConnection, item: email_outbox::Model, now: Offs
     let _ = active.update(db).await;
 }
 
-async fn mark_failed(
-    db: &DatabaseConnection,
-    item: email_outbox::Model,
-    _now: OffsetDateTime,
-    error: String,
-) {
-    let mut active: email_outbox::ActiveModel = item.into();
-    active.status = Set(STATUS_FAILED.to_string());
-    active.last_error = Set(Some(error));
-    let _ = active.update(db).await;
-}
-
 async fn schedule_retry_or_fail(
     db: &DatabaseConnection,
     item: email_outbox::Model,
@@ -382,40 +361,6 @@ fn backoff_secs(attempt: i32) -> i64 {
         4 => 3_600,
         _ => 21_600,
     }
-}
-
-fn build_message(
-    from: &str,
-    item: &email_outbox::Model,
-) -> Result<lettre::Message, Box<dyn std::error::Error + Send + Sync>> {
-    let builder = lettre::Message::builder()
-        .from(from.parse()?)
-        .to(item.to_email.parse()?)
-        .subject(&item.subject)
-        .header(header::MIME_VERSION_1_0)
-        .message_id(None);
-
-    let msg = if let Some(html) = &item.html_body {
-        builder.multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(header::ContentType::TEXT_PLAIN)
-                        .body(item.text_body.clone()),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(header::ContentType::TEXT_HTML)
-                        .body(html.clone()),
-                ),
-        )?
-    } else {
-        builder
-            .header(header::ContentType::TEXT_PLAIN)
-            .body(item.text_body.clone())?
-    };
-
-    Ok(msg)
 }
 
 #[cfg(test)]
@@ -462,53 +407,98 @@ mod tests {
         assert_eq!(backoff_secs(0), 21_600);
     }
 
-    // ── build_message ──────────────────────────────────────────────────────
+    // ── deliver_item ──────────────────────────────────────────────────────
 
-    fn make_outbox_item(html: Option<&str>) -> email_outbox::Model {
-        email_outbox::Model {
-            id: uuid::Uuid::new_v4().to_string(),
-            to_email: "recipient@example.com".into(),
-            subject: "Test Subject".into(),
-            html_body: html.map(String::from),
-            text_body: "Plain text body".into(),
-            status: STATUS_PENDING.to_string(),
-            attempts: 0,
-            max_attempts: 5,
-            next_attempt_at: OffsetDateTime::now_utc(),
-            expires_at: None,
-            last_error: None,
-            created_at: OffsetDateTime::now_utc(),
-            sent_at: None,
+    /// Simple mock sender for testing deliver_item without a real SMTP server.
+    #[derive(Debug)]
+    struct MockSender {
+        should_fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::backends::EmailSender for MockSender {
+        async fn send(
+            &self,
+            _email: crate::backends::OutgoingEmail,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            if self.should_fail {
+                Err("mock send failed".into())
+            } else {
+                Ok(())
+            }
         }
     }
 
-    #[test]
-    fn build_message_plain_text_only() {
-        let item = make_outbox_item(None);
-        let msg = build_message("sender@example.com", &item);
-        assert!(msg.is_ok());
+    #[tokio::test]
+    async fn deliver_item_marks_sent_on_success() {
+        let db = create_test_db().await;
+        enqueue(&db, "to@example.com", "Subject", None, "body".into(), None)
+            .await
+            .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let sender = Arc::new(MockSender { should_fail: false });
+        deliver_item(
+            &db,
+            &(sender as Arc<dyn crate::backends::EmailSender>),
+            "from@example.com",
+            item,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_SENT);
+        assert!(updated.sent_at.is_some());
     }
 
-    #[test]
-    fn build_message_with_html() {
-        let item = make_outbox_item(Some("<p>Hello</p>"));
-        let msg = build_message("sender@example.com", &item);
-        assert!(msg.is_ok());
+    #[tokio::test]
+    async fn deliver_item_schedules_retry_on_send_failure() {
+        let db = create_test_db().await;
+        enqueue(&db, "to@example.com", "Subject", None, "body".into(), None)
+            .await
+            .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let sender = Arc::new(MockSender { should_fail: true });
+        let now = OffsetDateTime::now_utc();
+        deliver_item(
+            &db,
+            &(sender as Arc<dyn crate::backends::EmailSender>),
+            "from@example.com",
+            item,
+            now,
+        )
+        .await;
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        // Failed once → still pending, attempts incremented
+        assert_eq!(updated.status, STATUS_PENDING);
+        assert_eq!(updated.attempts, 1);
+        assert!(updated.last_error.is_some());
     }
 
-    #[test]
-    fn build_message_invalid_from_returns_err() {
-        let item = make_outbox_item(None);
-        let msg = build_message("not-an-email", &item);
-        assert!(msg.is_err());
-    }
-
-    #[test]
-    fn build_message_invalid_to_returns_err() {
-        let mut item = make_outbox_item(None);
-        item.to_email = "not-an-email".into();
-        let msg = build_message("sender@example.com", &item);
-        assert!(msg.is_err());
+    #[tokio::test]
+    async fn deliver_item_with_html_marks_sent() {
+        let db = create_test_db().await;
+        enqueue(
+            &db,
+            "to@example.com",
+            "Subject",
+            Some("<p>HTML</p>".into()),
+            "plain".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        let sender = Arc::new(MockSender { should_fail: false });
+        deliver_item(
+            &db,
+            &(sender as Arc<dyn crate::backends::EmailSender>),
+            "from@example.com",
+            item,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+        let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_SENT);
     }
 
     // ── enqueue / enqueue_at ───────────────────────────────────────────────
@@ -674,21 +664,43 @@ mod tests {
         assert!(updated.sent_at.is_some());
     }
 
-    // ── mark_failed ────────────────────────────────────────────────────────
+    // ── deliver_item at max_attempts ─────────────────────────────────────
 
     #[tokio::test]
-    async fn mark_failed_sets_status_and_error() {
+    async fn deliver_item_marks_failed_when_max_attempts_exhausted() {
         let db = create_test_db().await;
-        enqueue(&db, "a@example.com", "s", None, "t".into(), None)
-            .await
-            .unwrap();
+        // Insert at max_attempts - 1 so one more failure tips it over
+        let row = email_outbox::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            to_email: Set("a@example.com".into()),
+            subject: Set("s".into()),
+            html_body: Set(None),
+            text_body: Set("t".into()),
+            status: Set(STATUS_PENDING.to_string()),
+            attempts: Set(4),
+            max_attempts: Set(5),
+            next_attempt_at: Set(OffsetDateTime::now_utc()),
+            expires_at: Set(None),
+            last_error: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+            sent_at: Set(None),
+        };
+        row.insert(&db).await.unwrap();
+
         let item = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
-        let now = OffsetDateTime::now_utc();
-        mark_failed(&db, item, now, "smtp error".to_string()).await;
+        let sender = Arc::new(MockSender { should_fail: true });
+        deliver_item(
+            &db,
+            &(sender as Arc<dyn crate::backends::EmailSender>),
+            "from@example.com",
+            item,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
 
         let updated = EmailOutboxEntity::find().one(&db).await.unwrap().unwrap();
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.last_error.as_deref(), Some("smtp error"));
+        assert!(updated.last_error.is_some());
     }
 
     // ── schedule_retry_or_fail ─────────────────────────────────────────────

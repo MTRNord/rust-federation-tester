@@ -261,8 +261,8 @@ async fn main() -> color_eyre::eyre::Result<()> {
             .expect("Failed to connect to database"),
     );
 
-    // Set up lettre SMTP client (only when smtp.enabled = true)
-    let mailer = if config.smtp.enabled {
+    // Set up email sender (only when smtp.enabled = true)
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = if config.smtp.enabled {
         tracing::debug!("Loading SMTP client");
         let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
         let transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.server)
@@ -273,7 +273,9 @@ async fn main() -> color_eyre::eyre::Result<()> {
                 config.smtp.timeout_secs,
             )))
             .build();
-        Some(Arc::new(transport))
+        Some(Arc::new(
+            rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(transport)),
+        ))
     } else {
         tracing::info!(
             "SMTP disabled — alert emails and email-dependent routes will not be available"

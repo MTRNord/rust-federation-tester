@@ -96,9 +96,11 @@ fn base_config() -> AppConfig {
 async fn setup() -> (AppResources, OAuth2State) {
     let db = create_test_db().await;
     let config = Arc::new(base_config());
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     let resources = AppResources {
         db: db.clone(),

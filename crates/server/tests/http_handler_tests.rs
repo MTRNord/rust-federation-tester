@@ -67,9 +67,11 @@ fn create_test_config(stats_enabled: bool) -> AppConfig {
 async fn create_test_resources(stats_enabled: bool) -> AppResources {
     let db = create_test_db().await;
     let config = Arc::new(create_test_config(stats_enabled));
-    let mailer = Some(Arc::new(
-        lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
-            .build(),
+    let mailer: Option<Arc<dyn rust_federation_tester::EmailSender>> = Some(Arc::new(
+        rust_federation_tester::backends::LettreSmtpSender::new(Arc::new(
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous("localhost")
+                .build(),
+        )),
     ));
     AppResources {
         db: Arc::new(db),
