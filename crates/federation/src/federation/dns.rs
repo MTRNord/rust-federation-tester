@@ -1,4 +1,4 @@
-use crate::federation::config::FederationConfig;
+use crate::config::FederationConfig;
 use crate::response::{Error, ErrorCode, SRVData};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -268,7 +268,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                     "AAAA lookup timed out",
                 )),
             };
-            Ok::<_, color_eyre::eyre::Error>((
+            Ok::<_, std::convert::Infallible>((
                 host,
                 records,
                 cname_resp,

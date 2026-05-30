@@ -1,7 +1,7 @@
+use crate::config::FederationConfig;
 use crate::connection_pool::{ConnectionPool, PooledSender, TlsConnectionInfo};
 use crate::error::FetchError;
 use crate::federation::certificate::extract_certificate_info;
-use crate::federation::config::FederationConfig;
 use crate::response::Certificate;
 use crate::tls::shared_tls_config;
 use bytes::Bytes;

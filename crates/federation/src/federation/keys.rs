@@ -1,6 +1,6 @@
+use crate::config::FederationConfig;
 use crate::connection_pool::ConnectionPool;
 use crate::error::FetchError;
-use crate::federation::config::FederationConfig;
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::response::{Certificate, Ed25519Check, Keys};
 
@@ -33,7 +33,7 @@ pub async fn fetch_keys(
     sni: &str,
     pool: &ConnectionPool,
     config: &FederationConfig,
-) -> color_eyre::eyre::Result<FullKeysResponse> {
+) -> Result<FullKeysResponse, FetchError> {
     let response = timeout(
         config.network_timeout,
         fetch_url_custom_sni_host(
@@ -46,20 +46,16 @@ pub async fn fetch_keys(
         ),
     )
     .await
-    .map_err(|_| color_eyre::eyre::eyre!("Timeout while fetching keys"))?
-    .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
+    .map_err(|_| FetchError::Timeout(config.network_timeout))??;
 
     let http_response = response.response.ok_or_else(|| {
-        color_eyre::eyre::eyre!("No HTTP response received from /_matrix/key/v2/server")
+        FetchError::Network("no HTTP response from /_matrix/key/v2/server".into())
     })?;
     if !http_response.status().is_success() {
-        return Err(color_eyre::eyre::eyre!(
-            FetchError::Http {
-                status: http_response.status(),
-                context: "fetch_keys".into()
-            }
-            .to_string()
-        ));
+        return Err(FetchError::Http {
+            status: http_response.status(),
+            context: "fetch_keys".into(),
+        });
     }
 
     let content_type_ok = http_response
@@ -72,13 +68,12 @@ pub async fn fetch_keys(
         .into_body()
         .collect()
         .await
-        .map_err(|e| color_eyre::eyre::eyre!(FetchError::Network(e.to_string()).to_string()))?
+        .map_err(|e| FetchError::Network(e.to_string()))?
         .to_bytes();
-    let keys_string = String::from_utf8(body.to_vec()).map_err(|_| {
-        color_eyre::eyre::eyre!(FetchError::UnexpectedContentType("non-utf8".into()).to_string())
-    })?;
-    let keys: Keys = serde_json::from_str(&keys_string)
-        .map_err(|_| color_eyre::eyre::eyre!(FetchError::Json("keys parse".into()).to_string()))?;
+    let keys_string = String::from_utf8(body.to_vec())
+        .map_err(|_| FetchError::UnexpectedContentType("non-utf8".into()))?;
+    let keys: Keys =
+        serde_json::from_str(&keys_string).map_err(|_| FetchError::Json("keys parse".into()))?;
 
     Ok(FullKeysResponse {
         keys,

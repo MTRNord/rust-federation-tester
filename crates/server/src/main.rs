@@ -304,7 +304,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
         allow_private_targets = config.allow_private_targets,
         "Federation configuration initialised"
     );
-    let fed_config = rust_federation_tester::federation::FederationConfig {
+    let fed_config = rust_federation_tester::FederationConfig {
         network_timeout: std::time::Duration::from_secs(config.federation_timeout_secs),
         allow_private_targets: config.allow_private_targets,
     };

@@ -1,4 +1,4 @@
-use crate::federation::config::FederationConfig;
+use crate::config::FederationConfig;
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;

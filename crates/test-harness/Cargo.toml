@@ -1,0 +1,18 @@
+[package]
+name = "matrix-federation-test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "matrix-federation-test"
+path = "src/main.rs"
+
+[dependencies]
+matrix-federation-tester = { path = "../federation" }
+clap = { version = "4", features = ["derive"] }
+hickory-resolver = "0.26.1"
+rustls = { version = "0.23", features = ["ring"] }
+tokio = { version = "1.45.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+serde_json = "1"

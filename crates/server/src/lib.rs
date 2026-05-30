@@ -1,7 +1,8 @@
-//! A library for testing Matrix federation compatibility of servers.
+//! Matrix federation tester server — HTTP API, alerts, OAuth2, and persistence layer.
 //!
-//! This library allows checking Matrix federation compatibility for a given server
-//! by validating DNS records, well-known configurations, and connection details.
+//! Pure federation-checking logic lives in the `matrix-federation-tester` library crate.
+//! This crate wraps it with an Axum web server, PostgreSQL persistence, email alerts,
+//! and distributed coordination.
 
 use std::sync::Arc;
 
@@ -11,25 +12,24 @@ use sea_orm::DatabaseConnection;
 
 use crate::config::AppConfig;
 
+// Re-export the core library so existing callers using `rust_federation_tester::*`
+// continue to work unchanged.
+pub use matrix_federation_tester::{
+    FederationConfig, connection_pool, error, federation, response, security, tls, validation,
+};
+
 pub mod alerts;
 pub mod api;
 pub mod client;
 pub mod config;
-pub mod connection_pool;
 pub mod distributed;
 pub mod email_outbox;
 pub mod email_templates;
 pub mod entity;
-pub mod error;
-pub mod federation;
 pub mod net;
 pub mod oauth2;
 pub mod release_notes;
-pub mod response;
-pub mod security;
 pub mod stats;
-pub mod tls;
-pub mod validation;
 
 #[derive(Clone, Debug)]
 pub struct AppResources {

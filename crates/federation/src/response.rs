@@ -1,7 +1,6 @@
+use crate::config::FederationConfig;
 use crate::connection_pool::ConnectionPool;
-use crate::federation::{
-    FederationConfig, connection_check, lookup_server, lookup_server_well_known,
-};
+use crate::federation::{connection_check, lookup_server, lookup_server_well_known};
 use crate::validation::server_name::parse_and_validate_server_name;
 
 use futures::StreamExt;
@@ -12,9 +11,12 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
+#[cfg(feature = "utoipa")]
+#[allow(unused_imports)]
 use utoipa::ToSchema;
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Root {
     pub server_name: String,
@@ -38,7 +40,8 @@ pub struct Root {
     pub federation_warning: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct WellKnownResult {
     #[serde(rename = "m.server")]
@@ -54,7 +57,8 @@ pub struct WellKnownResult {
     pub connection_addresses: Vec<String>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Dnsresult {
     #[serde(rename = "SRVSkipped")]
@@ -64,12 +68,14 @@ pub struct Dnsresult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addrs: Vec<String>,
 }
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SrvErrorData {
     pub message: String,
 }
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SRVData {
     pub target: String,
@@ -86,7 +92,8 @@ pub struct SRVData {
     pub weight: Option<u16>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ConnectionReportData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -106,7 +113,8 @@ pub struct ConnectionReportData {
     pub required_retry: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Certificate {
     pub subject_common_name: String,
@@ -121,14 +129,16 @@ pub struct Certificate {
     pub not_after: Option<OffsetDateTime>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Cipher {
     pub version: String,
     pub cipher_suite: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Checks {
     #[serde(rename = "AllChecksOK")]
@@ -159,14 +169,16 @@ pub struct Checks {
     pub tls_version_ok: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum SignatureCheckError {
     Mismatch,
     NonCanonicalJson,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Ed25519Check {
     pub valid_ed25519: bool,
@@ -175,7 +187,8 @@ pub struct Ed25519Check {
     pub error: Option<SignatureCheckError>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Keys {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,7 +206,8 @@ pub struct Keys {
     pub verify_keys: BTreeMap<String, Ed25519VerifyKey>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ed25519VerifyKey {
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -201,13 +215,15 @@ pub struct Ed25519VerifyKey {
     pub expired_ts: Option<i64>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
     pub version: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde[rename_all = "PascalCase"]]
 pub enum InvalidServerNameErrorCode {
     #[default]
@@ -218,7 +234,8 @@ pub enum InvalidServerNameErrorCode {
     InvalidCharacter,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ErrorCode {
     #[default]
@@ -239,7 +256,8 @@ pub enum ErrorCode {
     SplitBrain,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Error {
     pub error: String,
@@ -252,7 +270,7 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     resolver: &Resolver<P>,
     connection_pool: &ConnectionPool,
     config: &FederationConfig,
-) -> color_eyre::eyre::Result<Root> {
+) -> Result<Root, crate::error::FederationError> {
     // Validate server name
     let mut resp_data = Root {
         federation_ok: true,

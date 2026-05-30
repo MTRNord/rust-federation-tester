@@ -1,6 +1,6 @@
 use hickory_resolver::Resolver;
+use rust_federation_tester::FederationConfig;
 use rust_federation_tester::connection_pool::ConnectionPool;
-use rust_federation_tester::federation::FederationConfig;
 use rust_federation_tester::response::generate_json_report;
 use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
 

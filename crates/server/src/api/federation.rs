@@ -6,9 +6,9 @@
 //! - `/debug/cache-stats` - Debug endpoint for connection pool stats (debug mode only)
 
 use crate::{
+    FederationConfig,
     client::resolution::{fetch_client_server_versions, resolve_client_side_api},
     connection_pool::ConnectionPool,
-    federation::FederationConfig,
     response::{Root, generate_json_report},
     stats::{self, StatEvent},
 };

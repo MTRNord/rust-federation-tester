@@ -10,6 +10,7 @@ keywords = ["matrix", "federation", "testing"]
 categories = ["api-bindings", "network-programming"]
 
 [dependencies]
+matrix-federation-tester = { path = "../federation", features = ["utoipa"] }
 argon2 = "0.5"
 clap = { version = "4", features = ["derive"] }
 askama = { version = "0.16.0", features = ["serde_json"] }

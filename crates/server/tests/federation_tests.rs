@@ -6,10 +6,9 @@ mod federation_tests {
     use hickory_resolver::Resolver;
     use hickory_resolver::config::{self, ResolverConfig};
     use hickory_resolver::net::runtime::TokioRuntimeProvider;
+    use rust_federation_tester::FederationConfig;
     use rust_federation_tester::connection_pool::ConnectionPool;
-    use rust_federation_tester::federation::{
-        FederationConfig, lookup_server, lookup_server_well_known,
-    };
+    use rust_federation_tester::federation::{lookup_server, lookup_server_well_known};
     use rust_federation_tester::response::generate_json_report;
     use rustls::crypto::{self, CryptoProvider};
 

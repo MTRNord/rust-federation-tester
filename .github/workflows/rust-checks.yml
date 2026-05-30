@@ -65,6 +65,16 @@ jobs:
             -D warnings \
             -W clippy::cognitive_complexity
 
+      - name: Verify federation crate has no server deps
+        run: |
+          cargo tree -p matrix-federation-tester --locked 2>/dev/null \
+            | grep -E "axum|sea-orm|lettre|redis|argon2|color-eyre" \
+            && echo "SERVER DEPS LEAKED INTO LIBRARY" && exit 1 \
+            || echo "No server deps in library — OK"
+
+      - name: Check utoipa feature compiles
+        run: cargo check -p matrix-federation-tester --locked --features utoipa
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats

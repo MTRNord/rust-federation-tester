@@ -3111,6 +3111,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "matrix-federation-test"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hickory-resolver",
+ "matrix-federation-tester",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "matrix-federation-tester"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "dashmap",
+ "ed25519-dalek",
+ "futures",
+ "hickory-resolver",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "url",
+ "utoipa",
+ "x509-parser",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4755,6 +4799,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "lettre",
+ "matrix-federation-tester",
  "migration",
  "once_cell",
  "opentelemetry",

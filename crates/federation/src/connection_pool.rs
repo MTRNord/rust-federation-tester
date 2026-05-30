@@ -138,7 +138,7 @@ impl ConnectionPool {
         &self,
         addr: &str,
         sni: &str,
-    ) -> color_eyre::eyre::Result<(PooledSender, Arc<TlsConnectionInfo>)> {
+    ) -> Result<(PooledSender, Arc<TlsConnectionInfo>), crate::error::FetchError> {
         let key: ConnectionKey = (Arc::from(addr), Arc::from(sni));
         if let Some(conn) = self.try_get_h2(&key) {
             return Ok(conn);
@@ -282,7 +282,7 @@ impl ConnectionPool {
         addr: &str,
         sni: &str,
         key: ConnectionKey,
-    ) -> color_eyre::eyre::Result<(PooledSender, Arc<TlsConnectionInfo>)> {
+    ) -> Result<(PooledSender, Arc<TlsConnectionInfo>), crate::error::FetchError> {
         let sni_host = if sni.starts_with('[') {
             &sni[1..sni.find(']').unwrap_or(sni.len())]
         } else {
@@ -291,14 +291,18 @@ impl ConnectionPool {
 
         let stream = timeout(self.connection_timeout, TcpStream::connect(addr))
             .await
-            .map_err(|_| color_eyre::eyre::eyre!("connection to {addr} timed out"))??;
+            .map_err(|_| crate::error::FetchError::Timeout(self.connection_timeout))
+            .and_then(|r| r.map_err(|e| crate::error::FetchError::Network(e.to_string())))?;
 
         let config = shared_tls_config_with_alpn();
         let connector = TlsConnector::from(config);
         let domain = ServerName::try_from(sni_host.to_string())
-            .map_err(|_| color_eyre::eyre::eyre!("invalid SNI domain: {sni_host}"))?;
+            .map_err(|_| crate::error::FetchError::InvalidDomain(sni_host.to_string()))?;
 
-        let tls_stream = connector.connect(domain, stream).await?;
+        let tls_stream = connector
+            .connect(domain, stream)
+            .await
+            .map_err(|e| crate::error::FetchError::Tls(e.to_string()))?;
         let (_, conn_info) = tls_stream.get_ref();
 
         let http_version = match conn_info.alpn_protocol() {
@@ -325,7 +329,9 @@ impl ConnectionPool {
         let io = TokioIo::new(tls_stream);
 
         if http_version == HttpVersion::H2 {
-            let (sender, conn) = http2::handshake(TokioExecutor::new(), io).await?;
+            let (sender, conn) = http2::handshake(TokioExecutor::new(), io)
+                .await
+                .map_err(|e| crate::error::FetchError::Network(e.to_string()))?;
             tokio::task::spawn(async move {
                 if let Err(err) = conn.await {
                     tracing::warn!(?err, "H2 connection driver ended");
@@ -335,7 +341,9 @@ impl ConnectionPool {
                 .insert(key, (sender.clone(), Arc::clone(&tls_info)));
             Ok((PooledSender::H2(sender), tls_info))
         } else {
-            let (sender, conn) = http1::handshake(io).await?;
+            let (sender, conn) = http1::handshake(io)
+                .await
+                .map_err(|e| crate::error::FetchError::Network(e.to_string()))?;
             tokio::task::spawn(async move {
                 if let Err(err) = conn.await {
                     tracing::warn!(?err, "H1 connection driver ended");

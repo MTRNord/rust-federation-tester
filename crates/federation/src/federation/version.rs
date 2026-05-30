@@ -1,6 +1,6 @@
+use crate::config::FederationConfig;
 use crate::connection_pool::{ConnectionPool, PooledSender};
 use crate::error::FetchError;
-use crate::federation::config::FederationConfig;
 use crate::response::Version;
 use crate::tls::shared_tls_config;
 use bytes::Bytes;
@@ -26,7 +26,7 @@ pub async fn query_server_version_pooled(
     sni: &str,
     connection_pool: &ConnectionPool,
     config: &FederationConfig,
-) -> color_eyre::eyre::Result<Option<(Version, bool)>> {
+) -> Result<Option<(Version, bool)>, FetchError> {
     let timeout_duration = config.network_timeout;
     let response_result = timeout(
         timeout_duration,
@@ -40,8 +40,8 @@ pub async fn query_server_version_pooled(
         ),
     )
     .await
-    .map_err(|_| color_eyre::eyre::eyre!(FetchError::Timeout(timeout_duration).to_string()))?;
-    let response_option = response_result.map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
+    .map_err(|_| FetchError::Timeout(timeout_duration))?;
+    let response_option = response_result?;
     let http_response = match response_option {
         Some(r) => r,
         None => return Ok(Some((Version::default(), false))),
@@ -52,7 +52,7 @@ pub async fn query_server_version_pooled(
         .into_body()
         .collect()
         .await
-        .map_err(|e| color_eyre::eyre::eyre!(FetchError::Network(e.to_string()).to_string()))?
+        .map_err(|e| FetchError::Network(e.to_string()))?
         .to_bytes();
     if !status.is_success() {
         return Ok(Some((Version::default(), false)));

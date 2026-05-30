@@ -94,7 +94,8 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ steps.platform.outputs.pair }}-${{ matrix.features.name }}
+          # Prefix "server-" so merge jobs never accidentally match test-harness artifacts
+          name: server-digests-${{ steps.platform.outputs.pair }}-${{ matrix.features.name }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -123,7 +124,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digests-*-${{ matrix.features.name }}
+          # "server-digests-*-{feature}" never matches test-harness artifacts
+          pattern: server-digests-*-${{ matrix.features.name }}
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -158,3 +160,122 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ghcr.io/mtrnord/rust-federation-tester:${{ steps.meta.outputs.version }}
+
+  # Build the lean test-harness CLI image (no DB, no SMTP, just matrix-federation-test binary)
+  build-test-harness:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare platform name
+        id: platform
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "pair=${platform//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mtrnord/matrix-federation-test
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.test-harness
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/mtrnord/matrix-federation-test,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.platform.outputs.pair }}-test-harness
+          cache-to: type=gha,mode=max,scope=${{ steps.platform.outputs.pair }}-test-harness
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests-test-harness
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests-test-harness/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          # Prefix "test-harness-" so merge jobs never accidentally match server artifacts
+          name: test-harness-digests-${{ steps.platform.outputs.pair }}
+          path: /tmp/digests-test-harness/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-test-harness:
+    runs-on: ubuntu-latest
+    needs: build-test-harness
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests-test-harness
+          # "test-harness-digests-*" never matches server artifacts
+          pattern: test-harness-digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mtrnord/matrix-federation-test
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests-test-harness
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/mtrnord/matrix-federation-test@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ghcr.io/mtrnord/matrix-federation-test:${{ steps.meta.outputs.version }}

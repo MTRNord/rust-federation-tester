@@ -28,6 +28,7 @@
 //! See [`crate::distributed`] for details.
 
 use crate::AppResources;
+use crate::FederationConfig;
 use crate::alerts::email::{
     REMINDER_EMAIL_INTERVAL, format_email_datetime, send_failure_email, send_recovery_email,
 };
@@ -39,7 +40,6 @@ use crate::email_templates::{FailureEmailTemplate, env_subject};
 use crate::entity::{
     alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
 };
-use crate::federation::FederationConfig;
 use crate::response::{Root, generate_json_report};
 use hickory_resolver::ConnectionProvider;
 use hickory_resolver::Resolver;

@@ -1,5 +1,5 @@
+use crate::config::FederationConfig;
 use crate::connection_pool::ConnectionPool;
-use crate::federation::config::FederationConfig;
 use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
 use crate::response::{ConnectionReportData, Error, ErrorCode};

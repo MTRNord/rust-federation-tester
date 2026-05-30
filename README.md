@@ -51,6 +51,83 @@ Returns `GOOD` if federation is OK, otherwise `BAD`.
 GET /api/federation/federation-ok?server_name=matrix.org
 ```
 
+## CLI Test Harness (`matrix-federation-test`)
+
+A standalone CLI for testing a single Matrix server's federation compliance — similar in spirit to matrix-sytest but without requiring a second homeserver.
+
+### Installation
+
+```sh
+cargo install --path crates/test-harness
+```
+
+Or run directly from the workspace:
+
+```sh
+cargo run -p matrix-federation-test -- --server matrix.example.com
+```
+
+### Usage
+
+```sh
+matrix-federation-test --server <SERVER_NAME> [--format pretty|json|tap] [--timeout <SECS>]
+```
+
+**Examples:**
+
+```sh
+# Human-readable output
+matrix-federation-test --server matrix.org
+
+# TAP format for CI pipelines (exits 0 on pass, 1 on failure)
+matrix-federation-test --server matrix.org --format tap
+
+# JSON output for scripting
+matrix-federation-test --server matrix.org --format json
+```
+
+### Test cases
+
+| Name | What it checks |
+|------|---------------|
+| `well_known_reachable` | At least one IP reached `/.well-known/matrix/server` |
+| `well_known_valid` | At least one response contains a valid `m.server` |
+| `well_known_consistent` | No split-brain (all IPs return the same `m.server`) |
+| `srv_or_dns_resolves` | DNS resolves to at least one address |
+| `tls_valid` | At least one connection has valid TLS certificates |
+| `version_reachable` | `/_matrix/federation/v1/version` returns a parseable response |
+| `keys_reachable` | `/_matrix/key/v2/server` is reachable |
+| `keys_valid_ed25519` | ed25519 key is present and the signature verifies |
+| `federation_ok` | Overall `FederationOK` is true |
+
+### Docker
+
+A minimal Docker image is available that contains only the CLI (no database, no SMTP, no configuration needed):
+
+```sh
+docker run --rm ghcr.io/mtrnord/matrix-federation-test:latest --server matrix.example.com
+```
+
+### Using the library in your own code
+
+The pure federation-checking logic is published as the `matrix-federation-tester` crate. Add it as a dependency:
+
+```toml
+[dependencies]
+matrix-federation-tester = { git = "https://github.com/MTRNord/rust-federation-tester" }
+```
+
+```rust
+use matrix_federation_tester::{FederationConfig, connection_pool::ConnectionPool, response::generate_json_report};
+
+let pool = ConnectionPool::default();
+let config = FederationConfig::default();
+let report = generate_json_report("matrix.example.com", &resolver, &pool, &config).await?;
+println!("FederationOK: {}", report.federation_ok);
+```
+
+---
+
 ## Test & Coverage
 
 Run all tests:
