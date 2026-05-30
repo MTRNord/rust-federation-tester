@@ -140,7 +140,7 @@ struct ProbeClientApiParams {
     base_url: String,
     /// Which client-server API path to probe (allowlist):
     /// `versions`, `rtc-transports-v1`, `rtc-transports-msc`,
-    /// `room-summary-v1`, `room-summary-nheko`.
+    /// `room-summary-v1`, `room-summary-nheko`, `auth-issuer`.
     path: String,
     /// Room ID for room-summary paths (e.g. `!probe:example.com`).
     /// Required when `path` is `room-summary-v1` or `room-summary-nheko`.
@@ -166,7 +166,8 @@ struct ProbeClientApiParams {
                    - `rtc-transports-v1` → `/_matrix/client/v1/rtc/transports`\n\
                    - `rtc-transports-msc` → `/_matrix/client/unstable/org.matrix.msc4143/rtc/transports`\n\
                    - `room-summary-v1` → `/_matrix/client/v1/room_summary/{room_id}?via={via}` (requires `room_id`)\n\
-                   - `room-summary-nheko` → `/_matrix/client/unstable/im.nheko.summary/summary/{room_id}?via={via}` (requires `room_id`)",
+                   - `room-summary-nheko` → `/_matrix/client/unstable/im.nheko.summary/summary/{room_id}?via={via}` (requires `room_id`)\n\
+                   - `auth-issuer` → `/_matrix/client/v1/auth_issuer` (MSC3861 OIDC issuer discovery)",
     responses(
         (status = 200, description = "Probe result (status_code=0 when the server is unreachable)", body = ProbeWellKnownResponse),
         (status = 400, description = "Invalid parameters"),
@@ -183,6 +184,7 @@ async fn probe_client_api(
         "versions" => "/_matrix/client/versions",
         "rtc-transports-v1" => "/_matrix/client/v1/rtc/transports",
         "rtc-transports-msc" => "/_matrix/client/unstable/org.matrix.msc4143/rtc/transports",
+        "auth-issuer" => "/_matrix/client/v1/auth_issuer",
         p @ ("room-summary-v1" | "room-summary-nheko") => {
             let room_id = match &params.room_id {
                 Some(r) if !r.is_empty() => r.as_str(),
@@ -214,7 +216,7 @@ async fn probe_client_api(
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "path must be one of: versions, rtc-transports-v1, rtc-transports-msc, room-summary-v1, room-summary-nheko" })),
+                Json(json!({ "error": "path must be one of: versions, rtc-transports-v1, rtc-transports-msc, room-summary-v1, room-summary-nheko, auth-issuer" })),
             )
                 .into_response()
         }
