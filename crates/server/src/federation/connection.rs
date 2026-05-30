@@ -1,16 +1,18 @@
 use crate::connection_pool::ConnectionPool;
+use crate::federation::config::FederationConfig;
 use crate::federation::keys::verify_keys;
 use crate::federation::{fetch_keys, query_server_version_pooled};
 use crate::response::{ConnectionReportData, Error, ErrorCode};
 use tokio::time::{Duration, sleep};
 
-#[tracing::instrument(skip(connection_pool))]
+#[tracing::instrument(skip(connection_pool, config))]
 pub async fn connection_check(
     addr: &str,
     server_name: &str,
     server_host: &str,
     sni: &str,
     connection_pool: &ConnectionPool,
+    config: &FederationConfig,
 ) -> Result<ConnectionReportData, Error> {
     let mut report = ConnectionReportData::default();
     let addr_c = addr.to_string();
@@ -20,8 +22,8 @@ pub async fn connection_check(
 
     // First attempt: run version and keys fetches in parallel.
     let (v_first, k_first) = tokio::join!(
-        query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c),
-        fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c)
+        query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c, config),
+        fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c, config)
     );
     let (v_err, k_err) = (v_first.is_err(), k_first.is_err());
 
@@ -35,14 +37,15 @@ pub async fn connection_check(
         let (v, k) = tokio::join!(
             async {
                 if v_err {
-                    query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c).await
+                    query_server_version_pooled(&addr_c, &server_host_c, &sni_c, &pool_c, config)
+                        .await
                 } else {
                     v_first
                 }
             },
             async {
                 if k_err {
-                    fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c).await
+                    fetch_keys(&addr_c, &server_host_c, &sni_c, &pool_c, config).await
                 } else {
                     k_first
                 }

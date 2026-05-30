@@ -8,6 +8,7 @@
 use crate::{
     client::resolution::{fetch_client_server_versions, resolve_client_side_api},
     connection_pool::ConnectionPool,
+    federation::FederationConfig,
     response::{Root, generate_json_report},
     stats::{self, StatEvent},
 };
@@ -41,6 +42,7 @@ pub struct ApiParams {
 pub struct AppState<P: ConnectionProvider> {
     pub resolver: Arc<Resolver<P>>,
     pub connection_pool: ConnectionPool,
+    pub fed_config: FederationConfig,
 }
 
 /// Creates the federation tester API router.
@@ -142,6 +144,7 @@ async fn get_report<P: ConnectionProvider>(
         &server_name_lower,
         state.resolver.as_ref(),
         &state.connection_pool,
+        &state.fed_config,
     )
     .await
     {
@@ -212,6 +215,7 @@ async fn get_fed_ok<P: ConnectionProvider>(
         &server_name_lower,
         state.resolver.as_ref(),
         &state.connection_pool,
+        &state.fed_config,
     )
     .await
     {

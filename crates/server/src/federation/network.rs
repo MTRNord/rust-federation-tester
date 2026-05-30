@@ -1,8 +1,9 @@
-use crate::connection_pool::{ConnectionPool, TlsConnectionInfo};
+use crate::connection_pool::{ConnectionPool, PooledSender, TlsConnectionInfo};
 use crate::error::FetchError;
 use crate::federation::certificate::extract_certificate_info;
-use crate::optimization::get_shared_tls_config;
+use crate::federation::config::FederationConfig;
 use crate::response::Certificate;
+use crate::tls::shared_tls_config;
 use bytes::Bytes;
 use http_body_util::Empty;
 use hyper::Request;
@@ -14,8 +15,6 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
-use crate::federation::well_known::network_timeout;
-
 #[derive(Debug)]
 pub struct FullResponse {
     pub response: Option<hyper::Response<Incoming>>,
@@ -24,13 +23,14 @@ pub struct FullResponse {
     pub certificates: Vec<Certificate>,
 }
 
-#[tracing::instrument(skip(pool))]
+#[tracing::instrument(skip(pool, config))]
 pub async fn fetch_url_custom_sni_host(
     path: &str,
     addr: &str,
     host: &str,
     sni: &str,
     pool: Option<&ConnectionPool>,
+    config: &FederationConfig,
 ) -> Result<FullResponse, FetchError> {
     // Strip brackets and port: "[::1]:8448" → "::1", "1.2.3.4:8448" → "1.2.3.4", "host:port" → "host"
     let sni_host = if sni.starts_with('[') {
@@ -65,7 +65,7 @@ pub async fn fetch_url_custom_sni_host(
             .map_err(|e| FetchError::Network(e.to_string()))?;
         match sender.send_request(req).await {
             Ok(resp) => {
-                pool.return_connection(addr, sni, "anonymous", sender, Arc::clone(&tls_info))
+                pool.return_connection(addr, sni, sender, Arc::clone(&tls_info))
                     .await;
                 return Ok(FullResponse {
                     response: Some(resp),
@@ -86,13 +86,13 @@ pub async fn fetch_url_custom_sni_host(
     }
 
     // Pool miss or send failure: do a fresh TCP + TLS connection.
-    let t = network_timeout();
+    let t = config.network_timeout;
     let stream = timeout(t, TcpStream::connect(addr))
         .await
         .map_err(|_| FetchError::Timeout(t))
         .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
-    let config = get_shared_tls_config();
+    let config = shared_tls_config();
     let connector = TlsConnector::from(config);
     let domain = ServerName::try_from(sni_host.to_string())
         .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
@@ -121,11 +121,12 @@ pub async fn fetch_url_custom_sni_host(
         protocol: protocol_version.clone(),
         cipher_suite: cipher_suite.to_string(),
         certificates: certificates.clone(),
+        http_version: crate::connection_pool::HttpVersion::H1,
     });
 
     let stream = TokioIo::new(tls_stream);
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(stream)
+    let (mut h1_sender, conn) = hyper::client::conn::http1::handshake(stream)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
@@ -146,13 +147,13 @@ pub async fn fetch_url_custom_sni_host(
         .body(Empty::<Bytes>::new())
         .map_err(|e| FetchError::Network(e.to_string()))?;
 
-    let res = sender
+    let res = h1_sender
         .send_request(req)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
 
     if let Some(pool) = pool {
-        pool.return_connection(addr, sni, "anonymous", sender, tls_info)
+        pool.return_connection(addr, sni, PooledSender::H1(h1_sender), tls_info)
             .await;
     }
 

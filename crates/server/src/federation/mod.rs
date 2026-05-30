@@ -9,6 +9,7 @@
 //! - certificate: X509 parsing helpers
 
 pub mod certificate;
+pub mod config;
 pub mod connection;
 pub mod dns;
 pub mod keys;
@@ -16,7 +17,8 @@ pub mod network;
 pub mod version;
 pub mod well_known;
 
-pub use well_known::{init_federation_config, lookup_server_well_known, network_timeout};
+pub use config::FederationConfig;
+pub use well_known::lookup_server_well_known;
 
 pub use dns::{absolutize_srv_target, lookup_server};
 

@@ -24,11 +24,11 @@ pub mod error;
 pub mod federation;
 pub mod net;
 pub mod oauth2;
-pub mod optimization;
 pub mod release_notes;
 pub mod response;
 pub mod security;
 pub mod stats;
+pub mod tls;
 pub mod validation;
 
 #[derive(Clone, Debug)]

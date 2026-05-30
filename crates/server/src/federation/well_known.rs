@@ -1,3 +1,4 @@
+use crate::federation::config::FederationConfig;
 use crate::federation::network::fetch_url_custom_sni_host;
 use crate::response::{Error, ErrorCode, InvalidServerNameErrorCode, WellKnownResult};
 use crate::validation::server_name::parse_and_validate_server_name;
@@ -6,41 +7,16 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::{ConnectionProvider, Resolver};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{Duration, timeout};
 use url::Url;
 
-/// Default network timeout; overridden at startup by `init_federation_config`.
-const DEFAULT_TIMEOUT_SECS: u64 = 3;
-
-static FEDERATION_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(DEFAULT_TIMEOUT_SECS);
-
-/// When true, the SSRF check that rejects private/internal IPs is skipped.
-/// Only set this to true for closed-federation / intranet deployments.
-/// Enabling this on a public-facing instance allows users to probe internal network resources.
-static ALLOW_PRIVATE_TARGETS: AtomicBool = AtomicBool::new(false);
-
-/// Initialise federation-wide settings from the loaded config.
-/// Must be called once at startup, before any requests are handled.
-pub fn init_federation_config(timeout_secs: u64, allow_private_targets: bool) {
-    FEDERATION_TIMEOUT_SECS.store(timeout_secs, Ordering::Relaxed);
-    ALLOW_PRIVATE_TARGETS.store(allow_private_targets, Ordering::Relaxed);
-}
-
-/// Returns the configured federation network timeout as a `Duration`.
-pub fn network_timeout() -> Duration {
-    Duration::from_secs(FEDERATION_TIMEOUT_SECS.load(Ordering::Relaxed))
-}
-
-/// Kept for callers that still expect a raw `u64`.
-#[deprecated(since = "0.2.0", note = "use `network_timeout()` instead")]
-pub fn network_timeout_secs() -> u64 {
-    FEDERATION_TIMEOUT_SECS.load(Ordering::Relaxed)
-}
-
 /// Validate well-known response for security issues
 #[tracing::instrument()]
-fn validate_well_known_security(original_server: &str, m_server: &str) -> Result<(), Error> {
+fn validate_well_known_security(
+    original_server: &str,
+    m_server: &str,
+    allow_private_targets: bool,
+) -> Result<(), Error> {
     // 1. Prevent empty server names
     if m_server.is_empty() {
         return Err(Error {
@@ -71,7 +47,7 @@ fn validate_well_known_security(original_server: &str, m_server: &str) -> Result
 
     // 4. Validate against localhost/internal addresses to prevent SSRF.
     //    This check is skipped when allow_private_targets is enabled (intranet deployments).
-    if !ALLOW_PRIVATE_TARGETS.load(Ordering::Relaxed) {
+    if !allow_private_targets {
         let server_host = m_server.split(':').next().unwrap_or(m_server);
         if let Ok(ip) = server_host.parse::<IpAddr>()
             && is_private_or_internal_ip(&ip)
@@ -148,10 +124,11 @@ fn is_ip_literal(server_name: &str) -> bool {
     host.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
-#[tracing::instrument(skip(resolver))]
+#[tracing::instrument(skip(resolver, config))]
 pub async fn lookup_server_well_known<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
+    config: &FederationConfig,
 ) -> WellKnownPhaseResult {
     // Spec step 1: IP literals skip well-known entirely.
     // Spec step 2: explicit port also skips well-known.
@@ -207,14 +184,21 @@ pub async fn lookup_server_well_known<P: ConnectionProvider>(
     let mut found_server: Option<String> = None;
     let mut well_known_result: Vec<(String, WellKnownResult)> = vec![];
     let mut futures = FuturesUnordered::new();
+    let allow_private_targets = config.allow_private_targets;
     for addr in &addrs {
         let addr = addr.clone();
         let server_name = server_name.to_string();
+        let timeout_duration = config.network_timeout;
         futures.push(async move {
-            let timeout_duration = network_timeout();
-            let (_resp_opt, result, server_candidate) =
-                fetch_url_with_redirects(&addr, &server_name, &server_name, 10, timeout_duration)
-                    .await;
+            let (_resp_opt, result, server_candidate) = fetch_url_with_redirects(
+                &addr,
+                &server_name,
+                &server_name,
+                10,
+                timeout_duration,
+                allow_private_targets,
+            )
+            .await;
             (addr, result, server_candidate)
         });
     }
@@ -260,6 +244,7 @@ async fn fetch_url_with_redirects(
     sni: &str,
     max_redirects: usize,
     timeout_duration: Duration,
+    allow_private_targets: bool,
 ) -> (
     Option<hyper::Response<hyper::body::Incoming>>,
     WellKnownResult,
@@ -274,6 +259,10 @@ async fn fetch_url_with_redirects(
     let mut current_path = "/.well-known/matrix/server".to_string();
     let mut result = WellKnownResult::default();
     loop {
+        let fetch_config = FederationConfig {
+            network_timeout: timeout_duration,
+            allow_private_targets,
+        };
         let response = timeout(
             timeout_duration,
             fetch_url_custom_sni_host(
@@ -282,6 +271,7 @@ async fn fetch_url_with_redirects(
                 &current_host,
                 &current_sni,
                 None,
+                &fetch_config,
             ),
         )
         .await;
@@ -320,9 +310,11 @@ async fn fetch_url_with_redirects(
                                         && let Some(server_str) = m_server.as_str()
                                     {
                                         // Apply security validation before accepting the m.server value
-                                        if let Err(security_error) =
-                                            validate_well_known_security(&current_host, server_str)
-                                        {
+                                        if let Err(security_error) = validate_well_known_security(
+                                            &current_host,
+                                            server_str,
+                                            allow_private_targets,
+                                        ) {
                                             result.error = Some(security_error);
                                             return (None, result, None);
                                         }
@@ -509,7 +501,7 @@ mod tests {
 
     #[test]
     fn validate_well_known_empty_m_server() {
-        let result = validate_well_known_security("example.org", "");
+        let result = validate_well_known_security("example.org", "", false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.error.contains("Empty"));
@@ -518,35 +510,32 @@ mod tests {
     #[test]
     fn validate_well_known_too_long() {
         let long = "a".repeat(256);
-        let result = validate_well_known_security("example.org", &long);
+        let result = validate_well_known_security("example.org", &long, false);
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_well_known_valid() {
-        let result = validate_well_known_security("example.org", "matrix.example.org:8448");
+        let result = validate_well_known_security("example.org", "matrix.example.org:8448", false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_well_known_self_referential_allowed() {
         // Self-referential delegation is allowed (with a warning), not an error
-        let result = validate_well_known_security("example.org", "example.org");
+        let result = validate_well_known_security("example.org", "example.org", false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_well_known_private_ip_rejected() {
-        // Ensure ALLOW_PRIVATE_TARGETS is false for this test
-        ALLOW_PRIVATE_TARGETS.store(false, std::sync::atomic::Ordering::Relaxed);
-        let result = validate_well_known_security("example.org", "192.168.1.1:8448");
+        let result = validate_well_known_security("example.org", "192.168.1.1:8448", false);
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_well_known_localhost_rejected() {
-        ALLOW_PRIVATE_TARGETS.store(false, std::sync::atomic::Ordering::Relaxed);
-        let result = validate_well_known_security("example.org", "localhost:8448");
+        let result = validate_well_known_security("example.org", "localhost:8448", false);
         assert!(result.is_err());
     }
 }

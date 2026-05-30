@@ -1,5 +1,6 @@
 use hickory_resolver::Resolver;
 use rust_federation_tester::connection_pool::ConnectionPool;
+use rust_federation_tester::federation::FederationConfig;
 use rust_federation_tester::response::generate_json_report;
 use rust_federation_tester::validation::server_name::parse_and_validate_server_name;
 
@@ -45,7 +46,13 @@ async fn test_generate_report() {
 
     // This test would ideally test against a known working Matrix server
     // For now, we just verify the function can be called without panicking
-    let result = generate_json_report("invalid.example.com", &resolver, &connection_pool).await;
+    let result = generate_json_report(
+        "invalid.example.com",
+        &resolver,
+        &connection_pool,
+        &FederationConfig::default(),
+    )
+    .await;
 
     // Function should complete but report federation failure
     assert!(result.is_ok());
@@ -76,7 +83,13 @@ async fn test_concurrent_requests() {
 
         join_set.spawn(async move {
             let server_name = format!("invalid{}.example.com", i);
-            let result = generate_json_report(&server_name, &resolver, &connection_pool).await;
+            let result = generate_json_report(
+                &server_name,
+                &resolver,
+                &connection_pool,
+                &FederationConfig::default(),
+            )
+            .await;
 
             // Just verify the function completes
             result.is_ok()

@@ -3,6 +3,7 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::{self, ResolverConfig};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use rust_federation_tester::connection_pool::ConnectionPool;
+use rust_federation_tester::federation::FederationConfig;
 use rust_federation_tester::response::generate_json_report;
 use rustls::crypto::CryptoProvider;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -71,9 +72,14 @@ fn bench_full_check(c: &mut Criterion) {
     group.bench_function("mtrnord.blog", |b| {
         b.iter(|| {
             black_box(rt.block_on(async {
-                generate_json_report(black_box("mtrnord.blog"), &resolver, &pool)
-                    .await
-                    .expect("federation check failed")
+                generate_json_report(
+                    black_box("mtrnord.blog"),
+                    &resolver,
+                    &pool,
+                    &FederationConfig::default(),
+                )
+                .await
+                .expect("federation check failed")
             }))
         });
     });

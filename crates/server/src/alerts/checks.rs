@@ -39,6 +39,7 @@ use crate::email_templates::{FailureEmailTemplate, env_subject};
 use crate::entity::{
     alert, alert_notification_email, alert_status_history, oauth2_user, user_email,
 };
+use crate::federation::FederationConfig;
 use crate::response::{Root, generate_json_report};
 use hickory_resolver::ConnectionProvider;
 use hickory_resolver::Resolver;
@@ -336,14 +337,21 @@ pub async fn healthy_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
         );
 
         // 3. Run all healthy checks concurrently
+        let fed_config = FederationConfig {
+            network_timeout: tokio::time::Duration::from_secs(
+                resources.config.federation_timeout_secs,
+            ),
+            allow_private_targets: resources.config.allow_private_targets,
+        };
         let mut join_set: JoinSet<()> = JoinSet::new();
         for a in healthy_alerts {
             let resources = resources.clone();
             let registry = registry.clone();
             let resolver = resolver.clone();
             let pool = pool.clone();
+            let fed_config = fed_config.clone();
             join_set.spawn(async move {
-                run_healthy_check(a, &resources, &registry, &resolver, &pool).await;
+                run_healthy_check(a, &resources, &registry, &resolver, &pool, &fed_config).await;
             });
         }
         while join_set.join_next().await.is_some() {}
@@ -439,14 +447,21 @@ pub async fn active_check_loop<P: ConnectionProvider + Send + Sync + 'static>(
             message = "Running active check loop iteration"
         );
 
+        let fed_config = FederationConfig {
+            network_timeout: tokio::time::Duration::from_secs(
+                resources.config.federation_timeout_secs,
+            ),
+            allow_private_targets: resources.config.allow_private_targets,
+        };
         let mut join_set: JoinSet<()> = JoinSet::new();
         for a in all_active {
             let resources = resources.clone();
             let registry = registry.clone();
             let resolver = resolver.clone();
             let pool = pool.clone();
+            let fed_config = fed_config.clone();
             join_set.spawn(async move {
-                run_active_check(a, &resources, &registry, &resolver, &pool).await;
+                run_active_check(a, &resources, &registry, &resolver, &pool, &fed_config).await;
             });
         }
         while join_set.join_next().await.is_some() {}
@@ -507,6 +522,7 @@ async fn run_healthy_check<P: ConnectionProvider>(
     registry: &Registry,
     resolver: &Resolver<P>,
     pool: &ConnectionPool,
+    fed_config: &FederationConfig,
 ) {
     tracing::debug!(
         name = "alerts.healthy_check.running",
@@ -516,7 +532,7 @@ async fn run_healthy_check<P: ConnectionProvider>(
         message = "Running healthy federation check"
     );
 
-    let Ok(report) = generate_json_report(&a.server_name, resolver, pool).await else {
+    let Ok(report) = generate_json_report(&a.server_name, resolver, pool, fed_config).await else {
         tracing::error!(
             name = "alerts.healthy_check.error",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
@@ -585,6 +601,7 @@ async fn run_active_check<P: ConnectionProvider>(
     registry: &Registry,
     resolver: &Resolver<P>,
     pool: &ConnectionPool,
+    fed_config: &FederationConfig,
 ) {
     tracing::debug!(
         name = "alerts.active_check.running",
@@ -600,7 +617,7 @@ async fn run_active_check<P: ConnectionProvider>(
         (None, false) => AlertState::Healthy,
     };
 
-    let Ok(report) = generate_json_report(&a.server_name, resolver, pool).await else {
+    let Ok(report) = generate_json_report(&a.server_name, resolver, pool, fed_config).await else {
         tracing::error!(
             name = "alerts.active_check.error",
             target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),

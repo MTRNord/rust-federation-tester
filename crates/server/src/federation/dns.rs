@@ -1,5 +1,4 @@
-use crate::federation::well_known::network_timeout;
-use crate::optimization::string_ops::{format_addr_port, format_ipv6_port};
+use crate::federation::config::FederationConfig;
 use crate::response::{Error, ErrorCode, SRVData};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -25,10 +24,11 @@ pub fn absolutize_srv_target(target: &str, base: &str) -> String {
     }
 }
 
-#[tracing::instrument(skip(resolver))]
+#[tracing::instrument(skip(resolver, config))]
 pub async fn lookup_server<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
+    config: &FederationConfig,
 ) -> DnsPhaseResult {
     use std::collections::BTreeMap;
 
@@ -82,8 +82,8 @@ pub async fn lookup_server<P: ConnectionProvider>(
         let fed_name = format!("_matrix-fed._tcp.{server_name}.");
         let matrix_name = format!("_matrix._tcp.{server_name}.");
         let (fed_result, matrix_result) = tokio::join!(
-            timeout(network_timeout(), resolver.srv_lookup(&fed_name)),
-            timeout(network_timeout(), resolver.srv_lookup(&matrix_name)),
+            timeout(config.network_timeout, resolver.srv_lookup(&fed_name)),
+            timeout(config.network_timeout, resolver.srv_lookup(&matrix_name)),
         );
 
         let mut found_srv_records = false;
@@ -115,7 +115,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         let srv_priority = srv.priority;
                         let srv_weight = srv.weight;
                         match timeout(
-                            network_timeout(),
+                            config.network_timeout,
                             resolver.lookup(&target, RecordType::CNAME),
                         )
                         .await
@@ -243,9 +243,18 @@ pub async fn lookup_server<P: ConnectionProvider>(
             // Run CNAME, A, and AAAA lookups in parallel so a CNAME timeout
             // does not delay the A/AAAA results.
             let (cname_resp, ipv4_result, ipv6_result) = tokio::join!(
-                timeout(network_timeout(), resolver.lookup(&host, RecordType::CNAME),),
-                timeout(network_timeout(), resolver.lookup(&host, RecordType::A),),
-                timeout(network_timeout(), resolver.lookup(&host, RecordType::AAAA),),
+                timeout(
+                    config.network_timeout,
+                    resolver.lookup(&host, RecordType::CNAME),
+                ),
+                timeout(
+                    config.network_timeout,
+                    resolver.lookup(&host, RecordType::A),
+                ),
+                timeout(
+                    config.network_timeout,
+                    resolver.lookup(&host, RecordType::AAAA),
+                ),
             );
             let ipv4_records = match ipv4_result {
                 Ok(r) => r,
@@ -291,7 +300,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         Ok(ref ipv4) => {
                             for addr in ipv4.answers().iter() {
                                 if let RData::A(ip) = &addr.data {
-                                    addrs_with_port.push(format_addr_port(&ip.0.to_string(), port));
+                                    addrs_with_port.push(format!("{}:{}", ip.0, port));
                                 }
                             }
                         }
@@ -306,7 +315,7 @@ pub async fn lookup_server<P: ConnectionProvider>(
                         Ok(ref ipv6) => {
                             for addr in ipv6.answers().iter() {
                                 if let RData::AAAA(ip) = &addr.data {
-                                    addrs_with_port.push(format_ipv6_port(&ip.0.to_string(), port));
+                                    addrs_with_port.push(format!("[{}]:{}", ip.0, port));
                                 }
                             }
                         }
@@ -358,11 +367,11 @@ pub async fn lookup_server<P: ConnectionProvider>(
         };
         let host_server_name = format!("{server_part}.");
         let a_lookup = timeout(
-            network_timeout(),
+            config.network_timeout,
             resolver.lookup(&host_server_name, RecordType::A),
         );
         let aaaa_lookup = timeout(
-            network_timeout(),
+            config.network_timeout,
             resolver.lookup(&host_server_name, RecordType::AAAA),
         );
         let (ipv4_records, ipv6_records) = match tokio::try_join!(a_lookup, aaaa_lookup) {
@@ -385,9 +394,10 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Ok(ref ipv4) => {
                 for addr in ipv4.answers().iter() {
                     if let RData::A(ip) = &addr.data {
-                        addrs_with_port.push(format_addr_port(
-                            &ip.0.to_string(),
-                            port.parse().unwrap_or(8448),
+                        addrs_with_port.push(format!(
+                            "{}:{}",
+                            ip.0,
+                            port.parse::<u16>().unwrap_or(8448)
                         ));
                     }
                 }
@@ -403,9 +413,10 @@ pub async fn lookup_server<P: ConnectionProvider>(
             Ok(ref ipv6) => {
                 for addr in ipv6.answers().iter() {
                     if let RData::AAAA(ip) = &addr.data {
-                        addrs_with_port.push(format_ipv6_port(
-                            &ip.0.to_string(),
-                            port.parse().unwrap_or(8448),
+                        addrs_with_port.push(format!(
+                            "[{}]:{}",
+                            ip.0,
+                            port.parse::<u16>().unwrap_or(8448)
                         ));
                     }
                 }

@@ -1,5 +1,7 @@
 use crate::connection_pool::ConnectionPool;
-use crate::federation::{connection_check, lookup_server, lookup_server_well_known};
+use crate::federation::{
+    FederationConfig, connection_check, lookup_server, lookup_server_well_known,
+};
 use crate::validation::server_name::parse_and_validate_server_name;
 
 use futures::StreamExt;
@@ -244,11 +246,12 @@ pub struct Error {
     pub error_code: ErrorCode,
 }
 
-#[tracing::instrument(skip(resolver, connection_pool))]
+#[tracing::instrument(skip(resolver, connection_pool, config))]
 pub async fn generate_json_report<P: ConnectionProvider>(
     server_name: &str,
     resolver: &Resolver<P>,
     connection_pool: &ConnectionPool,
+    config: &FederationConfig,
 ) -> color_eyre::eyre::Result<Root> {
     // Validate server name
     let mut resp_data = Root {
@@ -265,7 +268,7 @@ pub async fn generate_json_report<P: ConnectionProvider>(
     let server_name_lower = server_name.to_lowercase();
 
     // Well-known phase (pure)
-    let well_known_phase = lookup_server_well_known(&server_name_lower, resolver).await;
+    let well_known_phase = lookup_server_well_known(&server_name_lower, resolver, config).await;
     for (addr, wk_result) in well_known_phase.well_known_result.iter() {
         resp_data
             .well_known_result
@@ -338,7 +341,7 @@ pub async fn generate_json_report<P: ConnectionProvider>(
             .clone()
             .unwrap_or(server_name_lower.clone());
 
-        let dns_phase = lookup_server(&resolved_server, resolver).await;
+        let dns_phase = lookup_server(&resolved_server, resolver, config).await;
         resp_data.dnsresult.srv_targets = dns_phase.srv_targets.clone();
         resp_data.dnsresult.addrs = dns_phase.addrs.clone();
         resp_data.dnsresult.srvskipped = dns_phase.srvskipped;
@@ -380,8 +383,10 @@ pub async fn generate_json_report<P: ConnectionProvider>(
                     let probed_ip = probed_ip.clone();
                     let delegated_server = delegated_server.clone();
                     let resolver = resolver.clone();
+                    let config_c = config.clone();
                     dns_futures.push(async move {
-                        let dns_phase = lookup_server(&delegated_server, &resolver).await;
+                        let dns_phase =
+                            lookup_server(&delegated_server, &resolver, &config_c).await;
                         (probed_ip, delegated_server, dns_phase)
                     });
                 }
@@ -469,8 +474,10 @@ pub async fn generate_json_report<P: ConnectionProvider>(
         for (addr, host, sni) in connection_targets {
             let server_name_c = server_name_lower.clone();
             let pool = connection_pool.clone();
+            let config_c = config.clone();
             futures.push(async move {
-                let result = connection_check(&addr, &server_name_c, &host, &sni, &pool).await;
+                let result =
+                    connection_check(&addr, &server_name_c, &host, &sni, &pool, &config_c).await;
                 (addr, result)
             });
         }

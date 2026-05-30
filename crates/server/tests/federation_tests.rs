@@ -7,7 +7,9 @@ mod federation_tests {
     use hickory_resolver::config::{self, ResolverConfig};
     use hickory_resolver::net::runtime::TokioRuntimeProvider;
     use rust_federation_tester::connection_pool::ConnectionPool;
-    use rust_federation_tester::federation::{lookup_server, lookup_server_well_known};
+    use rust_federation_tester::federation::{
+        FederationConfig, lookup_server, lookup_server_well_known,
+    };
     use rust_federation_tester::response::generate_json_report;
     use rustls::crypto::{self, CryptoProvider};
 
@@ -41,7 +43,12 @@ mod federation_tests {
     async fn test_lookup_server_well_known_invalid() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server_well_known("nonexistent-domain-for-test-xyz", &resolver).await;
+        let result = lookup_server_well_known(
+            "nonexistent-domain-for-test-xyz",
+            &resolver,
+            &FederationConfig::default(),
+        )
+        .await;
         assert!(result.error.is_some());
         assert!(result.well_known_result.is_empty());
         assert!(result.found_server.is_none());
@@ -51,7 +58,8 @@ mod federation_tests {
     async fn test_lookup_server_well_known_valid() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server_well_known("matrix.org", &resolver).await;
+        let result =
+            lookup_server_well_known("matrix.org", &resolver, &FederationConfig::default()).await;
         // Accept either error or at least one result (depends on network)
         assert!(result.error.is_none() || !result.well_known_result.is_empty());
     }
@@ -60,7 +68,7 @@ mod federation_tests {
     async fn test_lookup_server_srv_and_dns() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server("matrix.org", &resolver).await;
+        let result = lookup_server("matrix.org", &resolver, &FederationConfig::default()).await;
         assert!(!result.addrs.is_empty() || !result.errors.is_empty());
     }
 
@@ -69,9 +77,14 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         let pool = test_connection_pool();
-        let result = generate_json_report("nonexistent-domain-for-test-xyz", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "nonexistent-domain-for-test-xyz",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
         assert!(!result.federation_ok);
         assert!(result.error.is_some());
         assert!(result.dnsresult.addrs.is_empty());
@@ -82,9 +95,10 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         let pool = test_connection_pool();
-        let result = generate_json_report("matrix.org", &resolver, &pool)
-            .await
-            .unwrap();
+        let result =
+            generate_json_report("matrix.org", &resolver, &pool, &FederationConfig::default())
+                .await
+                .unwrap();
         // Should have federation_ok true or at least some addresses or connection reports
         assert!(
             result.federation_ok
@@ -99,9 +113,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
         // Should skip well-known and SRV, go straight to A/AAAA
-        let result = generate_json_report("matrix.org:8448", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "matrix.org:8448",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
         // Should not panic, federation_ok may be true or false
         assert!(result.error.is_none() || !result.dnsresult.addrs.is_empty());
     }
@@ -112,9 +131,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
         // Intentionally use a domain that should fail
-        let result = generate_json_report("invalid.invalid", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "invalid.invalid",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
         assert!(!result.federation_ok);
         assert!(result.error.is_some());
     }
@@ -126,9 +150,14 @@ mod federation_tests {
         let pool = test_connection_pool();
         // Test unredacted.org which is IPv4-only and should pass federation
         // despite AAAA lookup failures (regression test)
-        let result = generate_json_report("unredacted.org", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "unredacted.org",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // The key regression: IPv4 addresses must be resolved even when AAAA times out.
         // We do NOT assert federation_ok — that depends on the live server's health,
@@ -178,9 +207,10 @@ mod federation_tests {
             // Use a fresh resolver per server to avoid exhausting the DNS query queue
             // when many servers are tested sequentially.
             let resolver = test_resolver();
-            let result = generate_json_report(server, &resolver, &pool)
-                .await
-                .unwrap();
+            let result =
+                generate_json_report(server, &resolver, &pool, &FederationConfig::default())
+                    .await
+                    .unwrap();
 
             let (federation_ok_for_test, _filtered_connection_errors) = if is_github_actions {
                 // Filter out IPv6 os error 101 (network unreachable) connection errors for GitHub Actions only
@@ -265,9 +295,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("4.msc4040.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "4.msc4040.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Must have resolved addresses at all
         assert!(
@@ -327,9 +362,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("4.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "4.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         assert!(
             !result.dnsresult.addrs.is_empty(),
@@ -387,9 +427,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("2.s.resolvematrix.dev:7652", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "2.s.resolvematrix.dev:7652",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must be skipped (explicit port → step 2)
         assert!(
@@ -430,9 +475,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("3b.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "3b.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must have succeeded with a delegated server containing port 7753
         let wk_values: Vec<_> = result.well_known_result.values().collect();
@@ -471,9 +521,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("3c.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "3c.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must have succeeded with wk.3c.s.resolvematrix.dev (no port)
         let wk_values: Vec<_> = result.well_known_result.values().collect();
@@ -532,9 +587,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("3c.msc4040.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "3c.msc4040.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must have succeeded with wk.3c.msc4040.s.resolvematrix.dev (no port)
         let wk_values: Vec<_> = result.well_known_result.values().collect();
@@ -593,9 +653,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("3d.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "3d.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must have succeeded with wk.3d.s.resolvematrix.dev (no port)
         let wk_values: Vec<_> = result.well_known_result.values().collect();
@@ -636,9 +701,14 @@ mod federation_tests {
         let resolver = test_resolver();
         let pool = test_connection_pool();
 
-        let result = generate_json_report("5.s.resolvematrix.dev", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "5.s.resolvematrix.dev",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // Well-known must have been attempted but failed (errors present or no m.server)
         let wk_any_success = result
@@ -677,7 +747,9 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         // Well-known must be skipped for IP literals (spec step 1)
-        let result = lookup_server_well_known("159.89.115.225", &resolver).await;
+        let result =
+            lookup_server_well_known("159.89.115.225", &resolver, &FederationConfig::default())
+                .await;
         assert!(
             result.error.is_none(),
             "IP literal must not produce a well-known error: {:?}",
@@ -695,7 +767,12 @@ mod federation_tests {
     async fn test_lookup_server_well_known_skips_ipv4_literal_with_port() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server_well_known("159.89.115.225:8448", &resolver).await;
+        let result = lookup_server_well_known(
+            "159.89.115.225:8448",
+            &resolver,
+            &FederationConfig::default(),
+        )
+        .await;
         assert!(result.error.is_none());
         assert!(result.well_known_result.is_empty());
     }
@@ -704,7 +781,8 @@ mod federation_tests {
     async fn test_lookup_server_well_known_skips_ipv6_literal() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server_well_known("[::1]", &resolver).await;
+        let result =
+            lookup_server_well_known("[::1]", &resolver, &FederationConfig::default()).await;
         assert!(result.error.is_none());
         assert!(result.well_known_result.is_empty());
     }
@@ -714,7 +792,7 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         // DNS phase must return the IP directly at port 8448 without doing any DNS lookup
-        let result = lookup_server("159.89.115.225", &resolver).await;
+        let result = lookup_server("159.89.115.225", &resolver, &FederationConfig::default()).await;
         assert!(
             result.errors.is_empty(),
             "IP literal must not produce DNS errors: {:?}",
@@ -736,7 +814,12 @@ mod federation_tests {
     async fn test_lookup_server_dns_ipv4_literal_with_port() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server("159.89.115.225:8448", &resolver).await;
+        let result = lookup_server(
+            "159.89.115.225:8448",
+            &resolver,
+            &FederationConfig::default(),
+        )
+        .await;
         assert!(
             result.errors.is_empty(),
             "Should not error: {:?}",
@@ -750,7 +833,7 @@ mod federation_tests {
     async fn test_lookup_server_dns_ipv6_literal_no_port() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server("[::1]", &resolver).await;
+        let result = lookup_server("[::1]", &resolver, &FederationConfig::default()).await;
         assert!(
             result.errors.is_empty(),
             "Should not error: {:?}",
@@ -764,7 +847,7 @@ mod federation_tests {
     async fn test_lookup_server_dns_ipv6_literal_with_port() {
         install_crypto_provider_once();
         let resolver = test_resolver();
-        let result = lookup_server("[::1]:8448", &resolver).await;
+        let result = lookup_server("[::1]:8448", &resolver, &FederationConfig::default()).await;
         assert!(
             result.errors.is_empty(),
             "Should not error: {:?}",
@@ -781,9 +864,14 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         let pool = test_connection_pool();
-        let result = generate_json_report("159.89.115.225", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "159.89.115.225",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         // The DNS phase must succeed and return the IP address directly.
         assert!(
@@ -825,9 +913,14 @@ mod federation_tests {
         install_crypto_provider_once();
         let resolver = test_resolver();
         let pool = test_connection_pool();
-        let result = generate_json_report("159.89.115.225:8448", &resolver, &pool)
-            .await
-            .unwrap();
+        let result = generate_json_report(
+            "159.89.115.225:8448",
+            &resolver,
+            &pool,
+            &FederationConfig::default(),
+        )
+        .await
+        .unwrap();
 
         assert!(
             !result.dnsresult.addrs.is_empty(),
@@ -915,9 +1008,10 @@ mod federation_tests {
         ];
 
         for server in bad_servers {
-            let result = generate_json_report(server, &resolver, &pool)
-                .await
-                .unwrap();
+            let result =
+                generate_json_report(server, &resolver, &pool, &FederationConfig::default())
+                    .await
+                    .unwrap();
 
             if result.federation_ok || result.dnsresult.addrs.is_empty() {
                 println!("UNEXPECTED KNOWN BAD SERVER RESULT: {}", server);

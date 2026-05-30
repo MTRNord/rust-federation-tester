@@ -10,7 +10,6 @@ use rust_federation_tester::config::load_config_or_panic;
 use rust_federation_tester::connection_pool::ConnectionPool;
 use rust_federation_tester::distributed;
 use rust_federation_tester::email_outbox;
-use rust_federation_tester::federation::init_federation_config;
 
 use rustls::crypto;
 use rustls::crypto::CryptoProvider;
@@ -300,14 +299,15 @@ async fn main() -> color_eyre::eyre::Result<()> {
         return Ok(());
     }
 
-    // Apply federation configuration (timeout, private-target SSRF bypass) globally.
-    // Must happen before the first request is handled.
-    init_federation_config(config.federation_timeout_secs, config.allow_private_targets);
     tracing::info!(
         timeout_secs = config.federation_timeout_secs,
         allow_private_targets = config.allow_private_targets,
         "Federation configuration initialised"
     );
+    let fed_config = rust_federation_tester::federation::FederationConfig {
+        network_timeout: std::time::Duration::from_secs(config.federation_timeout_secs),
+        allow_private_targets: config.allow_private_targets,
+    };
 
     // Set up resolver and caches.
     // Cap cached TTLs at 30 s so recent DNS changes are visible quickly while still
@@ -328,6 +328,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
     let state = AppState {
         resolver,
         connection_pool: connection_pool.clone(),
+        fed_config: fed_config.clone(),
     };
 
     // Set up distributed coordination (Registry, Lock, EmailGuard).
@@ -410,10 +411,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    // Separate connection pool for background alert checks.
-    // Per-client limits don't apply to internal batch work, so we use a pool
-    // with no effective per-client cap (all background checks share "anonymous").
-    let alert_pool = ConnectionPool::new_for_background_checks(5, 10);
+    let alert_pool = ConnectionPool::new(5, 10);
 
     // Start the two-queue alert check loops
     tracing::debug!("Starting healthy alert check loop (5-min interval)");

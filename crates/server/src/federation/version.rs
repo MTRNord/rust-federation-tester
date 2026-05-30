@@ -1,8 +1,8 @@
-use crate::connection_pool::ConnectionPool;
+use crate::connection_pool::{ConnectionPool, PooledSender};
 use crate::error::FetchError;
-use crate::federation::well_known::network_timeout;
-use crate::optimization::get_shared_tls_config;
+use crate::federation::config::FederationConfig;
 use crate::response::Version;
+use crate::tls::shared_tls_config;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Empty;
@@ -19,14 +19,15 @@ pub struct VersionResp {
     pub server: Version,
 }
 
-#[tracing::instrument(skip(connection_pool))]
+#[tracing::instrument(skip(connection_pool, config))]
 pub async fn query_server_version_pooled(
     addr: &str,
     server_name: &str,
     sni: &str,
     connection_pool: &ConnectionPool,
+    config: &FederationConfig,
 ) -> color_eyre::eyre::Result<Option<(Version, bool)>> {
-    let timeout_duration = network_timeout();
+    let timeout_duration = config.network_timeout;
     let response_result = timeout(
         timeout_duration,
         fetch_url_pooled_simple(
@@ -35,6 +36,7 @@ pub async fn query_server_version_pooled(
             server_name,
             sni,
             connection_pool,
+            config,
         ),
     )
     .await
@@ -68,13 +70,14 @@ pub async fn query_server_version_pooled(
     }
 }
 
-#[tracing::instrument(skip(connection_pool))]
+#[tracing::instrument(skip(connection_pool, config))]
 pub async fn fetch_url_pooled_simple(
     path: &str,
     addr: &str,
     host: &str,
     sni: &str,
     connection_pool: &ConnectionPool,
+    config: &FederationConfig,
 ) -> Result<Option<hyper::Response<Incoming>>, FetchError> {
     // Strip brackets and port to get the bare hostname for SNI and Host header.
     // Mirrors the same logic in network.rs::fetch_url_custom_sni_host.
@@ -109,7 +112,7 @@ pub async fn fetch_url_pooled_simple(
             match sender.send_request(req).await {
                 Ok(response) => {
                     connection_pool
-                        .return_connection(addr, sni, "anonymous", sender, tls_info)
+                        .return_connection(addr, sni, sender, tls_info)
                         .await;
                     return Ok(Some(response));
                 }
@@ -139,14 +142,14 @@ pub async fn fetch_url_pooled_simple(
         path = %path,
         addr = %addr
     );
-    let t = network_timeout();
+    let t = config.network_timeout;
     let stream = timeout(t, TcpStream::connect(addr))
         .await
         .map_err(|_| FetchError::Timeout(t))
         .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
     // Use shared TLS configuration for better performance
-    let config = get_shared_tls_config();
+    let config = shared_tls_config();
     let connector = TlsConnector::from(config);
     let domain = ServerName::try_from(sni_host.to_string())
         .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
@@ -174,10 +177,11 @@ pub async fn fetch_url_pooled_simple(
                     .collect()
             })
             .unwrap_or_default(),
+        http_version: crate::connection_pool::HttpVersion::H1,
     });
 
     let io = TokioIo::new(tls_stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+    let (mut h1_sender, conn) = hyper::client::conn::http1::handshake(io)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
@@ -196,12 +200,12 @@ pub async fn fetch_url_pooled_simple(
         .header(hyper::header::HOST, host_host)
         .body(Empty::<Bytes>::new())
         .map_err(|e| FetchError::Network(e.to_string()))?;
-    let response = sender
+    let response = h1_sender
         .send_request(req)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
     connection_pool
-        .return_connection(addr, sni, "anonymous", sender, tls_info)
+        .return_connection(addr, sni, PooledSender::H1(h1_sender), tls_info)
         .await;
     Ok(Some(response))
 }
