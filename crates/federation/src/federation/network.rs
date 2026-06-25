@@ -1,5 +1,5 @@
 use crate::config::FederationConfig;
-use crate::connection_pool::{ConnectionPool, PooledSender, TlsConnectionInfo};
+use crate::connection_pool::{ConnectionPool, HttpVersion, TlsConnectionInfo};
 use crate::error::FetchError;
 use crate::federation::certificate::extract_certificate_info;
 use crate::response::Certificate;
@@ -53,47 +53,31 @@ pub async fn fetch_url_custom_sni_host(
         host = %host_host
     );
 
-    // Try pool first — avoids a TLS handshake when the connection is warm.
-    if let Some(pool) = pool
-        && let Ok((mut sender, tls_info)) = pool.get_connection(addr, sni).await
-    {
+    if let Some(pool) = pool {
         let req = Request::builder()
             .uri(path)
             .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
             .header(hyper::header::HOST, host_host)
             .body(Empty::<Bytes>::new())
             .map_err(|e| FetchError::Network(e.to_string()))?;
-        match sender.send_request(req).await {
-            Ok(resp) => {
-                pool.return_connection(addr, sni, sender, Arc::clone(&tls_info))
-                    .await;
-                return Ok(FullResponse {
-                    response: Some(resp),
-                    protocol: tls_info.protocol.clone(),
-                    cipher_suite: tls_info.cipher_suite.clone(),
-                    certificates: tls_info.certificates.clone(),
-                });
-            }
-            Err(e) => {
-                tracing::debug!(
-                    name = "federation.fetch_url_custom_sni_host.pooled_send_failed",
-                    target = concat!(env!("CARGO_PKG_NAME"), "::", module_path!()),
-                    error = ?e,
-                    message = "Pooled connection send failed; falling back to fresh TLS connection"
-                );
-            }
-        }
+        let (resp, tls_info) = pool.send(addr, sni, req).await?;
+        return Ok(FullResponse {
+            response: Some(resp),
+            protocol: tls_info.protocol.clone(),
+            cipher_suite: tls_info.cipher_suite.clone(),
+            certificates: tls_info.certificates.clone(),
+        });
     }
 
-    // Pool miss or send failure: do a fresh TCP + TLS connection.
+    // No-pool path (e.g. well-known): fresh TCP + TLS + H1 connection.
     let t = config.network_timeout;
     let stream = timeout(t, TcpStream::connect(addr))
         .await
         .map_err(|_| FetchError::Timeout(t))
         .and_then(|r| r.map_err(|e| FetchError::Network(e.to_string())))?;
 
-    let config = shared_tls_config();
-    let connector = TlsConnector::from(config);
+    let tls_config = shared_tls_config();
+    let connector = TlsConnector::from(tls_config);
     let domain = ServerName::try_from(sni_host.to_string())
         .map_err(|_| FetchError::InvalidDomain(sni_host.to_string()))?;
 
@@ -102,7 +86,6 @@ pub async fn fetch_url_custom_sni_host(
         .await
         .map_err(|e| FetchError::Tls(e.to_string()))?;
 
-    // Capture TLS metadata before consuming the stream.
     let (_, connection_info) = tls_stream.get_ref();
     let protocol_version = connection_info
         .protocol_version()
@@ -117,16 +100,14 @@ pub async fn fetch_url_custom_sni_host(
         .map(|certs| certs.iter().filter_map(extract_certificate_info).collect())
         .unwrap_or_default();
 
-    let tls_info = Arc::new(TlsConnectionInfo {
+    let _tls_info = Arc::new(TlsConnectionInfo {
         protocol: protocol_version.clone(),
         cipher_suite: cipher_suite.to_string(),
         certificates: certificates.clone(),
-        http_version: crate::connection_pool::HttpVersion::H1,
+        http_version: HttpVersion::H1,
     });
 
-    let stream = TokioIo::new(tls_stream);
-
-    let (mut h1_sender, conn) = hyper::client::conn::http1::handshake(stream)
+    let (mut h1_sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(tls_stream))
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
     tokio::task::spawn(async move {
@@ -151,11 +132,6 @@ pub async fn fetch_url_custom_sni_host(
         .send_request(req)
         .await
         .map_err(|e| FetchError::Network(e.to_string()))?;
-
-    if let Some(pool) = pool {
-        pool.return_connection(addr, sni, PooledSender::H1(h1_sender), tls_info)
-            .await;
-    }
 
     Ok(FullResponse {
         response: Some(res),

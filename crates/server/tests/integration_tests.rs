@@ -30,7 +30,7 @@ async fn test_parse_and_validate_server_name() {
 
 #[tokio::test]
 async fn test_connection_pool() {
-    let pool = ConnectionPool::new(2, 5);
+    let pool = ConnectionPool::new(5);
 
     // Test pool creation
     assert_eq!(pool.pool_count(), 0);

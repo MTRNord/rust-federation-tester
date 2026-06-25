@@ -3,7 +3,7 @@ use rust_federation_tester::connection_pool::ConnectionPool;
 
 #[tokio::test]
 async fn test_connection_pool_basic_operations() {
-    let connection_pool = ConnectionPool::new(3, 8);
+    let connection_pool = ConnectionPool::new(8);
 
     // Test clone capability (required for sharing between handlers)
     let _cloned_pool = connection_pool.clone();
@@ -15,9 +15,9 @@ async fn test_connection_pool_basic_operations() {
 #[test]
 fn test_connection_pool_configuration() {
     // Test different connection pool configurations
-    let pool1 = ConnectionPool::new(5, 10);
-    let pool2 = ConnectionPool::new(1, 30);
-    let pool3 = ConnectionPool::new(10, 5);
+    let pool1 = ConnectionPool::new(10);
+    let pool2 = ConnectionPool::new(30);
+    let pool3 = ConnectionPool::new(5);
 
     // All should start empty regardless of configuration
     assert_eq!(pool1.pool_count(), 0);

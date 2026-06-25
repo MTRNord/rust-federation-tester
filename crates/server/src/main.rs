@@ -413,7 +413,7 @@ async fn main() -> color_eyre::eyre::Result<()> {
         });
     }
 
-    let alert_pool = ConnectionPool::new(5, 10);
+    let alert_pool = ConnectionPool::new(10);
 
     // Start the two-queue alert check loops
     tracing::debug!("Starting healthy alert check loop (5-min interval)");
