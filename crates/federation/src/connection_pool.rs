@@ -99,6 +99,10 @@ fn to_absolute_uri(req: Request<Empty<Bytes>>) -> Request<Empty<Bytes>> {
     };
     let (mut parts, body) = req.into_parts();
     parts.uri = uri;
+    // In HTTP/2 the :authority pseudo-header is derived from the URI above.
+    // Keeping an explicit Host header alongside it causes nginx (and others) to
+    // reject the request with HTTP 400 "duplicate authority".
+    parts.headers.remove(hyper::header::HOST);
     Request::from_parts(parts, body)
 }
 
@@ -475,6 +479,8 @@ mod tests {
             converted.uri().to_string(),
             "https://matrix.example.com/_matrix/federation/v1/version"
         );
+        // Host header must be removed — H2 uses :authority from the URI instead.
+        assert!(converted.headers().get(hyper::header::HOST).is_none());
     }
 
     #[test]
@@ -489,6 +495,32 @@ mod tests {
             converted.uri().to_string(),
             "https://[::1]/_matrix/key/v2/server"
         );
+        assert!(converted.headers().get(hyper::header::HOST).is_none());
+    }
+
+    /// Regression: servers running nginx reject HTTP/2 requests that contain both
+    /// `:authority` (derived from the absolute URI) and an explicit `Host` header,
+    /// returning HTTP 400. `to_absolute_uri` must strip `Host` after promoting the URI.
+    #[test]
+    fn to_absolute_uri_removes_host_header_to_prevent_h2_400() {
+        let req = Request::builder()
+            .uri("/_matrix/key/v2/server")
+            .header(hyper::header::HOST, "synapse.example.com")
+            .header(hyper::header::USER_AGENT, "matrix-federation-checker/0.1")
+            .body(Empty::<Bytes>::new())
+            .unwrap();
+        let converted = to_absolute_uri(req);
+        assert_eq!(
+            converted.uri().to_string(),
+            "https://synapse.example.com/_matrix/key/v2/server",
+            ":authority must be set in URI"
+        );
+        assert!(
+            converted.headers().get(hyper::header::HOST).is_none(),
+            "Host header must be absent — duplicate authority causes nginx HTTP 400"
+        );
+        // Other headers must be preserved
+        assert!(converted.headers().get(hyper::header::USER_AGENT).is_some());
     }
 
     #[test]
